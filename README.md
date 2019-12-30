@@ -1,0 +1,2 @@
+# golang-debugger-book
+From a debugger's view, Let's explore the computer world! How does compiler, linker and debugger coordinate with each other around the program written in specific programming language? How does a debugger work? If we develop a debugger for go programming language, we must master go type system, runtime... and some Operating System internals. OK, all the contents mentioned above will be covered in this book. Hope you enjoy it!
