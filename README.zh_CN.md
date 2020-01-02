@@ -1,69 +1,29 @@
-# golang-debugger-book
+# Golang Debugger
 
-## Introduction
+## 项目介绍
 
-Hack and explore the computer world from a (golang) debugger's perspective!
+该项目“**golang debugger**”，是一款面向go语言的调试器，现在业界已经有针对go语言的调试器了，如gdb、dlv等等，那么为什么还要从头再开发一款调试器呢？项目初衷并不是为了开发一款新的调试器，现在上也不是。
 
+我的初衷希望从调试器为切入点，将作者多年以来掌握的知识进行融会贯通，这里的内容涉及go语言本身（类型系统、协程调度）、编译器与调试器的协作（DWARF）、操作系统内核（虚拟内存、任务调度、系统调用、指令patch）以及处理器相关指令等诸多内容。
 
-This book contains two parts:
+为什么要从调试器角度入手？
+- 调试过程，并不只是调试器的工作，也涉及到到了源码、编译器、连接器、调试信息标准，因此从调试器视角来看，它看到的是一连串的协作过程，可以给开发者更宏观的视角来审视软件开发的位置，也为开发者更全面地认识我国的IT产业提供了一个窗口；
+- 调试标准，调试信息格式有多种标准，在了解调试信息标准的过程中，可以更好地理解处理器、操作系统、编程语言等的设计思想，如果能结合开源调试器学习还可以了解、验证某些语言特性的设计实现；
+- 调试需要与操作系统交互来实现，调试给了一个更加直接、快速的途径让我们一窥操作系统的工作原理，如任务调度、信号处理、虚拟内存管理等。操作系统离我们那么近但是在认识上离我们又那么远，加强操作系统知识的普及程度对于我们构建更加全面、立体化的IT产业链也有帮助；
+- 此外，调试器是每个开发者都接触过的常用工具，我也希望借此机会剖析下调试器的常用功能的设计实现、调试的一些技巧，也领略下调试信息标准制定者的高屋建瓴的设计思想，站在巨人的肩膀上体验标准的美的一面。
 
-- Part I, aims to introduce how to develop a (golang) debugger.
-- Part II, aims to streghthen your computer knowledgee from a (golang) debugger's perspective.
+简言之，就是希望能从开发一个go语言调试器作为入口切入，帮助初学者快速上手go语言开发，也在循序渐进、拔高过程中慢慢体会操作系统、编译器、调试器、处理器之间的协作过程、加深对计算机系统全局的认识。由于本人水平有限，不可能完全从0开始自研一款调试器，特别是针对go这样一门快速演进中的语言，所以选择了参考开源社区中某些已有的调试器实现gdb、delve作为参考，结合相关规范、标准慢慢钻研的方式。
 
+希望该项目及相关书籍，能顺利完成，也算是我磨练心性、自我救赎的一种方式，最后，如果能对大家确实起到帮助的作用那是再好不过了。
 
-To develop a symbolic debugger, we need to combine the knowledge of :
+## 阅读本书
 
-
-|          |description|
-|----------|-----------------------------------|
-| CPU  | like PC, instruction patching, etc. |
-| OS   | Operating System support like linux ptrace (debug support), scheduler (sched thread), signal handler (process 0xCC (breakpoint) SIGSTOP), etc. |
-| Compiler | how to generate debugging information, etc. |
-| Linkers | how to link object files and generate debugging information, etc. |
-| Loaders | how to load program, libraries into memory, etc. |
-| Debuggers | how to execute the code of tracee step by step, statement by statement, how to map between address and source code, how to access memory and registers, etc. |
-| Executable File Format | how to store debugging information, etc. |
-| Debug Information Format | how to describe data, types, executable code (even language features, like c++ template, go goroutine), how to map between address and source, how to locate the call frame, etc. |
-| DWARF | a standard of Debugging Information Format to guide how to coordinate the work between compilers, linkers and debuggers. |
-| ... | ... | 
-
-- CPU, like PC, instruction patching, etc.
-- Operating System support, like linux ptrace (debug support), scheduler (sched thread), signal handler (process 0xCC (breakpoint) SIGSTOP), etc.
-- Compilers, how to generate debugging information, etc.
-- Linkers, how to link object files and generate debugging information, etc.
-- Loaders, how to load program, libraries into memory, etc.
-- Debuggers, how to execute the code of tracee step by step, statement by statement, how to map between address and source code, how to access memory and registers, etc.
-- Executable File Format, how to store debugging information, etc.
-- Debugging Information Format, how to describe data, types, executable code (even language features, like c++ template, go goroutine), how to map between address and source, how to locate the call frame, etc.
-- DWARF, a standard of Debugging Information Format to guide how to coordinate the work between compilers, linkers and debuggers.
-- ...
-    
-Ah, I think it's a good chance to improve understanding of Computer Technology by developping a (golang) debugger.
-
-We all have learned programming with the help of a debugger. We trace the programme statement by statement, check the variable's value, check the register's value, suspend or resume thread, check the call frame stack, etc.
-While, I think a debugger can teach us more that that! 
-
-The go programming lanaguage is still a young language, go is still developping rapidly. How do we spend less time but learn go better?
-If we have a good golang debugger, which knows go type system, runtime, memory management, etc, very well, I think it can help gophers understand go better!
-
-- How does a debugger work? 
-- How does compiler, linker and debugger coordinate with each other around the program written in specific programming language, eg. golang? 
-- To develop a debugger for golang, what knowledge should be mastered? go type system, runtime... and some Operating System internals. 
-
-This project aims to introduce how to develop a (golang) debugger, including Operating System's support, how to coordinate work between compiler, linker and debugger, debugging information standard, mapping between machine instruction and source code, etc. 
-
-Thanks to [delve](github.com/go-delve/delve) and the author [derek parker](https://twitter.com/derkthedaring?lang=en) and other contributors. I learned a lot from them. I want to share the knowledge to develop a (golang) debugger. I hope this project can be useful for developers interested in debugging topic.
-
-I think it's very helpful, So I am really excited to write this documents.
-
-## Read the Book
-
-1. clone the repository
+1. 克隆项目
 ```
 git clone https://github.com/hitzhangjie/golang-debugger
 ```
 
-2. install gitbook or gitbook-cli
+2. 安装gitbook或gitbook-cli
 ```
 # macOS
 brew install gitbook-cli
@@ -76,7 +36,7 @@ apt install gitbook-cli
 ...
 ```
 
-3. build the book
+3. 构建书籍
 ```
 cd golang-debugger/doc
 
@@ -91,12 +51,12 @@ make chinese
 
 ```
 
-4. clean tmpfiles
+4. 清理临时文件
 ```
 make clean
 ```
 
-## Contact
+# 意见反馈
 
-Please email me **hit.zhangjie@gmail.com**, I will respond as soon as possible.
+请邮件联系 `hit.zhangjie@gmail.com`，标题中请注明来意`golang debugger交流`。
 
