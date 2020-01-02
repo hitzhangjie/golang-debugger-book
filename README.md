@@ -1,14 +1,6 @@
-# golang-debugger-book
+# How to develop a (golang) debugger
 
 ## Introduction
-
-In a nutshell, Explore the computer world from a (golang) debugger's perspective!
-
-Do you feel confused by following questions?
-
-- How does a debugger work? 
-- How does compiler, linker and debugger coordinate with each other around the program written in specific programming language, eg. golang? 
-- To develop a debugger for golang, what knowledge should be mastered? go type system, runtime... and some Operating System internals. 
 
 This project aims to introduce how to develop a (golang) debugger, including Operating System's support, how to coordinate work between compiler, linker and debugger, debugging information standard, mapping between machine instruction and source code, etc. 
 
