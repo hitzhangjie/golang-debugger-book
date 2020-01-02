@@ -1,4 +1,4 @@
 _book
 node_modules
-./README.md
-./SUMMARY.md
+./book/README.md
+./book/SUMMARY.md
