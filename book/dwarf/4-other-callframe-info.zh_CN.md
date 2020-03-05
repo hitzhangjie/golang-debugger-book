@@ -87,7 +87,7 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 
 1. length (初始长度)，常量，指明了该CIE结构的大小（字节数量），不包含该字段本身。length字段所占字节数，加上length的值，必须是按照address size对齐；
 
-2. CIE_id (4字节或8字节)，常量，用语CIEs、FDEs；
+2. CIE_id (4字节或8字节)，常量，用于CIEs、FDEs；
 
 3. version(ubyte)，版本号，该值与CFI信息有关，与DWARF版本无关；
 
