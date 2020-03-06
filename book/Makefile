@@ -34,7 +34,3 @@ clean:
 	rm -f ./README.md
 	rm -f ./SUMMARY.md
 
-sync:
-	cp -rf ~/Github/delve/Documentation/internal/* develop/delve/
-	cd develop/delve/
-	
