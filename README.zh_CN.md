@@ -20,7 +20,7 @@
 
 1. 克隆项目
 ```
-git clone https://github.com/hitzhangjie/golang-debugger
+git clone https://github.com/hitzhangjie/golang-debugger-book
 ```
 
 2. 安装gitbook或gitbook-cli
@@ -38,7 +38,7 @@ apt install gitbook-cli
 
 3. 构建书籍
 ```
-cd golang-debugger/doc
+cd golang-debugger-book/doc
 
 # initialize gitbook plugins
 make init 
