@@ -87,7 +87,7 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 
 1. length (初始长度)，常量，指明了该CIE结构的大小（字节数量），不包含该字段本身。length字段所占字节数，加上length的值，必须是按照address size对齐；
 
-2. CIE_id (4字节或8字节)，常量，用语CIEs、FDEs；
+2. CIE_id (4字节或8字节)，常量，用于CIEs、FDEs；
 
 3. version(ubyte)，版本号，该值与CFI信息有关，与DWARF版本无关；
 
@@ -322,17 +322,17 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 
 ##### 5.4.3.7.4 CIE中initial instruction指导创建CFI中第一行
 
-CFI信息表第一行，是由当前被调函数foo对应的FDE所引用的CIE中的initial instructions来创建的，因此向了解第一行为什么是 `foo [R7]+0 s u u u s s s a r1`，就需要结合CIE来看，下图65中给出了CIE的说明。
+CFI信息表第一行，是由当前被调函数foo对应的FDE所引用的CIE中的initial instructions来创建的，因此想了解第一行为什么是 `foo [R7]+0 s u u u s s s a r1`，就需要结合CIE来看，下图65中给出了CIE的说明。
 
 CIE中规定R8是返回地址寄存器，该机型Motorola 88000规定函数调用时R1保存返回地址，故R8的值实际上在R1中。明确了这点后我们看下CIE中的initial instructions部分是如何指导创建CFI信息表第一行的。
 
 在foo第一条指令执行之前，PC值为foo符号对应的内存地址：
 
-- DW_CFA_def_cfa(7,0) 规定CFA=[R7]+0，表示foo的标准帧地址CFA就是调用方的栈指针值，即R7的值（此时R7=R7-<fs>还没有执行，还没有为foo分配栈帧），得到了`foo [R7]+0`；
+- DW_CFA_def_cfa(7,0) 规定CFA=[R7]+0，表示foo的标准帧地址CFA就是调用方的栈指针值，即R7的值（此时`R7=R7-<fs>`，此时还没有执行，还没有为foo分配栈帧），得到了`foo [R7]+0`；
 
 - DW_CFA_same_value(0) 规定R0寄存器总是0，使用same unwind规则，也可以理解，得到了`foo [R7]+0 s`；
 
-- DW_CFA_undefined(1)/(2)/(3) 规定R1/R2/R3寄存器使用undefined unwind规则，R2、R3因为是无需保存的临时寄存器，所以使用undefined规则无可厚非，而R1实际上是保存返回地址的，这个程序中实际上没有将R1用作其他木目的，所以也是R1。这样就得到了`foo [R7]+0 s u u u`；
+- DW_CFA_undefined(1)/(2)/(3) 规定R1/R2/R3寄存器使用undefined unwind规则，R2、R3因为是无需保存的临时寄存器，所以使用undefined规则无可厚非，而R1实际上是保存返回地址的，这个程序中实际上没有将R1用作其他木目的，所以也是undefined。这样就得到了`foo [R7]+0 s u u u`；
 
   >如果prologue后面代码有用到R1的话，epilogue一定会有其他unwind规则来恢复，但是没有，说明根本就没有使用到R1；
 
@@ -357,19 +357,19 @@ CIE中规定R8是返回地址寄存器，该机型Motorola 88000规定函数调�
 
 下图66中展示了图63机器指令对应的FDE中的指令序列，图66中使用了如下注解:
 
-1. <fs> = 栈帧大小
-2. <caf> = 代码对齐因子，code alignment factor
-3. <daf> = 数据对齐因子，data alignment factor
+1. `<fs>` = 栈帧大小
+2. `<caf>` = 代码对齐因子，code alignment factor
+3. `<daf>` = 数据对齐因子，data alignment factor
 
 <img src="assets/IMG_0050.JPG" alt="IMG_0050" style="zoom:25%;" />
 
-大家一定有疑问，FDE中的指令序列是如何生成的？图63中的每条机器指令的地址是不同的，其影响的寄存器也是不同的，实际上就是根据每条机器指令的具体动作，来生成对应的CFI表构建指令而异，比如CFI表row create rule，以及受影响的寄存器的unwind rule，仅此而已。下面结合图63中机器指令说明下FDE中的指令序列是如何构建的，以及反映到CFI信息表中又是什么样的。看完这里，大家就会对CFI表的构建了然于胸了！
+大家一定有疑问，FDE中的指令序列是如何生成的？图63中的每条机器指令的地址是不同的，其影响的寄存器也是不同的，实际上就是根据每条机器指令的具体动作，来生成对应的CFI表构建指令而已，比如CFI表row create rule，以及受影响的寄存器的unwind rule，仅此而已。下面结合图63中机器指令说明下FDE中的指令序列是如何构建的，以及反映到CFI信息表中又是什么样的。看完这里，大家就会对CFI表的构建了然于胸了！
 
-CFI信息表第一行：`foo [R7]+0 s u u u s s s a r1`，它表示PC=foo处地址时，如何计算CFA以及如何恢复各个寄存器。
+CFI信息表第一行：`foo [R7]+0 s u u u s s s a r1`，它表示PC=foo处地址时，如何计算CFA以及如何恢复各个寄存器。下面解释代码中各条指令操作，如何转换成对应的CFI row rule set。
 
 - `foo sub R7, R7, <fs>`
 
-  R7存储的是栈指针值，指令执行后R7=R7-<fs>，相当于分配了一个<fs>大小的栈帧给foo使用。因为CFI之前用R7、偏移量来作为计算CFA的规则，此处R7的值减少了<fs>，所以需要对CFA规则进行调整。首先要需要一条row create rule，然后再来一条CFA定义整理，也就是下图66中的DW_CFA_advance_loc(1)以及DW_CFA_def_cfa_offset(12)，因为不涉及其他寄存器调整，这两个unwind rule就够了。
+  R7存储的是栈指针值，指令执行后`R7=R7-<fs>`，相当于分配了一个`<fs>`大小的栈帧给foo使用。因为CFI之前用R7、偏移量来作为计算CFA的规则，此处R7的值减少了`<fs>`，所以需要对CFA规则进行调整。首先需要一条row create rule，然后再来一条CFA调整规则，也就是下图66中的DW_CFA_advance_loc(1)以及DW_CFA_def_cfa_offset(12)，因为不涉及其他寄存器调整，这两个unwind rule就够了。
 
   这里的DW_CFA_advance_loc(1)表示指令地址前进code_alignment_factor * 1 = 4 * 1 = 4，表示该条机器指令执行后PC=foo+4。DW_CFA_def_cfa_offset(12)表示CFA计算规则中寄存器还是R7，但是偏移量由0变成+12。
 
@@ -379,9 +379,9 @@ CFI信息表第一行：`foo [R7]+0 s u u u s s s a r1`，它表示PC=foo处地�
 
 - `foo+4 store R1, R7, (<fs>-4)`
 
-  R1里面存的是返回地址，R7+<fs>-4是foo栈帧最高的4个字节，该指令意图将foo函数调用的返回地址（R1值）存储到该位置。因为CFI信息表中R8用来存储返回地址，这里需要调整下R8的unwind rule。需要两个操作，首先是需要一条row create rule，接下来再来一条R8的unwind rule。
+  R1里面存的是返回地址，`R7+<fs>-4`是foo栈帧最高的4个字节，该指令意图将foo函数调用的返回地址（R1值）存储到该位置。因为CFI信息表中R8用来存储返回地址，这里需要调整下R8的unwind rule。需要两个操作，首先是需要一条row create rule，接下来再来一条R8的unwind rule。
 
-  DW_CFA_advance_loc(1)、DW_CFA_offset(8,1)，DW_CFA_advance_loc(1)就是将指令地址偏移量在增加code_alignment_factor * 1 = 4 * 1，也就是addr = foo+8。DW_CFA_offset(8,1)表示R8寄存器存储在当前CFA+偏移量data_alignment_factor * 1 = CFA + (-4) * 1 = CFA-4的地方，也就是unwind rule变成了c-4。
+  DW_CFA_advance_loc(1)、DW_CFA_offset(8,1)，DW_CFA_advance_loc(1)就是将指令地址偏移量在增加`code_alignment_factor * 1 = 4 * 1`，也就是addr = foo+8。DW_CFA_offset(8,1)表示R8寄存器存储在`当前CFA+偏移量data_alignment_factor * 1 = CFA + (-4) * 1 = CFA-4`的地方，也就是unwind rule变成了c-4。
 
   这样我们就得到了CFI表第二行`foo+8 [R7]+fs s u u u s s s a c-4`。
 
@@ -391,7 +391,7 @@ CFI信息表第一行：`foo [R7]+0 s u u u s s s a r1`，它表示PC=foo处地�
 
   这里是要存储R6寄存器的值到foo栈帧的第4~8字节的位置，影响的是R6寄存器的unwind规则，我们需要两个操作，一个是row create rule，一个是调整R6的unwind rule。
 
-  DW_CFA_advance_loc(1)、DW_CFA_offset(6,2)，表示指令地址addr+=code_alignment_factor * 1，即foo+12，并且R6的值存储在当前CFA+data_alignment_factor*2 = CFA+(-4)\*2 = CFA-8的位置，CFA-8表示的刚好是foo栈帧4~8节的位置。
+  DW_CFA_advance_loc(1)、DW_CFA_offset(6,2)，表示指令地址`addr+=code_alignment_factor * 1`，即foo+12，并且R6的值存储在`当前CFA+data_alignment_factor*2 = CFA+(-4)\*2 = CFA-8`的位置，CFA-8表示的刚好是foo栈帧4~8节的位置。
 
   这样我们就得到了CFI表第三行`foo+12 [R7]+fs s u u u s s c-8 a c-4`。
 
