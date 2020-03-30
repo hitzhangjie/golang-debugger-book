@@ -14,7 +14,7 @@ I think it's very helpful, So I am really excited to write this documents.
 
 1. clone the repository
 ```
-git clone https://github.com/hitzhangjie/golang-debugger
+git clone https://github.com/hitzhangjie/golang-debugger-book
 ```
 
 2. install gitbook or gitbook-cli
@@ -32,7 +32,7 @@ apt install gitbook-cli
 
 3. build the book
 ```
-cd golang-debugger/doc
+cd golang-debugger-book/doc
 
 # initialize gitbook plugins
 make init 
