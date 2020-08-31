@@ -50,6 +50,8 @@ make chinese
 make clean
 ```
 
+NOTE: please use Node v10.x.
+
 ## Contact
 
 Please email me **hit.zhangjie@gmail.com**, I will respond as soon as possible.
