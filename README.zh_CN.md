@@ -56,6 +56,8 @@ make chinese
 make clean
 ```
 
+NOTE: please use Node v10.x.
+
 # 意见反馈
 
 请邮件联系 `hit.zhangjie@gmail.com`，标题中请注明来意`golang debugger交流`。
