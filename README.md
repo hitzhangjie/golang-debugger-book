@@ -50,7 +50,7 @@ make chinese
 make clean
 ```
 
-NOTE: please use Node v10.x.
+​	
 
 ## Contact
 
