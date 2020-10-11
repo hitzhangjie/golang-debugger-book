@@ -19,12 +19,12 @@
 ## 阅读本书
 
 1. 克隆项目
-```
+```bash
 git clone https://github.com/hitzhangjie/golang-debugger-book
 ```
 
 2. 安装gitbook或gitbook-cli
-```
+```bash
 # macOS
 brew install gitbook-cli
 
@@ -37,8 +37,8 @@ apt install gitbook-cli
 ```
 
 3. 构建书籍
-```
-cd golang-debugger-book/doc
+```bash
+cd golang-debugger-book/book
 
 # initialize gitbook plugins
 make init 
@@ -52,7 +52,7 @@ make chinese
 ```
 
 4. 清理临时文件
-```
+```bash
 make clean
 ```
 

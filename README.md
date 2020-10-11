@@ -13,12 +13,12 @@ I think it's very helpful, So I am really excited to write this documents.
 ## Read the Book
 
 1. clone the repository
-```
+```bash
 git clone https://github.com/hitzhangjie/golang-debugger-book
 ```
 
 2. install gitbook or gitbook-cli
-```
+```bash
 # macOS
 brew install gitbook-cli
 
@@ -31,8 +31,8 @@ apt install gitbook-cli
 ```
 
 3. build the book
-```
-cd golang-debugger-book/doc
+```bash
+cd golang-debugger-book/book
 
 # initialize gitbook plugins
 make init 
@@ -46,7 +46,7 @@ make chinese
 ```
 
 4. clean tmpfiles
-```bashbabashbashs
+```bash
 make clean
 ```
 
