@@ -2,28 +2,24 @@
 
 ### 4.2.1 调试符号信息
 
-编译器、链接器根据源代码构建可执行程序，可执行程序中的数据是面向极其的，而非面向人类的。
+编译器、链接器根据源代码构建可执行程序，可执行程序中的数据是面向机器的，而非面向人类的。
 
 符号级调试器如何理解可执行程序中的数据，并在面向机器的数据和面向人类的源码信息之间进行转换呢？
 
-这就需要调试符号表的支持了。当编译器将源代码转换成目标文件的时候，编译器会生成一些调试符号并将其存储到可执行程序文件中的特殊的section中。当链接器将多个目标对象文件连接成一个完整的可执行程序的时候，链接器会将分散在不同目标文件中的调试符号进行合并，然后存储到调试符号表中。
+这就需要调试符号表的支持了。当编译器将源代码转换成目标文件的时候，编译器会生成一些调试符号并将其存储到可执行程序文件中的特殊的section中。当链接器将多个目标对象文件链接成一个完整的可执行程序的时候，链接器会将分散在不同目标文件中的调试符号进行合并，然后存储到调试符号表中。
 
 ![img](assets/clip_image001.png)
 
-这里的调试符号如何生成、编解码、存储等是有相应的调试信息标准指导的，调试信息标准指引着编译器、链接器、调试器之间如何进行协作，如DWARF。编译器、链接器生成这些调试信息并将其存储到可执行程序的相应section中，调试器会读取可执行程序数据，并从中提取、解析与调试相关的信息，然后就可以构建起源码层面的视图。进而，调试器可以完成内存地址、指令地址、源码之间的相互映射。
-
-In practice, depending on the format of the object file, debug symbol table records are typically placed in one of two locations:
+这里的调试符号如何生成、编解码、存储等是有相应的调试信息标准指导的，调试信息标准指导编译器、链接器、调试器之间如何进行协作，常见的调试信息标准如DWARF。编译器、链接器生成这些调试信息并将其存储到可执行程序的相应sections中，调试器会从中提取、解析与调试相关的信息，然后就可以构建起源码层面的视图。进而，调试器可以完成内存地址、指令地址、源码之间的相互映射。
 
 不同的目标文件格式，调试符号表可能会存储在不同的地方，一般可能有两种存储方式：
 
 - 存储在目标文件自身
 
-    For example, [ELF](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format) object format contains DWARF Debug symbol table.
-
     例如，[ELF](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format) 文件格式包含了DWARF调试符号表对应的section，一般以".debug”或”.zdebug”开头。.debug开头的表示数据未压缩，.zdebug开头的表示数据经过了压缩。
 
-    >这里给个实例，__debug_bin是一个由`dlv debug`生成的可执行程序，包含了调试符号信息，`readelf`可以用来读取ELF文件中的section header，下面我们列一下ELF文件中包含的调试信息相关的 section。
-    >
+    >这里给个实例，__debug_bin是一个由`dlv debug`生成的可执行程序，包含了调试符号信息，`readelf`可以用来读取ELF文件中的section header，下面我们看一下ELF文件中包含的调试信息相关的 section。
+>
     >```bash
     >[root@centos ~]# readelf -a __debug_bin | grep debug
     >[12] .zdebug_abbrev    PROGBITS         0000000000599000  0017b000
@@ -36,10 +32,10 @@ In practice, depending on the format of the object file, debug symbol table reco
     >[19] .zdebug_loc       PROGBITS         00000000005dcfe2  001befe2
     >[20] .zdebug_ranges    PROGBITS         00000000005e982d  001cb82d
     >```
+    
+- 存储在独立的文件中
 
-- 存储在独立的文件
-
-    例如，Microsoft Visual C++ 2.0生成的调试信息存储在独立的.PDB（Program Database）文件中，macOS平台上构建的调试符号信息一般存储在独立的.dSYM文件中。
+    例如，Microsoft Visual C++ 2.0生成的调试信息存储在独立的**.PDB（Program Database）**文件中，macOS平台上构建的调试符号信息一般存储在独立的**.dSYM/Resources/DWARF/**目录中。
     
     >这里给个示例，在macOS 10.15上，通过gcc -g构建一个包含调试符号的可执行程序，我们看下它生成的调试信息是如何存储的：
     >
@@ -65,15 +61,15 @@ In practice, depending on the format of the object file, debug symbol table reco
     >└── Contents
     >├── Info.plist
     >└── Resources
-    >   └── DWARF
-    >       └── main
+    >      └── DWARF
+    >            └── main
     >```
     >
-    >可以看到，macOS 10.15上，gcc将调试信息也存储到了独立文件中main.dSYM。
+    >可以看到，macOS 10.15上，gcc将调试信息也存储到了独立的main.dSYM/目录。
 
 调试符号信息有什么用呢？调试器利用调试符号能够将源码中的函数、变量映射为内存中的地址，也就意味着开发者可以直接对源码中函数、变量进行操作而不用关心具体的内存地址，这也是符号级调试器相比于指令级调试器的一大优势。
 
-借助源码到内存地址的映射，符号级调试器就可以直接显示变量的值，如何做到的呢？因为变量标识符可以映射成程序的数据段地址（栈地址或者堆地址），此外，符号表中还记录了该变量的数据类型信息，这里的类型信息告诉调试器该变量一共占用多少个字节、实际用了多少比特、应该解读成哪种数据类型，调试器就可以正确显示变量的值。
+借助源码到内存地址的映射，符号级调试器就可以直接显示变量的值，如何做到的呢？因为变量标识符可以映射成程序的数据段地址（栈地址或者堆地址），此外，符号表中还记录了该变量的数据类型信息，这里的类型信息告诉调试器该变量一共占用多少个字节、实际用了多少比特、应该解读成哪种数据类型，调试器就可正确解析内存数据，进而显示变量值。
 
 ![img](assets/clip_image002.png)
 
@@ -95,7 +91,9 @@ In practice, depending on the format of the object file, debug symbol table reco
 
 与DOS相反，Windows、Linux以及BSD都实现了内存保护模式，这意味着如果你想在这些平台上开发一个调试器，就需要通过平台提供的系统调用来实现。
 
-以Linux系统调用为例，调试器进程（tracer）可以通过`ptrace(PTRACE_ATTACH…)` attach到一个被调试进程（tracee），然后操作系统内核会给tracee进程发送一个信号SIGSTOP，tracee进程就会停下来，tracer进程就可以通过`waitpid(pid)`来等待tracee停止事件。当tracer进程感知到tracee进程停止执行之后，tracer进程就可以进一步通过`ptrace`系统调用、配合其他ptrace参数`PTRACE_GETREGS、PTRACE_SETREGS、PTRACE_PEEKDATA、PTRACE_POKEDATA等`来读写tracee进程寄存器、内存数据（what，进程还有寄存器、内存数据？如果想不明白，可以了解下操作系统进程控制块PCB的概念以及Linux下taskstruct、GDT、LDT相关的知识）、控制代码的执行路径等。
+以Linux系统调用为例，调试器进程（tracer）可以通过`ptrace(PTRACE_ATTACH…)` attach到一个被调试进程（tracee），然后操作系统内核会给tracee进程发送一个信号SIGSTOP，tracee进程就会停下来，tracer进程就可以通过`waitpid(pid)`来等待tracee停止事件。当tracer进程感知到tracee进程停止执行之后，tracer进程就可以进一步通过`ptrace`系统调用、配合其他ptrace参数`PTRACE_GETREGS、PTRACE_SETREGS、PTRACE_PEEKDATA、PTRACE_POKEDATA等`来读写tracee进程寄存器、内存数据、控制代码的执行路径等。
+
+ps: what，进程还有寄存器、内存数据？如果想不明白，可以了解下操作系统进程控制块PCB的概念以及Linux下taskstruct、GDT、LDT相关的知识。
 
 > Linux平台对SIGSTOP信号的处理，可以参考：[How does SIGSTOP work in Linux kernel?](https://stackoverflow.com/questions/31946854/how-does-sigstop-work-in-linux-kernel)
 
@@ -105,7 +103,7 @@ In practice, depending on the format of the object file, debug symbol table reco
 
 #### 4.2.2.4 内核调试器
 
-操作系统构建起严格的内存保护模式之后，要想调试内核本身，就得通过一种特殊类型的调试器。传统的用户模式下的调试器是不行的，因为保护内存模式（如段、页式管理的相关逻辑）阻止了用户态程序操作内核映像。
+操作系统构建起严格的内存保护模式之后，要想调试内核本身，就得通过一种特殊类型的调试器。传统的用户模式下的调试器是不行的，因为内存保护模式（如段、页式管理的相关逻辑）阻止了用户态程序操作内核映像。
 
 你需要一个内核调试器！
 
@@ -121,7 +119,7 @@ In practice, depending on the format of the object file, debug symbol table reco
 
 #### 4.2.3.1 动态断点
 
-程序断点breakpoint，指的是程序中的一个位置，当程序执行到该位置时能够停下来，以便调试人员观察程序状态。
+程序断点（breakpoint），指的是程序中的一个位置，当程序执行到该位置时能够停下来，以便调试人员观察程序状态。
 
 如果有动态断点的概念，那应该也有一个静态断点的概念，没错，这两种断点都存在。
 
@@ -171,7 +169,7 @@ total = total +value;
 
 #### 4.2.3.2 单步执行
 
-对指令级调试器（也称机器级调试器）而言，单步执行很简单：处理器只需执行下一条机器指令，然后将程序控制权返回给调试器。 对于符号调试器，此过程并不那么简单，因为高级编程语言中的单个语句通常会转换为多个机器级指令。 您不能简单地让调试器执行固定数量的机器指令，因为高级源代码语句解析的机器指令数量会有所不同。
+对指令级调试器（也称机器级调试器）而言，单步执行很简单：处理器只需执行下一条机器指令，然后将程序控制权返回给调试器。 对于符号调试器，此过程并不那么简单，因为高级编程语言中的单个语句通常会转换为多个机器级指令。 不能简单地让调试器执行固定数量的机器指令，因为源代码语句解析的机器指令数量会有所不同。
 
 单步执行时，符号调试器必须使用动态断点。 如何插入动态断点将取决于执行的单步执行动作的类型，单步有三种不同类型：
 
@@ -187,6 +185,6 @@ total = total +value;
 
 3. **单步执行跳过 (下一条语句)**
 
-    当源代码级调试器遍历一条语句时，它将查询程序的符号表以确定该语句在内存中的地址范围（这是在其中使用符号表的一种情况）。 一旦调试器确定了该语句的结束位置，它将保存该语句后的第一条机器指令的操作码，并将其替换为断点。 当恢复执行时，调试器将仅在执行路径遍历该语句之后才能重新获得程序控制。
+    当源代码级调试器单步执行一条语句时，它将查询程序的符号表以确定该语句在内存中的地址范围，一旦调试器确定了该语句的结束位置，它将保存该语句后的第一条机器指令的操作码，并将其替换为断点。 加断点的语句，tracee执行完该语句对应的所有机器指令之后，调试器才能重新获得程序控制。
 
     ![img](assets/clip_image005.png)
