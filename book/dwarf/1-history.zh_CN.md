@@ -20,7 +20,7 @@ PLSIG起草了DWARF v1的标准，该标准与AT＆T的SVR4编译器和调试器
 
 DWARF委员会于1999年10月进行了重组，并在接下来的几年中解决DWARF v2中注意到的问题，并添加一些新功能。 在2003年中，该委员会成为Free Standards Group （自由标准组，FSG）的工作组，该组织是为促进开放标准而成立的行业联盟。 经过行业审查和评论后，DWARF v3于2005年12月发布。
 
-该版本增加了对Java、C++ namespace、Fortran 90等的支持，也增加了一些针对编译器、连接器的优化技术。
+该版本增加了对Java、C++ namespace、Fortran 90等的支持，也增加了一些针对编译器、链接器的优化技术。
 
 如，Common Information Entry （简称CIE）中字段 return_address_register 存储调用栈的返回地址，该字段使用无符号LEB编码算法进行编码，有效压缩小整数占用的存储空间。
 
