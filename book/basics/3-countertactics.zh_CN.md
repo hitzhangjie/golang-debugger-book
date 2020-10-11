@@ -17,7 +17,7 @@
 
 ![img](assets/clip_image004-3995693.png)
 
-如果观测到调试器正在调试当前进程，则可以强制程序运行异常、诡异，让正在调试的人懵逼。 调试器是个独特的工具，因为它使用户可以从中立的角度来观察程序。 通过插入类似chk的代码，可以迫使用户进入一个扭曲的量子宇宙，在该宇宙中，精心构造的诡异行为、输出可以有效保护您的程序，避免或者延缓被逆向。
+如果观测到调试器正在调试当前进程，则可以强制程序运行异常、做些诡异的逻辑，把正在调试的人绕晕。 调试器是个独特的工具，因为它使用户可以从中立的角度来观察程序。 通过插入类似chk的代码，可以迫使用户进入一个扭曲的量子宇宙，在该宇宙中，精心构造的诡异行为、输出，可以有效保护您的程序，避免或者延缓被逆向。
 
 #### 4.3.1.2 Linux
 
@@ -57,7 +57,7 @@
 
 #### 4.3.1.x 其他平台
 
-略。
+其他平台下，应该也有对应的解决方法，就不一一列举了，读者感兴趣可以自行查阅资料。
 
 ### 4.3.2 移除调试信息
 
@@ -82,8 +82,6 @@ gcc编译器使用选项”**-g**“在其生成的目标代码中插入调试�
 这样，我们就相对安全了。
 
 ### 4.3.4 混合内存模型
-
-There’re robust debuggers, like SoftICE, that can gracefully make the jump between user mode and kernel mode. However, not many debuggers can make the jump between two different memory models. Windows in particular is guilty of allowing this kind of abomination to occur. On Windows, this phenomenon is generally known as thunking, and it allows 16-bit code and 32-bit code to fraternize.
 
 有一些强大的调试器，例如SoftICE，可以在用户模式和内核模式之间轻松切换。 但是，很少有调试器可以在两个不同的内存模型之间进行跳转。 比较特殊地，Windows下就允许发生这种行为。 在Windows上，这种现象通常称为“thunking”，它允许16位代码和32位代码进行混合。
 
