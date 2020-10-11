@@ -56,7 +56,12 @@ make chinese
 make clean
 ```
 
-NOTE: please use Node v10.x.
+> 注意：gitbook-cli存在依赖问题，请尽量使用Node v10.x.
+>
+> 如果您确实希望使用更新版本的Node，可以通过如下方式来解决:
+>
+> 1. 如果运行 `gitbook serve` 出错，并且gitbook-cli是全局安装的话，先找到npm全局安装目录并进入该目录，如 `/usr/local/lib/node_modules/gitbook-cli/node_modules/npm/node_modules`, 运行命令 `npm install graceful-fs@latest --save`
+> 2. 如果运行 `gitbook install` 出错，进入用户目录下的.gitbook模块安装目录 `.gitbook/versions/3.2.3/node_modules/npm`，运行命令 `npm install graceful-fs@latest --save`
 
 # 意见反馈
 

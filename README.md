@@ -46,11 +46,16 @@ make chinese
 ```
 
 4. clean tmpfiles
-```
+```bashbabashbashs
 make clean
 ```
 
-​	NOTE: please use Node v10.x.
+> NOTE: please use Node v10.x.
+>
+> If you really want to use higher version of Node, please pay attention:
+>
+> 1. if you run `gitbook serve` has error and your `gitbook-cli` is installed globally. Find the NPM global installation directory and into dir `node_modules/gitbook-cli/node_modules/npm/node_modules`, run command `npm install graceful-fs@latest --save`
+> 2. if you run `gitbook install` has error, go to user directory and into dir `.gitbook/versions/3.2.3/node_modules/npm`, run command `npm install graceful-fs@latest --save`
 
 ## Contact
 
