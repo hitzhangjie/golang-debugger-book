@@ -32,12 +32,11 @@
 > import "os"
 > 
 > func main() {
-> 
->      fmt.Println("vim-go, pid: %d", os.Getpid())
-> }
+>   fmt.Println("vim-go, pid: %d", os.Getpid())
+>    }
 > ```
->
-> ```bash
+> 
+>```bash
 > $ dlv debug main.go
 > dlv> b main.main
 > dlv> c
@@ -45,15 +44,15 @@
 > dlv> n
 > dlv> vim-go, pid: 746
 > ```
->
-> ```bash
+> 
+>```bash
 > >cat /proc/746/status | grep TracePid
 > TracePid: 688
 > > cat /proc/688/cmdline
 > dlv debug main.go
 > ```
->
-> 现在我们可以判断出当前进程正在被pid=688的调试器进程调试，并且该调试器是dlv。
+> 
+>现在我们可以判断出当前进程正在被pid=688的调试器进程调试，并且该调试器是dlv。
 
 #### 4.3.1.x 其他平台
 

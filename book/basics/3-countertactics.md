@@ -30,12 +30,11 @@ In Linux, we may use other similar tricks to check whether a process is debugged
 > import "os"
 > 
 > func main() {
-> 
->         fmt.Println("vim-go, pid: %d", os.Getpid())
-> }
+>      fmt.Println("vim-go, pid: %d", os.Getpid())
+>    }
 > ```
->
-> ```bash
+> 
+>```bash
 > $ dlv debug main.go
 > dlv> b main.main
 > dlv> c
@@ -43,15 +42,15 @@ In Linux, we may use other similar tricks to check whether a process is debugged
 > dlv> n
 > dlv> vim-go, pid: 746
 > ```
->
-> ```bash
+> 
+>```bash
 > >cat /proc/746/status | grep TracePid
 > TracePid: 688
 > > cat /proc/688/cmdline
 > dlv debug main.go
 > ```
->
-> Now we confirmed this process is debugged by debugger `dlv`.
+> 
+>Now we confirmed this process is debugged by debugger `dlv`.
 
 #### 4.3.1.X Others
 Coming Soon ~
