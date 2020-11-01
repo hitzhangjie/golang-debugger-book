@@ -1,19 +1,15 @@
-### 5.3.1 Introduction
+### 5.3.1 DIE介绍
 
 每个调试信息条目（DIE）都由一个tag以及一系列attributes构成。
 
-- tag指明了该DIE描述的实体所属的类型，如变量、数据类型、函数等；
+- tag指明了该DIE描述的程序构造所属的类型，如变量、数据类型、函数等；
 - attributes定义了该DIE的一些具体特征，如变量所属的数据类型；
-
-The debugging information entries in Dwarf v2/v3 are intended to exist in the **.debug_info** section of an object file.
 
 以Linux下ELF文件格式为例，调试信息条目多将其存储在.debug_info和.debug_types中，如果涉及到压缩会存储到.zdebug_info和.zdebug_types中。
 
-#### 5.3.1.1 Tag
+#### 5.3.1.1 DIE的Tag
 
-Tag, with prefix DW_TAG, specifies what the DIE describes, the set of required tag names is listed in following figure.
-
-Tag，其名称以DW_TAG开头，它指明了DIE描述的实体所属的类型，下面表格中整理了DWARF v2中定义的Tag：
+Tag，其名称以DW_TAG开头，它指明了DIE描述的程序构造所属的类型，下面表格中整理了DWARF v2中定义的Tag，各个Tag的具体含义可以参考DWARF标准中描述。
 
 ![img](assets/clip_image001.png)
 
@@ -21,15 +17,15 @@ Tag，其名称以DW_TAG开头，它指明了DIE描述的实体所属的类型�
 >
 > DW_TAG_condition, DW_TAG_dwarf_procedure, DW_TAG_imported_module, DW_TAG_imported_unit, DW_TAG_interface_type, DW_TAG_namespace, DW_TAG_partial_unit, DW_TAG_restrict_type, DW_TAG_shared_type, DW_TAG_unspecified_type.
 
-#### 5.3.1.2 Attribute
+#### 5.3.1.2 DIE的Attributes
 
-Attribute，其名称以DW_AT开头，它进一步补充了DIE要描述的实体的信息。
+Attribute，其名称以DW_AT开头，它进一步补充了DIE要描述的程序构造的信息。
 
 一个attribute可能有各种类型的值：常量（如函数名称），变量（如函数的开始地址），对另一个DIE的引用（如函数返回值对应的类型DIE）。
 
-属性允许的取值可能属于一种或多种属性值形式类型。 每一种类型可以由一种或多种方式表示。
+属性的值，可能属于一种或多种取值类别，每种取值类别又可能有多种表示方式。
 
-例如，某些属性值由单个常量数据组成。  “常量数据”是那些属性可能具有的属性值的类别。 但是，常量数据有几种表示形式（一个，两个，四个，八个字节和可变长度的数据）。 属性的任何给定实例的特定表示形式与属性名称一起被编码，作为指导调试信息条目：释的信息的一部分。
+例如，某些属性值包含了一些某种常量类型的数据，，但是，常量数据也有多种表示形式（1、2、4、8字节甚至可变长度的数据）。 属性的任何类型实例的特定表示，都与属性名称一起被编码，方便更好地理解、解释DIE的含义。
 
 下表列出了DWARF v2中定义的attributes：
 
@@ -45,7 +41,7 @@ attribute取值可以划分为如下几种类型：
 
 2. **Block**, 未被解释的任意数量的字节数据块；
 
-3. **Constant**, 一字节、两字节、四字节、八字节违背解释的数据，或者以LEB128形式编码的数据；
+3. **Constant**, 1、2、4、8字节未被解释的数据，或者以LEB128形式编码的数据；
 
 4. **Flag**, 指示属性存在与否的小常数；
 
@@ -64,16 +60,16 @@ attribute取值可以划分为如下几种类型：
    > - 第一种引用，被引用的DIE所在的编译单元与当前编译单元是同一个，通过相对于该编译单元起始位置的偏移量来引用该DIE；
    > - 第二种引用，被引用的DIE所在的编译单元可以在任意编译单元中，不一定与当前编译单元相同，通过被引用DIE的偏移量来引用该DIE；
 
-10. **String**, 以’\0'结尾的字符序列，字符串可能会在DIE中直接表示，也可能通过一个独立的字符串表中的偏移量（索引）来引用。
+10. **String**, 以'\0'结尾的字符序列，字符串可能会在DIE中直接表示，也可能通过一个独立的字符串表中的偏移量（索引）来引用。
 
-#### 5.3.1.3 Form
+#### 5.3.1.3 DIEs分类
 
-DIE可以划分为两种类型：
+根据描述信息的不同，可以将所有的DIEs划分为两大类：
 
 1. 描述 **数据 和 类型** 的；
 2. 描述 **函数 和 可执行代码** 的；
 
-> 一个DIE可以有父级、兄弟、孩子DIEs，DWARF调试信息可以被构造成一棵树，树中每个节点都是一个DIE，多个DIE组合在一起共同描述编程语言中的一个实体（如描述一个函数定义）。如果考虑源码中所有的关系的话，那所有的DIEs形成的则是一个森林。
+> 一个DIE可以有父、兄弟、孩子DIEs，DWARF调试信息可以被构造成一棵树，树中每个节点都是一个DIE，多个DIE组合在一起共同描述编程语言中具体的一个程序构造（如描述一个函数的定义）。如果考虑源码中所有的关系的话，那所有的DIEs形成的就是一个森林。
 
 在后面的章节，我们会介绍DIEs的不同类型，然后再深入了解DWARF的其他知识。
 
