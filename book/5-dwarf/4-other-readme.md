@@ -40,4 +40,4 @@ This data includes:
 
   While Dwarf is defined in a way that allows it to be used with any object file format, it’s most often used with ELF.  
 
-  Each of the different kinds of Dwarf data are stored in their own section. The names of these sections all start with prefix ‘.debug_’, for example, .debug_frame contains call frame info, .debug_info contains core dwarf data like DIEs, .debug_line contains the line number program (sequence of instructions to generate the complete line number table).
+  Each of the different kinds of Dwarf data are stored in their own section. The names of these sections all start with prefix ‘.debug_’, for example, .debug_frame contains call frame info, .debug_info contains core dwarf data like DIEs, .debug_types contains the definitions of data types, .debug_line contains the line number program (sequence of instructions to generate the complete line number table).
