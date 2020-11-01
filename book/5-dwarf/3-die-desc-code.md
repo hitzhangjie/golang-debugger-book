@@ -4,7 +4,7 @@
 
 ##### 5.3.3.1.1 subprogram
 
-Functions (also called subprogram) may has return value or not, Dwarf use DIE `DW_AT_subprogram` to represent both these two cases. This DIE has a name, a source location triplet, and an attribute which indicates whether the subprogram is external, that is, visible outside the current compilation unit.
+Functions (also called subprogram) may has return value or not, Dwarf use DIE `DW_AT_type` to represent both these two cases. This DIE has a name, a source location triplet, and an attribute which indicates whether the subprogram is external, that is, visible outside the current compilation unit.
 
 ##### 5.3.3.1.2 subprogram address range
 
@@ -47,4 +47,16 @@ If the compilation unit takes up continuous memory (i.e., it’s loaded into mem
 If the compilation is not continuous, then a list of the memory address that the code takes up is provided by the compiler and linker.
 
 Each Compilation Unit is represented by a **Common Information Entry**.
+
+#### 5.3.3.3 About Go
+
+Finally, I want to describe the differences in Go.
+
+The following picture depicts how C compiler generates the DWARF info for C language. We see it uses DW_TAG_former_parameter to represent a formal parameter, and it uses DW_AT_type to represent the type of a return value. If DW_AT_type not existed, then we know the function return type is void.
+
+![img](assets/dwarf-c.png)
+
+While, golang differs from C language，golang support return multi values with different types, so only one DW_AT_type is not enough to clearly describe them.
+
+We can wrote a simple programme to validate, golang v1.15 doesn't use DW_AT_type to differentiate whether this function has a return value or represent the type of return value。As the same as representing former parameter, golang still uses DW_TAG_formal_parameter to represent a return value，besides, it uses attribute DW_AT_variable_parameter to differentiate whether this parameter belongs to former parameter (with value 0) or return value (with value 1).
 
