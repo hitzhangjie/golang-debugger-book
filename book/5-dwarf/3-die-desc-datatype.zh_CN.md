@@ -26,11 +26,11 @@ DW_TAG_base_type，此tag用来描述多种基本类型，包括二进制整数�
 
 DWARF通过组合或者链接基本数据类型来定义新的数据类型。
 
-图 5中，定义了一个变量px，其类型通过DW_AT_type=<2>引用另一个DIE DW_TAG_pointer_type，是一个指针类型，该DIE内部由通过DW_AT_type=<3>引用另一个描述基本数据类型的DIE DW_TAG_base_type，该基本数据类型为4字节有符号整数。最终我们可以确定变量px是一个纸箱int类型的指针。
+Figure 5中，定义了一个变量px，其类型通过DW_AT_type=<2>引用另一个DIE DW_TAG_pointer_type，是一个指针类型，该DIE内部通过DW_AT_type=<3>引用另一个描述基本数据类型的DIE DW_TAG_base_type，该基本数据类型为4字节有符号整数。最终我们可以确定变量px是一个指向4字节宽的int类型的指针。
 
 ![img](assets/clip_image005.png)
 
-其他数据类型也可以通过链接多个DIE（DW_TAG…+DW_AT_type…）来定义一个新的数据类型，例如reference类型可以给予DW_TAG_pointer_type来构建。
+其他数据类型也可以通过链接多个DIE（DW_TAG…+DW_AT_type…）来定义一个新的数据类型，例如可以在DW_TAG_pointer_type基础上定义引用类型。
 
 #### 5.3.2.3 数组（array）
 
