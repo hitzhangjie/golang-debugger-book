@@ -67,7 +67,7 @@ In practice, depending on the format of the object file, debug symbol table reco
     >            └── main
     >```
     >
-    >Now, you see the seperated DWARF Information is generated under the directory main.dSYM/.
+    >Now, you see the seperated DWARF Information is generated under the directory main.dSYM/. We can use `splitdwarf` to help analyse it， please reference this article: https://blog.golang.org/debug-opt.
 
 Debug symbol information maps functions and variables to locations in memory, this is what gives a symbolic debugger the fundamental advantage over a machine instruction debugger. For instance, the source code to memory mapping allows a symbolic debugger to display the value of a variable, because the variable's identifier is matched to a specific location in the program's data segment (stack or heap). Not only that, but there will also be data type information in the symbol table that will tell the debugger what type of data is manipulated so that its value can be properly displayed.
 
