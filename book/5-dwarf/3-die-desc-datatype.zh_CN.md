@@ -90,12 +90,10 @@ DWARF提供了一种非常通用的机制描述如何确定变量的数据位置
 
 地址操作是存储器地址计算规则。 所有位置操作都被编码为操作码流，每个操作码后跟零个或多个操作数。 操作数的数量由操作码决定。
 
-Each addressing operation represents a **postfix operation on a simple stack machine**. 
-
-每个寻址操作代表**简单的栈机器后缀操作**。
+每个寻址操作都表示**栈架构机器上的后缀操作**。
 
 - 栈上每个元素，是一个目标机器上的地址的值；
-- 执行位置表达式后，栈顶元素的值就是计算结果（对象的地址，或者数组长度，或者字符串长度）。
+- 执行位置表达式之后，栈顶元素的值就是计算结果（对象的地址，或者数组长度，或者字符串长度）。
 
 对于结构体成员地址的计算，在执行位置表达式之前，需要先将包含该成员的结构体的起始地址push到栈上。
 
@@ -103,7 +101,7 @@ Each addressing operation represents a **postfix operation on a simple stack mac
 
 1. **寄存器寻址**  
 
-   寄存器寻址方式，push一个值到栈上，这个值就是目标寄存器中的值与指定偏移量的和：
+   寄存器寻址方式， 计算目标寄存器中的值与指定偏移量的和，结果push到栈上：
 
    -   DW_OP_fbreg \$offset, 计算栈基址寄存器 (rbp)中的值 与 偏移量 $offset的和；
 
@@ -112,7 +110,7 @@ Each addressing operation represents a **postfix operation on a simple stack mac
 
 2. **栈操作**
 
-   以下操作都会push一个值到addressing stack上：
+   以下操作执行后都会push一个值到addressing stack上：
 
    - DW_OP_lit\${n} (0<=n<=31), 编码一个无符号字面量值\${n}；
    - DW_OP_addr, 编码一个与目标机器匹配的机器地址；
