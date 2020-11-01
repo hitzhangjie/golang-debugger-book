@@ -136,7 +136,7 @@ Breakpoints are created by generating **0xCC one-byte machine instruction** on X
     - The debugger identifies the first opcode of a statement
     - The debugger saves the opcode and replaces it with a breakpoint (0xCC)
     - The debugger digests the breakpoint and halts execution
-    - The debugger restores the original opcode
+    - The debugger restores the original opcode（before this, some action could be done like checking values of registers, variables, etc)
     - The debugger leaves the opcode or swaps in another breakpoint
 
     Let's take the following statement in C as an example:
