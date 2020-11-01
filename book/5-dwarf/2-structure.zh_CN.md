@@ -3,7 +3,7 @@
 DWARF使用调试信息条目Debugging Information Entry（DIE）来表示每一个变量、数据类型、函数等等。
 
 - 每个DIE都包含一个tag（如DW_TAG_variable，DW_TAG_pointer_type，DW_TAG_subprogram等）以及一系列的attributes。
-- 每个DIE还可以包含child DIEs，这个完整的树结构共同描述一个变量、数据类型等实体。
+- 每个DIE还可以包含child DIEs，这些DIEs构成的树结构共同描述一个变量、数据类型、函数等不同的程序构造。
 - DIE中的每个attribute可以引用另一个DIE，例如一个描述变量的DIE，它会包含一个属性DW_AT_type来指向一个描述变量数据类型的DIE。
 
 符号级调试器需要两张非常大的表，一个是行号表Line Number Table，一个是调用栈信息表Call Frame Information Table。
