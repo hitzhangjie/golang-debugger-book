@@ -67,7 +67,7 @@
     >            └── main
     >```
     >
-    >可以看到，macOS 10.15上，gcc将调试信息也存储到了独立的main.dSYM/目录。可以借助`splitdwarf`工具进行分析，可以参考这篇文章：https://blog.golang.org/debug-opt。
+    >可以看到，macOS 10.15上，gcc将调试信息也存储到了独立的main.dSYM/目录。可以借助`dwarfdump or splitdwarf`工具进行分析，可以参考这篇文章：https://blog.golang.org/debug-opt。
 
 调试符号信息有什么用呢？调试器利用调试符号能够将源码中的函数、变量映射为内存中的地址，也就意味着开发者可以直接对源码中函数、变量进行操作而不用关心具体的内存地址，这也是符号级调试器相比于指令级调试器的一大优势。
 
