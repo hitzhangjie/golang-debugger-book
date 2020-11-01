@@ -20,8 +20,6 @@ Figure 2a 定义类型 int 在32位处理器上是4字节有符号数值, 图 2b
 
 ![img](assets/clip_image004.png)
 
-DW_TAG_base_type, this tag allows a number of base types to be described, including binary integer, packed integer, address, character, fixed number and floating number. Floating number’s encoding format (such as IEEE-754) is determined by the hardware. 
-
 DW_TAG_base_type，此tag用来描述多种基本类型，包括二进制整数，压缩（packed）整数，地址，字符，定点数和浮点数。 浮点数的编码格式（例如IEEE-754）由硬件决定。
 
 #### 5.3.2.2 类型组合（type composition）
