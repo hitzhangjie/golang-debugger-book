@@ -46,7 +46,7 @@ Struct允许组合多个不同类型的成员。C语言中联合union也允许�
 
 描述class的DIE是描述该class members的DIEs的父级DIE，每个class都有一个名字和可能的属性（成员）。如果class实例的大小在编译时可以确定，描述class的DIE就会多一个属性DW_AT_byte_size。class及class member的描述与基本数据类型描述的方式并没有太大的不同，可能会增加一些其他的描述信息，如class member的访问修饰符。
 
-C\C++中也支持结构体位字段，即struct中多个成员可以共享同一个字节，只是不同的成员可以使用位数不同的相邻的比特。这个可以通过属性DW_AT_bit_offset和DW_AT_bit_size共同进行描述。DW_AT_bit_size描述了一共占用多少个字节，DW_AT_bit_size描述了实际占用多少bits。
+C\C++中也支持结构体位字段，即struct中多个成员可以共享同一个字节，只是不同的成员可以使用位数不同的相邻的比特。需要通过多个属性来描述，DW_AT_byte_size描述结构体实际占用多少个字节，属性DW_AT_bit_offset和DW_AT_bit_size描述位字段实际占用哪些比特，从第几个bit开始存储，一共占用多少个比特。
 
 #### 5.3.2.5 变量（Variables）
 
