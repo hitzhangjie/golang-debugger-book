@@ -161,28 +161,29 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 
 1. DW_CFA_def_cfa
   
-   DW_CFA_def_cfa指令采用两个无符号的LEB128操作数，它们代表寄存器号和（non-factored，非因数）偏移量。 所需的操作是定义当前的CFA规则以使用提供的寄存器和偏移量。
+   DW_CFA_def_cfa指令有两个操作数，均为无符号LEB128编码，分别代表寄存器号和non-factored偏移量。该指令定义的CFA规则使用提供的寄存器和偏移量。
    
 2. DW_CFA_def_cfa_sf
 
-   DW_CFA_def_cfa_sf指令采用两个操作数：代表寄存器号的无符号LEB128值和有符号LEB128因数偏移量。 该指令与DW_CFA_def_cfa相同，不同之处在于第二个操作数是有符号的因数（signed factored）。 结果偏移量为factored_offset * data_alignment_factor。
+   DW_CFA_def_cfa_sf指令采用两个操作数：代表寄存器号的无符号LEB128值和有符号LEB128 factored偏移量。 该指令与DW_CFA_def_cfa相同，不同之处在于第二个操作数是有符号的因数（signed factored）。 结果偏移量为factored_offset * data_alignment_factor。
 
 3. DW_CFA_def_cfa_register
 
-   DW_CFA_def_cfa_register指令采用表示寄存器编号的单个无符号LEB128操作数。 所需的操作是定义当前的CFA规则以使用提供的寄存器（但保留旧的偏移量）。 仅当当前CFA规则定义为使用寄存器和偏移量时，此操作才有效。
+   DW_CFA_def_cfa_register指令采用表示寄存器编号的单个无符号LEB128操作数。 该指令定义当前的CFA规则以使用提供的寄存器（但保留旧的偏移量）。 仅当当前CFA规则定义为使用寄存器和偏移量时，此操作才有效。
 
 4. DW_CFA_def_cfa_offset
 
-   DW_CFA_def_cfa_offset指令采用单个无符号LEB128操作数表示一个（未分解的）偏移量。 所需的操作是定义当前的CFA规则以使用提供的偏移量（但保留旧寄存器）。 仅当当前CFA规则定义为使用寄存器和偏移量时，此操作才有效。
+   DW_CFA_def_cfa_offset指令采用单个无符号LEB128操作数表示一个non-factored偏移量。 该指令定义当前的CFA规则使用提供的偏移量（但保留旧寄存器）。 仅当当前CFA规则定义为使用寄存器和偏移量时，此操作才有效。
 
 5. DW_CFA_def_cfa_offset_sf
 
-   DW_CFA_def_cfa_offset_sf指令采用带符号的LEB128操作数，表示分解后的偏移量。 该指令与DW_CFA_def_cfa_offset相同，除了该操作数是有符号的因数（signed factored）。 结果偏移量为factored_offset * data_alignment_factor。 仅当当前CFA规则定义为使用寄存器和偏移量时，此操作才有效。
+   DW_CFA_def_cfa_offset_sf指令采用带符号的LEB128操作数，表示factored偏移量。 该指令与DW_CFA_def_cfa_offset相同，除了该操作数是有符号的因数（signed factored）。 结果偏移量为factored_offset * data_alignment_factor。 仅当当前CFA规则定义为使用寄存器和偏移量时，此操作才有效。
 
 6. DW_CFA_def_cfa_expression
   
-   DW_CFA_def_cfa_expression指令采用单个操作数，该操作数编码为表示DWARF表达式的DW_FORM_exprloc值。 所需的操作是建立该表达式作为计算当前CFA的方式。
-有关可使用的DWARF表达式运算符的限制，请参见第DWARF v4 section 6.4.2。
+   DW_CFA_def_cfa_expression指令采用单个操作数，该操作数编码为表示DWARF表达式的DW_FORM_exprloc值。 该指令通过表达式作为计算当前CFA的方式。
+
+  > ps: 有关可使用的DWARF表达式运算符的限制，请参见第DWARF v4 section 6.4.2。
 
 ##### 5.4.3.4.3 CFI表寄存器规则指令（Register Rule Instructions）
 
