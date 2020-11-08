@@ -20,7 +20,7 @@ DWARF行号表，包含了可执行程序机器指令地址和源文件中位置
 - 是否是源码词法块的第一条指令
 - 其他
 
-其中一列包含指令地址，另几列是源码位置三元组（文件、行号、列号），另两列表示当前指令是否是源码语句、词法块的第一条指令。 设置源代码行的断点时，查询该表以定位到源代码行对应的第一条指令地址，并设置断点。 当程序在执行过程中出现故障时，查询当前指令地址对应的相关的源代码行，并进行分析。
+其中一列包含指令地址，另几列是源码位置三元组（文件、行号、列号），另两列表示当前指令是否是源码语句、词法块的第一条指令。 设置源代码行的断点时，查询该表以定位到源代码行对应的第一条指令地址，并设置断点。 当程序在执行过程中出现故障时，查询当前指令地址对应的相关的源代码行，以帮助分析故障。
 
 #### 5.4.1.3 数据压缩
 
@@ -44,7 +44,7 @@ DWARF将行号表编码为“**行号表程序的指令序列**”。 这里的�
 
 ##### 5.4.1.4.2 状态机寄存器
 
-行号（表）信息状态机，有如下几个寄存器：
+行号表信息状态机，有如下几个寄存器：
 
 - address，程序计数器（PC）的值，存的是编译器生成的机器指令地址；
 
@@ -66,8 +66,7 @@ DWARF将行号表编码为“**行号表程序的指令序列**”。 这里的�
 
 - isa，一个无符号整数，指示当前指令适用的指令集体系结构；
 
-- discriminator，一个无符号整数，标识当前指令所属的块。其值由DWARF生产者（编译器）任意分配
-  ，主要用于区分可能与同一源文件、行、列相关联的多个块（比如block嵌套）。 对于给定的源位置，仅存在一个块的情况下，其值应为零。
+- discriminator，一个无符号整数，标识当前指令所属的块。其值由DWARF生产者分配，主要用于区分可能与同一源文件、行、列相关联的多个块（比如block嵌套）。 对于给定的源位置，仅存在一个块的情况下，其值应为零。
 
 在行号程序（指令序列）一开始时，状态机寄存器的状态如下所示：
 
@@ -75,11 +74,11 @@ DWARF将行号表编码为“**行号表程序的指令序列**”。 这里的�
 
 ##### 5.4.1.4.3 行号程序指令
 
-行号（表）信息中，状态机指令主要可以分为三类：
+行号表信息中，状态机指令主要可以分为三类：
 
-- special opcodes，这类指令都是ubyte表示的操作码，没有操作数，行号（表）程序中的指令，绝大部分都是这类；
-- standard opcodes，这类指令有一个ubyte表示的操作码，后面跟着0个或者多个LEB128编码的操作数。其实操作码确定了，有多少个操作数、各个操作数的含义也就确定了，但是行号（表）程序头中仍然指明了各个操作码的操作数数量；
-- extended opcodes，这类指令是多字节操作码，（不错哦，联想其《组成原理》中的处理器变长操作码设计），第一个字节是0，后面的字节是LEB128编码的无符号整数，表示该指令包含的字节数（不含第一个字节的0），剩下的字节是指令数据本身（其中第一个字节是一个ubyte表示的扩展操作码）。
+- special opcodes，这类指令都是ubyte表示的操作码，没有操作数，行号表程序中的指令，绝大部分都是这类；
+- standard opcodes，这类指令有一个ubyte表示的操作码，后面跟着0个或者多个LEB128编码的操作数。其实操作码确定了，有多少个操作数、各个操作数的含义也就确定了，但是行号表程序头中仍然指明了各个操作码的操作数数量；
+- extended opcodes，这类指令是多字节操作码，（不错哦，联想起《组成原理》中的处理器变长操作码设计），第一个字节是0，后面的字节是LEB128编码的无符号整数，表示该指令包含的字节数（不含第一个字节的0），剩下的字节是指令数据本身（其中第一个字节是一个ubyte表示的扩展操作码）。
 
 ##### 5.4.1.4.4 行号程序头
 
@@ -91,23 +90,19 @@ DWARF将行号表编码为“**行号表程序的指令序列**”。 这里的�
 
 - version（uhalf），版本号，特定于行号信息的版本号，与DWARF版本号没有关系；
 
-- header_length，该字段之后到行号程序起始处第一字节的字节偏移量。在32位DWARF格式中，这是一个4字节无符号整数，64位DWARF格式中，这是一个8字节无符号整数；
+- header_length，该字段之后到行号程序第一字节的偏移量。在32位DWARF格式中，这是一个4字节无符号整数，64位DWARF格式中，这是一个8字节无符号整数；
 
 - minimum_instruction_length（ubyte），目标机器指令占用的最小字节数量，更改address、op_index寄存器的行号程序操作码，在计算中会使用该字段和maximum_operations_per_instruction；
 
 - maximum_operations_per_instruction（ubyte），一条指令中可以编码的最大单个操作数，更改address、op_index寄存器的行号程序操作码，在计算中会使用该字段和minimum_instruction_length；
 
-- default_is_stmt（ubyte），用语设置状态机寄存器is_stmt的初始值；
-
-  A simple approach to building line number information when machine instructions are emitted in an order corresponding to the source program is to set default_is_stmt to “true” and to not change the value of the is_stmt register within the line number program. One matrix entry is produced for each line that has code generated for it. The effect is that every entry in the matrix recommends the beginning of each represented line as a breakpoint location. This is the traditional practice for unoptimized code.
-
-  A more sophisticated approach might involve multiple entries in the matrix for a line number; in this case, at least one entry (often but not necessarily only one) specifies a recommended breakpoint location for the line number. DW_LNS_negate_stmt opcodes in the line number program control which matrix entries constitute such a recommendation and default_is_stmt might be either “true” or “false”. This approach might be used as part of support for debugging optimized code.
+- default_is_stmt（ubyte），用于设置状态机寄存器is_stmt的初始值；
 
   源码语句对应的多条机器指令，至少有一条default_is_stmt=true，以充当推荐的断点位置。
 
-- line_base（sbyte），该参数映像special opcodes的含义，见下文；
+- line_base（sbyte），该参数影响special opcodes的含义，见下文；
 
-- line_range （sbyte），该参数映像special opcodes的含义，见下文；
+- line_range （sbyte），该参数影响special opcodes的含义，见下文；
 
 - opcode_base（ubyte），第一个特殊操作码的操作码值，正常情况下该值比标准操作码值大1。
 
@@ -119,7 +114,7 @@ DWARF将行号表编码为“**行号表程序的指令序列**”。 这里的�
 
 - file_names（sequence of file entries），该编译单元对应的行号表（行号信息）可能不止由当前源文件以及包含文件共同构建出来的，该字段包含了相关文件的文件名；
 
-##### 5.4.1.4.5 行(号)表程序
+##### 5.4.1.4.5 行号表程序
 
 如前所述，行号程序的目标是建立一个表示一个编译单元的矩阵，该编译单元可能已生成目标机器指令的多个序列。 在一个序列中，地址（操作指针）可能只会增加（在流水线调度或其他优化的情况下，行号可能会减少）。
 
@@ -133,11 +128,11 @@ DWARF将行号表编码为“**行号表程序的指令序列**”。 这里的�
  4. 将basic_block寄存器设置为“ false”。
  5. 将prologue_end寄存器设置为“ false”。
  6. 将epilogue_begin寄存器设置为“ false”。
- 7. 将鉴别器discriminator寄存器设置为0。
+ 7. 将discriminator寄存器设置为0。
 
 所有特殊操作码都做同样的七件事，不同之处仅在于它们添加到寄存器line，address和op_index的值不同。
 
-根据需要添加到寄存器line、address和op_index的数量选择特殊操作码值。特殊操作码的最大行增量，是行号程序header中的line_base字段的值加上line_range字段的值减去1（line_base+line_range-1）。 如果所需的行增量大于最大行增量，则必须使用标准操作码代替特殊操作码。 operation advance，表示向前移动操作指针时要跳过的操作数。
+根据需要添加到寄存器line、address和op_index的数量选择特殊操作码值。特殊操作码的最大行增量，是行号程序header中的line_base字段的值加上line_range字段的值减去1（line_base+line_range-1）。 如果所需的行增量大于最大行增量，则必须使用标准操作码代替特殊操作码。operation advance，表示向前移动操作指针时要跳过的操作数。
 
 **“特殊操作码”计算公式如下**：
 
