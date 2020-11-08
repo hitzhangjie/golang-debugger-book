@@ -173,9 +173,9 @@ line increment = line_base + (adjusted opcode % line_range)
 
 <img src="assets/image-20191225013035603.png" alt="image-20191225013035603" style="zoom:46%;" />
 
-现在，让我们逐步构建“行号表程序”。 实际上，我们需要先将源代码编译为汇编代码，然后计算每个连续语句的指令地址和行号的增量，根据指令地址增量operation advance以及行号增量line increment，来计算操作码，这些操作码构成一个sequence，术语行号程序的一个部分。
+现在，让我们逐步构建“行号表程序”。 实际上，我们需要先将源代码编译为汇编代码，然后计算每个连续语句的指令地址和行号的增量，根据指令地址增量operation advance以及行号增量line increment，来计算操作码，这些操作码构成一个sequence，属于行号程序的一个部分。
 
-例如, `2: main()` and `4: printf`, 这两条源语句各自第一条指令的地址的增量为 `0x23c-0x239=3`, 两条源语句的行号增量为 `4-2=2`. 然后我们可以通过函数 `Special(lineIncr,operationAdvance)` 来计算对应的特殊操作码，即 `Special(2, 3)`。
+例如, `2: main()` and `4: printf`, 这两条语句各自第一条指令的地址的增量为 `0x23c-0x239=3`, 两条源语句的行号增量为 `4-2=2`. 然后我们可以通过函数 `Special(lineIncr,operationAdvance)` 来计算对应的特殊操作码，即 `Special(2, 3)`。
 
 <img src="assets/image-20191225014107123.png" alt="image-20191225014107123" style="zoom:46%;" />
 
