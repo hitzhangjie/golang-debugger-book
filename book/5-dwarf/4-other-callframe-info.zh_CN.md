@@ -292,9 +292,9 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 
 - 指令都是4字节定长指令，并且都是按word对齐的；
 
-- 指令操作数，一般是这种形式的：<destination.reg>, <source.reg>, <constant>
+- 指令操作数，一般这样组织：`<destination.reg>, <source.reg>, <constant>`
 
-- load、store指令的内存地址，通过source.reg寄存器中内容和常量const相加进行计算；
+- load、store指令的内存地址，通过源操作数寄存器source.reg中的值和常量const相加进行计算；
 
 - 有8个4字节寄存器:
   R0：总是0；
@@ -306,11 +306,11 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 
 - 栈增长方向是从高地址向低地址方向增长；
 
-- 架构ABI委员会指定栈指针（R7）与CFA相同（就是说当前栈帧的CFA就是调用方栈帧的栈指针）；
+- 架构ABI委员会指定栈指针`(R7)`与CFA相同；
 
 ##### 5.4.3.7.2 foo对应机器指令
 
-下面是函数foo对应的两个机器指令片段，分别是函数序言（prologue）以及函数后记（epilogue）部分，里面除了使用stack pointer以外，还使用了frame pointer。第一列是指令地址，<fs>表示stack frame（栈帧）的大小（按字节算），这个示例中是12字节。
+下面是函数foo对应的两个机器指令片段，分别是函数序言（prologue）以及函数后记（epilogue）部分，里面除了使用stack pointer以外，还使用了frame pointer。第一列是指令地址，`<fs>`表示stack frame（栈帧）的大小（按字节算），这个示例中是12字节。
 
 <img src="assets/image-20191229171656174.png" alt="image-20191229171656174" style="zoom:16%;" />
 
@@ -339,6 +339,8 @@ CIE中规定R8是返回地址寄存器，该机型Motorola 88000规定函数调�
 
 - DW_CFA_def_cfa(7,0) 规定CFA=[R7]+0，表示foo的标准帧地址CFA就是调用方的栈指针值，即R7的值（此时`R7=R7-<fs>`，此时还没有执行，还没有为foo分配栈帧），得到了`foo [R7]+0`；
 
+  > ps：一般是函数调用指令，如call，将返回地址（PC值）push到调用栈作为后续函数执行完成后的返回地址。
+
 - DW_CFA_same_value(0) 规定R0寄存器总是0，使用same unwind规则，也可以理解，得到了`foo [R7]+0 s`；
 
 - DW_CFA_undefined(1)/(2)/(3) 规定R1/R2/R3寄存器使用undefined unwind规则，R2、R3因为是无需保存的临时寄存器，所以使用undefined规则无可厚非，而R1实际上是保存返回地址的，这个程序中实际上没有将R1用作其他木目的，所以也是undefined。这样就得到了`foo [R7]+0 s u u u`；
@@ -346,11 +348,12 @@ CIE中规定R8是返回地址寄存器，该机型Motorola 88000规定函数调�
   >如果prologue后面代码有用到R1的话，epilogue一定会有其他unwind规则来恢复，但是没有，说明根本就没有使用到R1；
 
 - DW_CFA_same_value(4)/(5)/(6) 规定R4/R5/R6寄存器使用same unwind规则，R4、R5、R6都是需要保存状态的寄存器，所以这里使用same unwind规则。这样就得到了`foo [R7]+0 s u u u s s s`；
+
 - R7本来是保存栈指针值，它也比较特殊，架构ABI委员会规定它和CFA相同，这里用architecutural unwind规则，得到了`foo [R7]+0 s u u u s s s a`；
 
 - DW_CFA_register(8,1) 规定寄存器R8存储在寄存器R1中，因为R8表示返回地址，而R1中记录着返回地址，所以使用register(8,1)。这样就得到了`foo [R7]+0 s u u u s s s a r1`;
 
-- 接下来是padding指令，与填充CIE结构体大小使其满足CIE.length有关，与构建CFI信息表无关，忽略。
+- 接下来是padding指令，填充CIE结构体大小使其满足CIE.length要求，这与构建CFI信息表无关，忽略。
 
 当上述几条指令执行后，CFI信息表中的第一行就构建完成了：`foo [R7]+0 s u u u s s s a r1`。
 
@@ -384,7 +387,7 @@ CFI信息表第一行：`foo [R7]+0 s u u u s s s a r1`，它表示PC=foo处地�
 
   这样CFI表第二行就是 `foo+4 [R7]+fs s u u u s s s a r1`，其中fs=12。
 
-  > 因此CFI信息表中各行 `addr : unwind rule set`表示的是PC=addr（该地址处指令没执行）时的unwind rule set。
+  > 因此CFI信息表中各行 `addr : unwind rule set`表示的是PC=addr（该地址处指令待执行）时的unwind rule set。
 
 - `foo+4 store R1, R7, (<fs>-4)`
 
@@ -407,4 +410,10 @@ CFI信息表第一行：`foo [R7]+0 s u u u s s s a r1`，它表示PC=foo处地�
 - ...
 - 其他汇编指令对应的FDE中的操作以及解释，就不一一列举了，大体上就是按照上面这个方式来。
 
-到这里，我们应该对`源码->机器指令->CIE+FDE中指令序列的编写->指令对CFI表构建的作用`都了解清楚了，而关于`CFI表的运用`，如给定一个指令地址L1确定其对应的CFA，或者返回地址，这些更简单，前面也都讲过了。至此，关于Call Frame Information的介绍可以宣布告一段落了。
+到这里，我们应该对以下过程“**源码->机器指令->CIE+FDE中指令序列的编写->指令对CFI表构建的作用**”都了解清楚了。而关于`CFI表的运用`，如给定一个指令地址L1，进一步确定其对应的CFA，或者返回地址，这些更简单，前面也都讲过了。
+
+> 指定指令地址L1，确定所属的FDE，只需遍历所有FDE找到地址范围包含L1的即可；
+>
+> 找到L1对应的FDE之后，根据CIE及FDE构建对应的CFI信息表，通过CFI表中的unwind rules进行运算，即可计算得到对应的CFA，从而获得返回地址。
+
+至此，关于Call Frame Information的介绍可以宣布告一段落了。
