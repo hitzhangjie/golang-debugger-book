@@ -258,7 +258,7 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 如果定位到了这样一个FDE，则继续执行如下操作，确定unwind rule set：
 
 1. 通过读取FDE关联的CIE的initial_instructions字段来初始化寄存器集合；
-2. 读取并处理FDE的指令序列，直到DW_CFA_advance_loc，DW_CFA_set_loc，或遇到指令流的末尾；
+2. 读取并处理FDE的指令序列，直到遇到地址大于L1的指令DW_CFA_advance_loc，DW_CFA_set_loc，或遇到指令流的末尾；
 3. 如果遇到DW_CFA_advance_loc或DW_CFA_set_loc指令，则计算一个新的位置值（L2）。 如果L1 >= L2，则处理该指令并返回步骤2继续执行；
 4. 指令流的末尾可被视为DW_CFA_set_loc（initial_location+address_range）指令。请注意，如果执行到指令流的末尾后，如果L2<L1，则FDE格式不正确；
 
