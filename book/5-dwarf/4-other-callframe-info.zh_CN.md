@@ -185,29 +185,29 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 
   > ps: 有关可使用的DWARF表达式运算符的限制，请参见第DWARF v4 section 6.4.2。
 
-##### 5.4.3.4.3 CFI表寄存器规则指令（Register Rule Instructions）
+##### 5.4.3.4.3 CFI表寄存器规则指令（Register Rule Instructions） 
 
 1. DW_CFA_undefined
-   DW_CFA_undefined指令采用单个无符号LEB128操作数来表示寄存器号。 所需的操作是将指定寄存器的unwind规则设置为“undefined”。
+   DW_CFA_undefined指令采用单个无符号LEB128操作数来表示寄存器号。该指令指定寄存器unwind规则设置为“undefined”。
    
 2. DW_CFA_same_value
-   DW_CFA_same_value指令采用单个无符号的LEB128操作数来表示寄存器号。 所需的操作是将指定寄存器的unwind规则设置为“same”。
+   DW_CFA_same_value指令采用单个无符号的LEB128操作数来表示寄存器号。 该指令将指定寄存器unwind规则设置为“same”。
    
 3. DW_CFA_offset
 
-   DW_CFA_offset指令采用两个操作数：一个寄存器号（使用操作码编码）和一个无符号的LEB128常量（表示分解后的偏移量）。 所需的操作是将由寄存器号指示的寄存器的unwind规则更改为offset(N)规则，其中N的值是分解后偏移量 * data_alignment_factor。
+   DW_CFA_offset指令采用两个操作数：一个寄存器号（使用操作码编码）和一个无符号的LEB128常量（factored偏移量）。 该指令将指定寄存器号指示的寄存器unwind规则更改为offset(N)规则，其中N的值是分解后偏移量 * data_alignment_factor。
 
 4. DW_CFA_offset_extended
 
-   DW_CFA_offset_extended指令采用两个无符号的LEB128操作数，它们表示寄存器号和分解的偏移量。 该指令与DW_CFA_offset相同，不同之处在于寄存器操作数的编码和大小。
+   DW_CFA_offset_extended指令采用两个无符号的LEB128操作数，它们表示寄存器号和factored偏移量。 该指令与DW_CFA_offset相同，不同之处在于寄存器操作数的编码和大小。
 
 5. DW_CFA_offset_extended_sf
 
-   DW_CFA_offset_extended_sf指令采用两个操作数：代表寄存器号的无符号LEB128值和有符号LEB128分解后偏移量。 该指令与DW_CFA_offset_extended相同，不同之处在于第二个操作数是有符号factored偏移量。 结果偏移量为factored_offset * data_alignment_factor。
+   DW_CFA_offset_extended_sf指令采用两个操作数：代表寄存器号的无符号LEB128值和有符号LEB128编码的factored偏移量。 该指令与DW_CFA_offset_extended相同，不同之处在于第二个操作数是有符号factored偏移量。 结果偏移量为factored_offset * data_alignment_factor。
 
 6. DW_CFA_val_offset
 
-   DW_CFA_val_offset指令采用两个无符号的LEB128操作数，它们代表寄存器号和分解的偏移量。 所需的操作是将寄存器编号指示的寄存器规则更改为val_offset(N)规则，其中N的值是factored_offset * data_alignment_factor。
+   DW_CFA_val_offset指令采用两个无符号的LEB128操作数，它们代表寄存器号和factored偏移量。 所需的操作是将寄存器编号指示的寄存器规则更改为val_offset(N)规则，其中N的值是factored_offset * data_alignment_factor。
 
 7. DW_CFA_val_offset_sf
 
@@ -215,21 +215,21 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 
 8. DW_CFA_register
 
-   DW_CFA_register指令采用两个无符号的LEB128操作数表示寄存器编号。 所需的操作是将第一个寄存器的规则设置为register(R)，其中R是第二个寄存器。
+   DW_CFA_register指令采用两个无符号的LEB128操作数表示寄存器编号。 该指令将第一个寄存器的unwind规则设置为register(R)，其中R是第二个寄存器。
 
 9. DW_CFA_expression
 
-   DW_CFA_expression指令采用两个操作数：代表寄存器号的无符号LEB128值和代表DWARF表达式的DW_FORM_block值。 所需的操作是将由寄存器号指示的寄存器的规则更改为expression(E)规则，其中E是DWARF表达式。 即，DWARF表达式计算地址。 在执行DWARF表达式之前，将CFA的值压入DWARF表达式运算堆栈。
-   有关可使用的DWARF表达式运算符的限制，请参见DWARF v4 section 6.4.2。
+   DW_CFA_expression指令采用两个操作数：代表寄存器号的无符号LEB128值和代表DWARF表达式的DW_FORM_block值。 该指令将由寄存器号指示的寄存器的unwind规则更改为expression(E)规则，其中E是DWARF表达式。
+
+   > 执行DWARF表达式之前，要先将当前CFA的值入到运算用的栈中，最后DWARF表达式执行完成后栈顶就是结果。有关可使用的DWARF表达式运算符的限制，请参见DWARF v4 section 6.4.2。
 
 10. DW_CFA_val_expression
 
-   DW_CFA_val_expression指令采用两个操作数：代表寄存器号的无符号LEB128值和代表DWARF表达式的DW_FORM_block值。 所需的操作是将由寄存器号指示的寄存器的规则更改为val_expression（E）规则，其中E是DWARF表达式。 也就是说，DWARF表达式计算给定寄存器的值。 在执行DWARF表达式之前，将CFA的值压入DWARF表达式运算堆栈。
-   有关可使用的DWARF表达式运算符的限制，请参见DWARF v4 section 6.4.2。
+    DW_CFA_val_expression指令采用两个操作数：代表寄存器号的无符号LEB128值和代表DWARF表达式的DW_FORM_block值。 该指令将LEB128值指代的寄存器unwind规则修改为为val_expression(E)规则，其中E是DWARF表达式。
 
 11. DW_CFA_restore
 
-    DW_CFA_restore指令采用单个操作数（用操作码编码），该操作数表示寄存器号。 所需的操作是将指定寄存器的unwind规则更改为CIE中initial_instructions为其分配的规则。
+    DW_CFA_restore指令采用单个操作数（用操作码编码），该操作数表示寄存器号。该指令将指定寄存器unwind规则更改为CIE中initial_instructions为其分配的规则。
 
 12. DW_CFA_restore_extended
     DW_CFA_restore_extended指令采用单个无符号的LEB128操作数来表示寄存器号。 该指令与DW_CFA_restore相同，不同之处在于寄存器操作数的编码和大小。
