@@ -19,3 +19,12 @@ The ELF sections and their contents are:
 11. .debug_str, string table used by .debug_info
 12. .debug_types, type descriptions
 
+When the new version of the compiler and linker generates DWARF debugging information, they may want to compress the size of the binary file, and may turn on data compression. For example, the new version of golang's linker supports compression of DWARF by default.
+
+In order to be better compatible with debuggers that do not support decompression:
+
+- The compressed DWARF data will be written to sections prefixed with `.zdebug_`, such as `.zdebug_info`, rather than sections prefixed with `.debug_`, to avoid DWARF consumers parsing DWARF data abnormally;
+- Generally, options are provided to turn off compression. For example, the golang linker option `-ldflags=-dwarfcompress=false` can be specified  to prevent the debugging information from being compressed;
+
+In order to understand the DWARF debugging information more conveniently, you need to use certain tools to assist in viewing and analyzing. `dwarfdump` and `dwex` are both good tools.
+
