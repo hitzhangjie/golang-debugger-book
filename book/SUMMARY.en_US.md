@@ -26,7 +26,7 @@
     * [5.5 Summary](5-dwarf/5-summary.md)
 * [6 Develop Instruction Level Debugger](6-develop-inst-debugger/README.md)
     * [6.1 Start Tracee](6-develop-inst-debugger/1-process.md)
-    * [6.2 Attach Tracee](6-develop-inst-debugger/2-ptrace.md)
+    * [6.2 Attach Tracee](6-develop-inst-debugger/2-process_attach.md)
     * [6.3 Breakpoints](6-develop-inst-debugger/3-breakpoints.md)
         * [6.3.1 step](xx)
         * [6.3.2 continue](xx)

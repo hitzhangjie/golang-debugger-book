@@ -26,7 +26,7 @@
   * [5.5 总结](5-dwarf/5-summary.zh_CN.md)
 * [6 开发go指令级调试器](6-develop-inst-debugger/README.zh_CN.md)
   * [6.1 进程启动](6-develop-inst-debugger/1-process.zh_CN.md)
-  * [6.2 进程attach](6-develop-inst-debugger/2-ptrace.zh_CN.md)
+  * [6.2 进程attach](6-develop-inst-debugger/2-process_attach.zh_CN.md)
   * [6.3 断点](6-develop-inst-debugger/3-breakpoints.zh_CN.md)
      * [6.3.1 step](xx)
      * [6.3.2 continue](xx)
