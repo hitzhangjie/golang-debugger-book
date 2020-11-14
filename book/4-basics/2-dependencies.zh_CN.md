@@ -21,7 +21,7 @@
     >这里给个实例，__debug_bin是一个由`dlv debug`生成的可执行程序，包含了调试符号信息，`readelf`可以用来读取ELF文件中的section header，下面我们看一下ELF文件中包含的调试信息相关的 section。
     >
     >go build可以通过指定连接器选项-ldflags=-compressdwarf=false来禁用压缩，提前了解这点，方便以后通过dwarfdump等工具分析理解dwarf调试信息如何组织非常有用。
->
+    >
     >```bash
     >[root@centos ~]# readelf -a __debug_bin | grep debug
     >[12] .zdebug_abbrev    PROGBITS         0000000000599000  0017b000
@@ -157,11 +157,11 @@ X86平台上创建软件断点可以通过指令`int 3`来生成**0xCC**这个�
     - 调试进程tracer将tracee的PC-1位置处的1字节数据由0xCC替换为原来的操作码数据（移除断点之前，可以执行些类似检查寄存器、变量等的操作）
     - 调试器通知内核恢复tracee运行，并继续等待到达下一个断点
 
-    我们通过下面的C语言语句进行下简单的说明：
+    我们通过下面的C语言语句进行下简单的说明：  
 
-    ```c
-total = total +value;
-    ```
+    >```c
+    >total = total +value;
+    >```
 
     假定上述语句对应的汇编指令为：
 
