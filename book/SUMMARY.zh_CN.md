@@ -25,6 +25,7 @@
     * [5.4.6 ELF Sections](5-dwarf/4-other-elf-sections.zh_CN.md)
   * [5.5 总结](5-dwarf/5-summary.zh_CN.md)
 * [6 开发go指令级调试器](6-develop-inst-debugger/README.zh_CN.md)
+  * [6.0 调试器概貌](6-develop-inst-debugger/0-debugger_skeleton.zh_CN.md)
   * [6.1 进程启动](6-develop-inst-debugger/1-process_start.zh_CN.md)
   * [6.2 进程attach](6-develop-inst-debugger/2-process_attach.zh_CN.md)
   * [6.3 断点](6-develop-inst-debugger/3-breakpoints.zh_CN.md)
