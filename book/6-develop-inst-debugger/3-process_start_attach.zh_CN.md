@@ -6,7 +6,7 @@
 
 前面我们介绍了如何通过`exec.Command(prog, args...)`启动一个进程，也介绍了如何通过ptrace系统调用attach到一个运行中的进程。
 
-一个运行中的进程被attached时，其正在运行的指令可能已经越过了我们的位置。比如，我们想通过调试追踪下golang程序在执行main.main之前的初始化步骤，但是通过先启动程序再attach的方式无疑就太滞后了，main.main可能早已经开始执行，甚至程序都已经执行结束了。
+一个运行中的进程被attached时，其正在运行的指令可能已经越过了我们关心的位置。比如，我们想通过调试追踪下golang程序在执行main.main之前的初始化步骤，但是通过先启动程序再attach的方式无疑就太滞后了，main.main可能早已经开始执行，甚至程序都已经执行结束了。
 
 考虑到这，不禁要思索在“启动进程”小节的实现方式有没有问题。我们如何让进程在启动之后立即停下来等待被调试器调试呢？如果做不到这点，就很难做到理想的调试。
 
@@ -104,20 +104,20 @@ c语言库函数中，常见的exec族函数包括execl、execlp、execle、exec
 系统调用execve的代码执行路径大致包括：
 
 ```c
-sys_execve
-do_execve
-do_execveat_common
+-> sys_execve
+-> do_execve
+-> do_execveat_common
 ```
 
-函数do_execveat_common代码执行路径的主体部分大致包括，其作用是将当前进程的代码段、数据段、初始化未初始化数据通通用新加载的程序替换掉，然后执行新程序。
+函数do_execveat_common的代码执行路径大致包括下面列出这些，其作用是将当前进程的代码段、数据段、初始化未初始化数据通通用新加载的程序替换掉，然后执行新程序。
 
 ```c
-retval = bprm_mm_init(bprm);
-retval = prepare_binprm(bprm);
-retval = copy_strings_kernel(1, &bprm->filename, bprm);
-retval = copy_strings(bprm->envc, envp, bprm);
-retval = exec_binprm(bprm);
-retval = copy_strings(bprm->argc, argv, bprm);
+-> retval = bprm_mm_init(bprm);
+-> retval = prepare_binprm(bprm);
+-> retval = copy_strings_kernel(1, &bprm->filename, bprm);
+-> retval = copy_strings(bprm->envc, envp, bprm);
+-> retval = exec_binprm(bprm);
+-> retval = copy_strings(bprm->argc, argv, bprm);
 ```
 
 这里牵扯到的代码量比较多，我们重点关注一下上述过程中`exec_binprm(bprm)`，这是执行程序的部分逻辑。
@@ -178,11 +178,17 @@ static inline void ptrace_event(int event, unsigned long message)
 
 在Linux下面，SIGTRAP信号将使得进程暂停执行，并向父进程通知自身的状态变化，父进程通过wait系统调用来获取子进程状态的变化信息。
 
-父进程也可通过`ptrace(PTRACE_COND, pid, ...)`操作可以恢复子进程执行，使其执行execve加载的新程序。
+父进程也可通过`ptrace(PTRACE_COND, pid, ...)`操作来恢复子进程执行，使其执行execve加载的新程序。
 
-> ps: 其实子进程内部先执行ptrace(PTRACE_TRACEME, ...)，再执行execve，其实是已经加载完新程序完成初始化了，但是并没有被内核放置在就绪队列中，内核只是给这个子进程发送了一个SIGTRAP信号，然后尝试唤醒该子进程，唤醒成功也就是放入就绪队列，等子进程被调度器选中并执行时，它将首先对pending的信号进行处理。
+> ps: 上述示例中，子进程先执行ptrace(PTRACE_TRACEME, ...)通知内核该进程希望在后续execve执行时停下来等待tracer attach。这个操作完成后再执行execve，加载完新程序完成进程执行所需要的代码段、数据段等等的初始化工作。
 >
-> 对于SIGTRAP信号而言，也就是它要停下来并向父进程通知自己的状态变化。此时父进程通过wait就可以获取到子进程状态变化的情况。
+> 直到此时，子进程已经准备就绪，进程状态也被设置为了“Interruptible Wait”，即可以被信号唤醒，意味着如果有信号到达，则允许进程对信号进行处理。当内核发现这个子进程ptrace标记位为PT_PTRACED时，给这个子进程发送了一个SIGTRAP信号，到达的信号将触发信号处理逻辑，只不过SIGTRAP比较特殊是内核代为处理。
+>
+> 一个进程在准备就绪之前，是一直处于“UnInterruptible Wait”状态的，即不可参与调度，也不能被外部信号唤醒，只能在内核认为OK的时候将其调整为“Interruptible Wait”或者“Runnable”之后，才可以响应外部信号或者参与任务调度。
+>
+> 任务切换的检查点，其实是在系统调用结束的时候，此时内核调度器会检查是否需要调度另外一个任务。假如调度器选中了一个任务（这里就先理解成进程吧），它将首先对其上pending的信号进行处理，SIGTRAP是内核必须要处理的事件，对应的信号处理函数也是由内核来提供。
+>
+> SIGTRAP信号处理具体做什么呢？它会暂停目标进程的执行，并向父进程通知自己的状态变化。此时父进程通过wait就可以获取到子进程状态变化的情况。
 
 ### 代码实现
 
