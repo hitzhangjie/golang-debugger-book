@@ -148,7 +148,7 @@ static int exec_binprm(struct linux_binprm *bprm)
 }
 ```
 
-这里`exec_binprm(bprm)`内部调用了`ptrace_event(event, message)`，后者将对进程ptrace状态进行检查，一旦发现进程ptrace标记位设置了PT_PTRACED，内核将给进程发送一个SIGTRAP信号，由此转入SIGTRAP的信号处理逻辑。
+这里`exec_binprm(bprm)`内部调用了`ptrace_event(PTRACE_EVENT_EXEC, message)`，后者将对进程ptrace状态进行检查，一旦发现进程ptrace标记位设置了PT_PTRACED，内核将给进程发送一个SIGTRAP信号，由此转入SIGTRAP的信号处理逻辑。
 
 **file: include/linux/ptrace.h**
 
@@ -180,15 +180,19 @@ static inline void ptrace_event(int event, unsigned long message)
 
 父进程也可通过`ptrace(PTRACE_COND, pid, ...)`操作来恢复子进程执行，使其执行execve加载的新程序。
 
-> ps: 上述示例中，子进程先执行ptrace(PTRACE_TRACEME, ...)通知内核该进程希望在后续execve执行时停下来等待tracer attach。这个操作完成后再执行execve，加载完新程序完成进程执行所需要的代码段、数据段等等的初始化工作。
->
-> 直到此时，子进程已经准备就绪，进程状态也被设置为了“Interruptible Wait”，即可以被信号唤醒，意味着如果有信号到达，则允许进程对信号进行处理。当内核发现这个子进程ptrace标记位为PT_PTRACED时，给这个子进程发送了一个SIGTRAP信号，到达的信号将触发信号处理逻辑，只不过SIGTRAP比较特殊是内核代为处理。
->
-> 一个进程在准备就绪之前，是一直处于“UnInterruptible Wait”状态的，即不可参与调度，也不能被外部信号唤醒，只能在内核认为OK的时候将其调整为“Interruptible Wait”或者“Runnable”之后，才可以响应外部信号或者参与任务调度。
->
-> 任务切换的检查点，其实是在系统调用结束的时候，此时内核调度器会检查是否需要调度另外一个任务。假如调度器选中了一个任务（这里就先理解成进程吧），它将首先对其上pending的信号进行处理，SIGTRAP是内核必须要处理的事件，对应的信号处理函数也是由内核来提供。
->
-> SIGTRAP信号处理具体做什么呢？它会暂停目标进程的执行，并向父进程通知自己的状态变化。此时父进程通过wait就可以获取到子进程状态变化的情况。
+#### Put it Together
+
+现在，我们结合上述示例，再来回顾一下整个过程、理顺一下。
+
+首先，父进程调用fork、子进程创建成功之后是处于就绪态的，是可以运行的。
+
+然后，子进程先执行`ptrace(PTRACE_TRACEME, ...)`告诉内核“**该进程希望在后续execve执行新程序时停下来等待tracer attach**”。子进程再执行execve加载新程序，重新初始化进程执行所需要的代码段、数据段等等。
+
+重新初始化完成之前内核会将进程状态调整为“UnInterruptible Wait”阻止其被调度、响应外部信号，完成之后，再将其调整为“Interruptible Wait”，即可以被信号唤醒，意味着如果有信号到达，则允许进程对信号进行处理。
+
+接下来，如果没有该标记位，子进程状态将被更新为可运行等待下次调度。当内核发现这个子进程ptrace标记位为PT_PTRACED时，则会执行这样的逻辑，内核给这个子进程发送了一个SIGTRAP信号，该信号将被追加到进程的pending信号队列中，并尝试唤醒该进程，当内核任务调度器调度到该进程时，发现其有pending信号到达，将执行SIGTRAP的信号处理逻辑，只不过SIGTRAP比较特殊是内核代为处理。
+
+SIGTRAP信号处理具体做什么呢？它会暂停目标进程的执行，并向父进程通知自己的状态变化。此时父进程通过系统调用wait就可以获取到子进程状态变化的情况。
 
 ### 代码实现
 
