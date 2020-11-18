@@ -15,9 +15,8 @@
 -   允许在源码中添加断点breakpoint；
 -   允许再源码中添加条件断点；
 -   允许next逐语句执行；
--   允许step逐指令执行；
--   允许stepin进入function；
--   允许stepout从function退出；
+-   允许step逐指令执行（也能允许进入函数）；
+-   允许finish从function退出；
 -   允许print、display显示变量信息、寄存器信息；
 -   允许set更新变量、寄存器信息；
 -   允许ptype打印变量类型；
