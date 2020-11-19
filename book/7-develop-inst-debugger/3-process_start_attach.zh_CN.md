@@ -198,11 +198,104 @@ SIGTRAP信号处理具体做什么呢？它会暂停目标进程的执行，并�
 
 go标准库里面只有一个ForkExec函数可用，并不能直接写fork+exec的方式，但是呢，go标准库提供了另一种用起来更加友好的思路。
 
-我们首先通过`cmd := exec.Command(prog, args...)`获取一个cmd对象，接着通过cmd对象获取进程Process结构体，然后修改其内部状态为ptrace即可。这样之后再启动子进程。
+我们首先通过`cmd := exec.Command(prog, args...)`获取一个cmd对象，接着通过cmd对象获取进程Process结构体，然后修改其内部状态为ptrace即可。这样之后再启动子进程`cmd.Start()`，然后调用`Wait`函数来获取子进程的状态，等子进程停下来，然后父进程可以先做一些调试工作。
 
-比如通过`cmd.Run()`，然后一定要调用`Wait`函数来获取子进程的执行状态变化，就是停下来的事件，父进程收到之后，可以先做一些调试工作。
+这里的示例代码，我们在以前示例代码基础上修改，修改后代码如下：
 
-ps：这里的示例代码，我们将在golang-debugger-lessons中提供。
+```go
+package cmd
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+
+	"godbg/cmd/debug"
+
+	"github.com/spf13/cobra"
+)
+
+var pid int
+
+// execCmd represents the exec command
+var execCmd = &cobra.Command{
+	Use:   "exec <prog>",
+	Short: "调试可执行程序",
+	Long:  `调试可执行程序`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Printf("exec %s\n", strings.Join(args, ""))
+
+		if len(args) != 1 {
+			return errors.New("参数错误")
+		}
+
+		// start process but don't wait it finished
+		progCmd := exec.Command(args[0])
+		progCmd.Stdin = os.Stdin
+		progCmd.Stdout = os.Stdout
+		progCmd.Stderr = os.Stderr
+		progCmd.SysProcAttr = &syscall.SysProcAttr{
+			Ptrace: true,
+		}
+
+		err := progCmd.Start()
+		if err != nil {
+			return err
+		}
+
+		// wait target process stopped
+		pid = progCmd.Process.Pid
+
+		var (
+			status syscall.WaitStatus
+			rusage syscall.Rusage
+		)
+		_, err = syscall.Wait4(pid, &status, syscall.WALL, &rusage)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("process %d stopped:%v\n", pid, status.Stopped())
+
+		return nil
+	},
+	PostRunE: func(cmd *cobra.Command, args []string) error {
+		debug.NewDebugShell().Run()
+		// let target process continue
+		return syscall.PtraceCont(pid, 0)
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(execCmd)
+}
+```
+
+### 代码测试
+
+下面我们针对调整后的代码进行测试：
+
+```bash
+$ cd golang-debugger/lessons/0_godbg/godbg && go install -v
+$
+$ godbg exec ls
+exec ls
+process 2479 stopped:true
+godbg> exit
+cmd  go.mod  go.sum  LICENSE  main.go  syms  target
+```
+
+首先，我们进入示例代码目录编译安装godbg，然后运行`godbg exec ls`，意图对PATH中可执行程序`ls`进行调试。
+
+godbg将启动ls进程，并通过PTRACE_TRACEME让内核把ls进程停下（通过SIGTRAP），可以看到调试器输出`process 2479 stopped:true`，表示被调试进程pid是2479已经停止执行了。
+
+并且还启动了一个调试回话，终端命令提示符应变成了`godbg> `，表示调试会话正在等待用户输入调试命令，我们这里还没有实现真正的调试命令，我们输入`exit`退出调试会话。
+
+当我们退出调试会话时，会通过`ptrace(PTRACE_COND,...)`操作来恢复被调试进程继续执行，也就是ls正常执行列出目录下文件的命令，我们也看到了它输出了当前目录下的文件信息`cmd go.mod go.sum LICENSE main.go syms target`。
+
+`godbg exec <prog>`命令现在一切正常了！
 
 ### 参考内容：
 
