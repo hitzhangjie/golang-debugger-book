@@ -32,7 +32,7 @@
     * [7.2 Attach Tracee](7-develop-inst-debugger/2-process_attach.md)
     * [7.3 Start & Attach](7-develop-inst-debugger/3-process_start_attach.md)
     * [7.4 Disassemble](7-develop-inst-debugger/4-disassemble.md)
-    * [7.5 Breakpoints](7-develop-inst-debugger/5-breakpoints.md)
+    * [7.5 Breakpoints](7-develop-inst-debugger/5-breakpoint.md)
         * [7.5.1 step](xx)
         * [7.5.2 continue](xx)
         * [7.5.3 for](xx)

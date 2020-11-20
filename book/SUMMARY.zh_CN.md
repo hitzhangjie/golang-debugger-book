@@ -32,7 +32,7 @@
   * [7.2 进程attach](7-develop-inst-debugger/2-process_attach.zh_CN.md)
   * [7.3 启动&attach](7-develop-inst-debugger/3-process_start_attach.zh_CN.md)
   * [7.4 反汇编](7-develop-inst-debugger/4-disassemble.zh_CN.md)
-  * [7.5 断点](7-develop-inst-debugger/5-breakpoints.zh_CN.md)
+  * [7.5 断点](7-develop-inst-debugger/5-breakpoint.zh_CN.md)
      * [7.5.1 step](xx)
      * [7.5.2 continue](xx)
      * [7.5.3 for](xx)
