@@ -41,7 +41,7 @@
         * [7.5.3 for](xx)
         * [7.5.4 return](xx)
         * [7.5.5 condition](xx)
-    * [7.6 Memory & Register](7-develop-inst-debugger/6-memory-registers.md)
+    * [7.20 Memory & Register](7-develop-inst-debugger/20-memory-registers.md)
     * [7.x More...](7-develop-inst-debugger/x-more.md)
 * [8 Develop Symbolic Level Debugger](8-develop-sym-debugger/README.md)
     * [8.1 Symbol Table](8-develop-sym-debugger/1-symtable & linetable.md)

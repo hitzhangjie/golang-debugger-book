@@ -41,7 +41,7 @@
      * [7.5.3 for](xx)
      * [7.5.4 return](xx)
      * [7.5.5 condition](xx)
-  * [7.6 寄存器&内存](7-develop-inst-debugger/6-memory-registers.zh_CN.md)
+  * [7.20 寄存器&内存](7-develop-inst-debugger/20-memory-registers.zh_CN.md)
   * [7.x More...](7-develop-inst-debugger/x-more.zh_CN.md)
 * [8 开发go符号级调试器](8-develop-sym-debugger/README.zh_CN.md)
   * [8.1 符号表](8-develop-sym-debugger/1-symtable & linetable.zh_CN.md)
