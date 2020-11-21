@@ -270,7 +270,9 @@ func main() {
 
 因为go程序天然是多线程程序，sysmon、gc等等都可能会用到独立线程，我们attach时只是简单的attach了pid对应进程的某一个线程，那到底是哪一个线程呢？主线程？听我慢慢道来。
 
-当tracer发送`ptrace(PTRACE_ATTACH,...)`给被调试进程时，内核会生成一个SIGTRAP信号发送给被调试进程，被调试进程如果是多线程程序的话，内核就得考虑一下应该选择哪个线程来处理这个信号，实际接收信号的线程与发送ptrace请求来的线程二者之间建立ptrace link，它们的角色分别为tracee、tracer，后续tracee期望收到的所有ptrace请求都来自这个tracer。
+当tracer发送`ptrace(PTRACE_ATTACH,...)`给被调试进程时，内核会生成一个SIGTRAP信号发送给被调试进程，被调试进程如果是多线程程序的话，内核就要选择一个线程来处理这个信号，感兴趣可查看内核源码：[kernel/signal.c:complete_signal](https://sourcegraph.com/github.com/torvalds/linux@27bba9c532a8d21050b94224ffd310ad0058c353/-/blob/kernel/signal.c#L990)。
+
+实际接收信号的线程与发送ptrace请求来的线程二者之间建立ptrace link，它们的角色分别为tracee、tracer，后续tracee期望收到的所有ptrace请求都来自这个tracer。
 
 被调试进程中的其他线程，如果有，仍然是可以运行的，这就是为什么我们某些读者发现有时候被调试程序仍然在不停输出。
 
