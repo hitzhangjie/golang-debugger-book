@@ -273,3 +273,31 @@ size of text: 1024
 这里的失败是符合预期的、无害的，我们调试过程中，不会显示这么多汇编指令，只会显示断点附近的几十条指令而已，对于decode失败的buffer末尾几条指令简单忽略就可以。
 
 现在我们已经实现了反汇编的功能，下一节，我们将通过指令patch来实现动态断点的添加、移除。
+
+### 更多相关内容
+
+汇编指令有go、intel、gnu 3种常见风格，gnu风格的俗称at&t风格。
+
+为了方便不同习惯的开发者能顺畅地阅读相关反汇编出来的指令，我们后续又为disass命令添加了选项`disass -s <syntax>`来指定汇编指令的风格，如我本人比较倾向于阅读at&t格式的，则可以通过`disass -s gnu`来查看对应风格的汇编指令。
+
+函数`instSyntax(inst x86asm.Inst, syntax string) (string, error)`实现了对不同汇编风格的转换支持：
+
+```go
+func instSyntax(inst x86asm.Inst, syntax string) (string, error) {
+	asm := ""
+	switch syntax {
+	case "go":
+		asm = x86asm.GoSyntax(inst, uint64(inst.PCRel), nil)
+	case "gnu":
+		asm = x86asm.GNUSyntax(inst, uint64(inst.PCRel), nil)
+	case "intel":
+		asm = x86asm.IntelSyntax(inst, uint64(inst.PCRel), nil)
+	default:
+		return "", fmt.Errorf("invalid asm syntax error")
+	}
+	return asm, nil
+}
+```
+
+您可以在源文件`cmd/debug/disass.go`中查看完整实现。
+
