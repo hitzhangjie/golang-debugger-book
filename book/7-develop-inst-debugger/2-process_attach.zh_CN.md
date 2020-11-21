@@ -246,4 +246,37 @@ we're doing some debugging...
 process 1311 detach succ
 ```
 
+### 更多相关内容
 
+有读者可能会自己开发一个go程序作为被调试程序，期间可能会遇到多线程给调试带来的一些困惑，这里也提一下。
+
+假如我使用下面的go程序做为被调试程序：
+
+```go
+import (
+    "fmt"
+    "time"
+    "os"
+)
+func main() {
+    {
+        time.Sleep(time.Second)
+        fmt.Println("pid:", os.Getpid())
+    }
+}
+```
+
+结果发现执行了`godbg attach <pid>`之后程序还在执行，这是为什么呢？
+
+因为go程序天然是多线程程序，sysmon、gc等等都可能会用到独立线程，我们attach时只是简单的attach了pid对应进程的某一个线程，那到底是哪一个线程呢？主线程？听我慢慢道来。
+
+当tracer发送`ptrace(PTRACE_ATTACH,...)`给被调试进程时，内核会生成一个SIGTRAP信号发送给被调试进程，被调试进程如果是多线程程序的话，内核就得考虑一下应该选择哪个线程来处理这个信号，实际接收信号的线程与发送ptrace请求来的线程二者之间建立ptrace link，它们的角色分别为tracee、tracer，后续tracee期望收到的所有ptrace请求都来自这个tracer。
+
+被调试进程中的其他线程，如果有，仍然是可以运行的，这就是为什么我们某些读者发现有时候被调试程序仍然在不停输出。
+
+如果想让被调试进程停止执行，有两个办法可以做到：
+
+- 方法1，调试器枚举被调试进程下所有的线程，逐个attach；
+- 方法2，被测试程序启动到时候通过变量GOMAXPROCS=1限制最大并发执行线程数；
+
+我们将在后续过程中进一步完善attach命令，使其也能胜任多线程环境下的调试工作。

@@ -107,8 +107,6 @@ godbg> step
 
 这里会影响到调试体验，我们将在后续过程中予以完善。
 
-
-
 ### 代码测试
 
 启动一个程序，获取其进程pid，然后执行`godbg attach <pid>`对进程进行调试，等调试会话就绪之后，我们输入`disass`反汇编看下当前指令地址之后的汇编指令有哪些。
@@ -166,5 +164,7 @@ SINGLESTEP调试在Intel平台上是借助硬件特性来实现的，
 > The system flags and IOPL field in the **EFLAGS** register control operating-system or executive operations. **They should not be modified by application programs.** The functions of the system flags are as follows:
 >
 > **TF (bit 8) Trap flag** — Set to enable single-step mode for debugging; clear to disable single-step mode. 
+
+处理器发现EFLAGS.TF标志位被置1了，执行指令的时候会先清空该标志位，然后执行指令，指令执行完成之后会触发TRAP，即通过SIGTRAP发送给被调试进程，也会通知调试器，让调试器继续执行某些操作。
 
 这就是Intel平台下单步执行的一些细节信息，读者也可以思考下如果处理器架构设计上本身不支持SINGLESTEP的话，我们如何通过软件来模拟。
