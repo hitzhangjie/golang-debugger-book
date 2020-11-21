@@ -299,5 +299,7 @@ func instSyntax(inst x86asm.Inst, syntax string) (string, error) {
 }
 ```
 
+另外我们也添加了选项`disass -n <num>`来指定一次反汇编操作要decode的指令条数，因为调试会话中往往更关心当前待执行的指令，所以没必要一次反汇编成千上万行指令，那仅会分散调试人员的注意力、带来更多不便而已。
+
 您可以在源文件`cmd/debug/disass.go`中查看完整实现。
 
