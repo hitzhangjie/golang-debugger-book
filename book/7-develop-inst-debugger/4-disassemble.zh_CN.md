@@ -278,7 +278,7 @@ size of text: 1024
 
 汇编指令有go、intel、gnu 3种常见风格，gnu风格的俗称at&t风格。
 
-为了方便不同习惯的开发者能顺畅地阅读相关反汇编出来的指令，我们后续又为disass命令添加了选项`disass -s <syntax>`来指定汇编指令的风格，如我本人比较倾向于阅读at&t格式的，则可以通过`disass -s gnu`来查看对应风格的汇编指令。
+为了方便不同习惯的开发者能顺畅地阅读相关反汇编出来的指令，我们后续又为disass命令添加了选项`disass -s <syntax>`来指定汇编指指令的风格，如我本人比较倾向于阅读at&t格式的，则可以通过`disass -s gnu`来查看对应风格的汇编指令。
 
 函数`instSyntax(inst x86asm.Inst, syntax string) (string, error)`实现了对不同汇编风格的转换支持：
 
