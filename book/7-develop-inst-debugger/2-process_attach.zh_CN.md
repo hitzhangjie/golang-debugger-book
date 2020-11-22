@@ -248,6 +248,8 @@ process 1311 detach succ
 
 ### 更多相关内容
 
+#### 问题：多线程程序attach后仍在运行？
+
 有读者可能会自己开发一个go程序作为被调试程序，期间可能会遇到多线程给调试带来的一些困惑，这里也提一下。
 
 假如我使用下面的go程序做为被调试程序：
@@ -268,17 +270,80 @@ func main() {
 
 结果发现执行了`godbg attach <pid>`之后程序还在执行，这是为什么呢？
 
-因为go程序天然是多线程程序，sysmon、gc等等都可能会用到独立线程，我们attach时只是简单的attach了pid对应进程的某一个线程，那到底是哪一个线程呢？主线程？听我慢慢道来。
+因为go程序天然是多线程程序，sysmon、gc等等都可能会用到独立线程，我们attach时只是简单的attach了pid对应进程的某一个线程，其他的线程仍然是没有被调试跟踪的，是可以正常执行的。
 
-当tracer发送`ptrace(PTRACE_ATTACH,...)`给被调试进程时，内核会生成一个SIGTRAP信号发送给被调试进程，被调试进程如果是多线程程序的话，内核就要选择一个线程来处理这个信号，感兴趣可查看内核源码：[kernel/signal.c:complete_signal](https://sourcegraph.com/github.com/torvalds/linux@27bba9c532a8d21050b94224ffd310ad0058c353/-/blob/kernel/signal.c#L990)。
+那我们ptrace时指定了pid到底attach了哪一个线程呢？在Linux下，线程其实是通过轻量级进程（LWP）来实现的，这里的ptrace参数pid实际上是线程对应的LWP的进程id。意思是只有这个线程会被调试跟踪。
 
-实际接收信号的线程与发送ptrace请求来的线程二者之间建立ptrace link，它们的角色分别为tracee、tracer，后续tracee期望收到的所有ptrace请求都来自这个tracer。
+**在调试场景中，tracee永远指的是一个线程，而非一个进程或者多线程的进程**，尽管我们有时候为了描述方便，在术语上会选择倾向于使用进程。
+
+> 一个多线程的进程，其实是可以理解成一个包含了多个线程的线程组，线程组中的线程在创建的时候都通过clone+CLONE_THREAD选项来创建，来保证所有新创建的线程拥有相同的pid，类似clone+CLONE_PARENT使得克隆出的所有子进程都有相同的父进程id一样。
+>
+> golang里面通过clone系统调用以及如下选项来创建线程：
+>
+> ```go
+> 
+> cloneFlags = _CLONE_VM | /* share memory */
+> 	_CLONE_FS | /* share cwd, etc */
+> 	_CLONE_FILES | /* share fd table */
+> 	_CLONE_SIGHAND | /* share sig handler table */
+> 	_CLONE_SYSVSEM | /* share SysV semaphore undo lists (see issue #20763) */
+> 	_CLONE_THREAD /* revisit - okay for now */
+> ```
+>
+> 关于clone选项的更多作用，您可以通过查看man手册`man 2 ptrace`来了解。
+
+pid标识的线程（或LWP）与发送ptrace请求的线程（或LWP）二者之间建立ptrace link，它们的角色分别为tracee、tracer，后续tracee期望收到的所有ptrace请求都来自这个tracer。
 
 被调试进程中的其他线程，如果有，仍然是可以运行的，这就是为什么我们某些读者发现有时候被调试程序仍然在不停输出。
+
+#### 问题：想让执行main.main的线程停下来？
 
 如果想让被调试进程停止执行，有两个办法可以做到：
 
 - 方法1，调试器枚举被调试进程下所有的线程，逐个attach；
+
+  比如，列出`/proc/<pid>/task`下的线程对应的LWP pid，逐个attach。
+
 - 方法2，被测试程序启动到时候通过变量GOMAXPROCS=1限制最大并发执行线程数；
 
+  go程序依然是多线程，只是同一时刻只有一个线程执行，现在我们attach了某个线程之后，这个线程暂停执行，即便其他线程能执行也会迅速停下来，失去后续执行机会。
+
 我们将在后续过程中进一步完善attach命令，使其也能胜任多线程环境下的调试工作。
+
+#### 问题：如何判断进程是否是多线程程序？
+
+如何判断目标进程是否是多线程程序呢？有两种简单的办法帮助判断。
+
+- `top -H -p pid`
+
+  `-H`选项将列出进程pid下的线程列表，以下进程5293下有4个线程，Linux下线程是通过轻量级进程实现的，PID列为5293的轻量级进程为主线程。
+
+  ```bash
+  $ top -h -p 5293
+  ........
+  PID USER      PR  NI    VIRT    RES    SHR S %CPU %MEM     TIME+ COMMAND                                                             
+   5293 root      20   0  702968   1268    968 S  0.0  0.0   0:00.04 loop                                                                
+   5294 root      20   0  702968   1268    968 S  0.0  0.0   0:00.08 loop                                                                
+   5295 root      20   0  702968   1268    968 S  0.0  0.0   0:00.03 loop                                                                
+   5296 root      20   0  702968   1268    968 S  0.0  0.0   0:00.03 loop
+  ```
+
+  top展示信息中列S表示进程状态，常见的取值及含义如下：
+
+  ```bash
+  'D' = uninterruptible sleep
+  'R' = running
+  'S' = sleeping
+  'T' = traced or stopped
+  'Z' = zombie
+  ```
+
+- `ls /proc/<pid>/task`
+
+  ```bash
+  $ ls /proc/5293/task/
+  
+  5293/ 5294/ 5295/ 5296/
+  ```
+
+  Linux下/proc是一个虚拟文件系统，它里面包含了系统运行时的各种状态信息，以下命令可以查看到进程5293下的线程。和top展示的结果是一样的。
