@@ -50,6 +50,8 @@
   * [8.7 协程 & 线程](8-develop-sym-debugger/7-goroutines.zh_CN.md)
   * [8.x 标准库](8-develop-sym-debugger/x-gopkg.zh_CN.md)
   * [8.x More...](8-develop-sym-debugger/x-more.md)
+* [9 附录](9-appendix/README.zh_CN.md)
+  * [9.1 go程序启动流程](9-appendix/1-go-programme-start.zh_CN.md)
 * [9 其他](9-others.zh_CN.md)
 * [10 贡献者](10-contributors.zh_CN.md) 
 * [11 如何贡献](10-Contributing.zh_CN.md)
