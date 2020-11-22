@@ -272,7 +272,13 @@ func main() {
 
 因为go程序天然是多线程程序，sysmon、gc等等都可能会用到独立线程，我们attach时只是简单的attach了pid对应进程的某一个线程，其他的线程仍然是没有被调试跟踪的，是可以正常执行的。
 
-那我们ptrace时指定了pid到底attach了哪一个线程呢？在Linux下，线程其实是通过轻量级进程（LWP）来实现的，这里的ptrace参数pid实际上是线程对应的LWP的进程id。意思是只有这个线程会被调试跟踪。
+那我们ptrace时指定了pid到底attach了哪一个线程呢？这个pid对应的线程难道不是执行main.main的线程吗？
+
+先回答读者问题：没错，还真不一定是！**go程序中函数main.main是由main goroutine来执行的，但是在main.main方法执行时，main goroutine并没有和main thread存在任何默认的绑定关系**。所以认为main.main一定运行在pid对应的线程之上是错误的！
+
+> ps：附录《go runtime: go程序启动流程》中对go程序的启动流程做了分析，可以帮读者朋友打消疑虑。
+
+在Linux下，线程其实是通过轻量级进程（LWP）来实现的，这里的ptrace参数pid实际上是线程对应的LWP的进程id。意思是只有这个线程会被调试跟踪。
 
 **在调试场景中，tracee永远指的是一个线程，而非一个进程或者多线程的进程**，尽管我们有时候为了描述方便，在术语上会选择倾向于使用进程。
 
