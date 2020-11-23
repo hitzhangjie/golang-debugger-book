@@ -40,7 +40,6 @@
   * [7.10 Continue](7-develop-inst-debugger/10-continue.md)
   * [7.11 Print Memory](7-develop-inst-debugger/11-pmem.md)
   * [7.12 Print Registers](7-develop-inst-debugger/12-pregs.md)
-  * [7.20 Memory & Register](7-develop-inst-debugger/20-memory-registers.md)
   * [7.x More...](7-develop-inst-debugger/x-more.md)
 * [8 Develop Symbolic Level Debugger](8-develop-sym-debugger/README.md)
   * [8.1 Symbol Table](8-develop-sym-debugger/1-symtable & linetable.md)

@@ -6,7 +6,7 @@
 
 ### 代码实现
 
-查看进程寄存器数据，需要通过`ptrace(PTRACE_GETREGS,...)`操作就可以获取所有的寄存器列表及其数据。
+查看进程寄存器数据，需要通过`ptrace(PTRACE_GETREGS,...)`操作就可以获取被调试进程上下文所有的寄存器列表及其数据。
 
 **file: cmd/debug/pregs.go**
 
