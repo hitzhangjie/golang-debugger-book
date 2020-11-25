@@ -1,18 +1,31 @@
-### Symbol Table, LinenumTable
+## 符号级调试基础
 
-#### debug/elf
+符号级调试，依赖于编译器、连接器生成的调试信息。
 
-ELF, short for Executable and Linkable Format, is a common standard file format for executable files, object code, shared libraries, and core dumps. It is commonly used in Unix and Linux.
+调试信息在不同的文件格式中，有不同的存储方式。这些调试信息又有多种类型，如描述数据类型、变量、函数定义的，或者描述符号表、行号表、调用栈信息表的，等等。
 
-ELF format is as following:
+此外，不同的编程语言也会有自己的取舍，一方面兼容现有二进制工具生成必要sections的同时，可能也会生成一些额外的sections方便自己的工具链进行处理。
+
+对于go语言来说，虽然其在版本迭代过程中，符号信息的生成出现了一些比较多的变化，如.gosymtab在go1.2+之后官方突然去掉了，导致没法查询本地变量信息等，或者一些相关的行号表解析的方法被废弃了。这些都带来了一些不便。
+
+好的一点是go标准库提供了debug/*，专门用来帮助go开发人员解决这些问题。它们不仅支持ELF文件的读取解析，也支持符号表、行号表、调用栈信息表以及其他DWARF数据的读取、解析。
+
+下面我们拉看下go标准库提供了哪些工具可以辅助我们进行符号级调试器开发。
+
+### debug/elf
+
+ELF (Executable and Linkable Format)，可执行链接嵌入格式，是Unix、Linux环境下一种十分常见的文件格式，它可以用于可执行程序、目标代码、共享库甚至核心转储文件等。
+
+ELF文件格式如下所示，它包含了ELF头、Program Header Table、Section Header Table，还有其他字段，等等。
 
 ![img](assets/clip_image001.png)
 
- 
+ 对ELF文件通常包含两种类型的视图：
 
-Debug/elf, this package provides a way to read the ELF File Header, Program Header Table, Section Header Table of elf file.
+- 一种是对开发人员说的，代码、数据等等的分组视图，比如通过sections来获取视图；
+- 一种是对linker来说的，将多个program header table中的元素有组织地结合起来；
 
- 
+我们可以通过`debug/elf`这个 package来进一步读取关心的内容。
 
 1)    elf.go, defines the constants and datatype for primitive ELF File Header, Program Header Table, Section Header Table, etc.
 
@@ -24,7 +37,7 @@ These datatype’s relation is as following:
 
  
 
-#### debug/gosym
+### debug/gosym
 
 debug/gosym, this package provides a way to build Symbol Table and LineTable, etc.
 
@@ -36,7 +49,7 @@ debug/gosym, this package provides a way to build Symbol Table and LineTable, et
 
  
 
-#### debug/dwarf
+### debug/dwarf
 
 Dwarf v2 aims to solve how to represent the debugging information of all programming languages, there’s too much to introduce it. Dwarf debugging information may be generated and stored into many debug sections, but in package debug/dwarf, only the following debug sections are handled:
 
