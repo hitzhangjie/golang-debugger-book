@@ -23,19 +23,13 @@ ELF文件格式如下所示，它包含了ELF头、Program Header Table、Sectio
  对ELF文件通常包含两种类型的视图：
 
 - 一种是对开发人员说的，代码、数据等等的分组视图，比如通过sections来获取视图；
-- 一种是对linker来说的，将多个program header table中的元素有组织地结合起来；
+- 一种是对linker来说的，将多个program header table中的元素有组织地结合起来形成一个完整的可执行程序；
 
-我们可以通过`debug/elf`这个 package来进一步读取关心的内容。
-
-1)    elf.go, defines the constants and datatype for primitive ELF File Header, Program Header Table, Section Header Table, etc.
-
-2)    file.go, beyond of elf.go, defines the File, File Header, Prog, ProgHeader, Section, SectionHeader, etc.
-
-These datatype’s relation is as following:
+标准库提供了package`debug/elf`来读取、解析elf文件数据，相关的数据类型及其之间的依赖关系，如下图所示：
 
 ![img](assets/clip_image002.png)
 
- 
+ 简单讲，elf.File中包含了我们可以从elf文件中获取的所有信息，为了方便使用，标准库又提供了其他package `debug/gosym`来解析符号信息、行号表信息，还提供了`debug/dwarf`来解析调试信息等。
 
 ### debug/gosym
 
