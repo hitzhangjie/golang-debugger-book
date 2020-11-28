@@ -2,7 +2,11 @@
 
 ### pkg debug/elf
 
+标准库提供了package`debug/elf`来读取、解析elf文件数据，相关的数据类型及其之间的依赖关系，如下图所示：
 
+![image-20201128125408007](assets/image-20201128125408007.png)
+
+ 简单讲，elf.File中包含了我们可以从elf文件中获取的所有信息，为了方便使用，标准库又提供了其他package `debug/gosym`来解析符号信息、行号表信息，还提供了`debug/dwarf`来解析调试信息等。
 
 参考内容：
 
