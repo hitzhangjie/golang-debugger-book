@@ -6,7 +6,7 @@ ELF ([Executable and Linkable Format](https://en.wikipedia.org/wiki/Executable_a
 
 ELF文件格式如下，文件开头是ELF Header，剩下的数据部分包括Program Header Table、Section Header Table、Sections，Sections中的数据由Program Header Table、Section Header Table来引用。
 
-![img](assets/clip_image001.png)
+![img](assets/elf.png)
 
 这里简单列一下上述关键结构的含义和作用：
 
