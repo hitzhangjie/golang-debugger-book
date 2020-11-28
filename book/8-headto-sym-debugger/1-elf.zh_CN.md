@@ -2,7 +2,7 @@
 
 ### 理解ELF文件
 
-ELF (Executable and Linkable Format)，可执行链接嵌入格式，是Unix、Linux环境下一种十分常见的文件格式，它可以用于可执行程序、目标代码、共享库甚至核心转储文件等。
+ELF ([Executable and Linkable Format](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format))，可执行链接嵌入格式，是Unix、Linux环境下一种十分常见的文件格式，它可以用于可执行程序、目标代码、共享库甚至核心转储文件等。
 
 ELF文件格式如下所示，它包含了ELF头、Program Header Table、Section Header Table，以及其他字段，关于ELF文件的更详细信息，您可以查看Wikipedia上文档。
 
