@@ -22,8 +22,6 @@ TODO：补充动态链接的详细内容
 
 
 
-
-
 ### 参考文献
 
 1. What are the executable ELF files respectively for static linker, dynamic linker, loader and dynamic loader, Roel Van de Paar, https://www.youtube.com/watch?v=yzI-78zy4HQ
