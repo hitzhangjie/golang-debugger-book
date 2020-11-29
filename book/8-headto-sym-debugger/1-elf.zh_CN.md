@@ -11,7 +11,7 @@ ELF文件格式如下，文件开头是ELF Header，剩下的数据部分包括P
 这里简单列一下上述关键结构的含义和作用：
 
 - ELF FIle Header，ELF文件头，其描述了当前ELF文件的类型（可执行程序、可重定位文件、动态链接文件、core文件等）、32位or64位寻址、ABI、ISA、程序入口地址、Program Header Table起始地址及元素大小、Section Header Table起始地址及元素大小，等等；
-- Program Header Table，它描述了系统如何创建一个程序的进程映像，每个表项都定义了一个segment（段），其中引用了0个、1个或多个section，它们也有自己的类型，如PT_LOAD，表示系统应按照表项中定义好的虚拟地址范围将引用的sections以mmap的形式映射到进程虚地址空间，如进程地址空间中的text段、data段；
+- Program Header Table，它描述了系统如何创建一个程序的进程映像，每个表项都定义了一个segment（段），其中引用了0个、1个或多个section，它们也有自己的类型，如PT_LOAD，表示系统应按照表项中定义好的虚拟地址范围将引用的sections以mmap的形式映射到进程虚拟地址空间，如进程地址空间中的text段、data段；
 - Section Header Table，它描述了文件中包含的每个section的位置、大小、类型、链接顺序，等等，主要目的是为了指导链接器进行链接；
 - Sections，ELF文件中的sections数据，夹在Program Header Table和Section Header Table中间，由一系列的sections数据构成。
 
@@ -19,11 +19,11 @@ ELF文件格式如下，文件开头是ELF Header，剩下的数据部分包括P
 
 它定义了程序执行的视图（executable point of view），或者说是loader加载的视图。
 
-从可执行程序角度来看，进程运行时需要了解如何将程序中不同部分，加载到进程虚拟内存地址空间中的不同区域，其实段（segments）的概念。
+从可执行程序角度来看，进程运行时需要了解如何将程序中不同部分，加载到进程虚拟内存地址空间中的不同区域（段，segments）。
 
-我们都了解Linux下进程虚地址空间的布局情况，比如其中的data段、text段，它们就是由Program Header Table预先定义好的，包括在虚拟内存空间中的位置，以及text段中应该包含哪些sections数据。
+Linux下进程地址空间的内存布局，大家并不陌生，如data段、text段，它们其实是由Program Header Table预先定义好的，包括在虚拟内存空间中的位置，以及text段中应该包含哪些sections数据。
 
-以测试程序golang-debugger-lessons/testdata/loop2为例，运行`readelf -l`查看其program header table，共有7个program headers，每个program header在虚拟内存中的地址、每个program header包含的sections，都一览无余。如，最终组织好的text段，包含了如下sections .text .note.go.buildid。
+以测试程序golang-debugger-lessons/testdata/loop2为例，运行`readelf -l`查看其program header table，共有7个program headers，每个program header在虚拟内存中的地址、每个program header包含的sections，都一览无余。如，最终组织好的text segment包含了如下sections .text .note.go.buildid。
 
 ```bash
 $ readelf -l testdata/loop2
@@ -61,7 +61,7 @@ Program Headers:
    06 
 ```
 
-> 本文稍后会介绍Program Header Table如何指导loader创建进程映像，请不要错过。
+> 本章稍后会介绍Program Header Table如何指导loader创建进程映像。
 
 ### ELF Section Header Table
 
@@ -125,9 +125,9 @@ Key to Flags:
 
 一个section中数据最终会不会被mmap到进程地址空间，也是由引用它的Program Header的类型决定的，如果Program Header类型为LOAD类型，则会被mmap到进程地址空间，反之则不会。
 
-仍以前面示例做参考，我们发现.gosymtab、.gopclntab所属的段（段索引03）是LOAD类型，表示其数据会被加载到内存，这是因为go runtime依赖这些信息来计算stacktrace。
+仍以前面示例做参考，我们发现.gosymtab、.gopclntab所属的段（段索引值 03）是LOAD类型，表示其数据会被加载到内存，这是因为go runtime依赖这些信息来计算stacktrace。
 
-而.note.go.buildid所属的段（段索引01）为NOTE类型，不会被加载到内存，这种就是给一些外部工具读取使用的。比如方便`go tool buildid <prog>`提取buildid信息，这个其实就是存储在.note.go.buildid section中的。
+而.note.go.buildid所属的段（段索引 01）为NOTE类型，不会被加载到内存，这种就是给一些外部工具读取使用的。比如方便`go tool buildid <prog>`提取buildid信息，这个其实就是存储在.note.go.buildid section中的。
 
 来验证下，首先通过`go tool buildid`来提取buildid信息：
 
@@ -147,7 +147,7 @@ String dump of section '.note.go.buildid':
 
 结果发现buildid数据是一致的，证实了我们上述判断。
 
-> 本文稍后会介绍Section Header Table如何指导链接器执行链接操作，请不要错过。
+> 本章稍后会介绍Section Header Table如何指导链接器执行链接操作。
 
 ### ELF 常见 Sections
 
@@ -159,7 +159,7 @@ ELF文件会包含很多的sections，前面给出的测试实例中就包含了
 - .rodata: 只读数据，如程序中的常量字符串；
 - .data：已经初始化的全局变量；
 - .bss：未经初始化的全局变量，在ELF文件中只是个占位符，不占用实际空间；
-- .symtab：符号表，存放程序中定义的全局函数和全局变量的信息，注意这里的.symtab不和编译器中的调试符号无关（如gcc -g生成）。每个可重定位文件都有一个符号表，它不含局部变量信息，局部非静态变量由栈来管理，而且对链接器符号解析、重定位没任何帮助；
+- .symtab：符号表，每个可重定位文件都有一个符号表，存放程序中定义的全局函数和全局变量的信息，注意它不包含局部变量信息，局部非静态变量由栈来管理，它们对链接器符号解析、重定位没有帮助。也要注意，.symtab和编译器中的调试符号无关（如gcc -g生成）；
 - .debug_*: 调试信息，调试器读取该信息以支持符号级调试（如gcc -g生成）；
 - .strtab：字符串表，内容包括.symtab和.debug_*节中的符号，以及section名；
 - .rel.text：一个.text section中位置的列表，当链接器尝试把这个目标文件和其他文件链接时，需要修改这些位置的值，链接之前调用外部函数或者引用外部全局变量的是通过符号进行的，需要对这些符号进行解析、重定位成正确的访问地址。
@@ -215,7 +215,7 @@ ELF文件会包含很多的sections，前面给出的测试实例中就包含了
 
 - 其他，如`readelf --relocated-dump | --debug-dump`，可以按需选用。
 
-本节ELF内容就先介绍到，在此基础上，接下来的几个小节，我们将依次介绍linker、loader、debugger的大致工作原理，感兴趣的读者不要错过。
+本节ELF内容就先介绍到，在此基础上，接下来的几个小节，我们将依次介绍linker、loader、debugger的工作原理。
 
 ### 参考文献
 
