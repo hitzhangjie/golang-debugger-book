@@ -45,7 +45,7 @@
   * [8.1 理解ELF文件](8-headto-sym-debugger/1-elf.zh_CN.md)
   * [8.2 符号&符号表](8-headto-sym-debugger/2-syms.zh_CN.md)
   * [8.3 符号的解析](8-headto-sym-debugger/3-syms-resolve.zh_CN.md)
-  * [8.4 重定位](8-headto-sym-deubgger/4-syms-reloc.zh_CN.md)
+  * [8.4 重定位](8-headto-sym-debugger/4-syms-reloc.zh_CN.md)
   * [8.5 加载](8-headto-sym-deubgger/5-loading.zh_CN.md)
   * [8.6 go标准库debug/\*](8-headto-sym-debugger/2-gopkg-debug/README.zh_CN.md)
     * [8.6.1 debug/elf](8-headto-sym-debugger/2-gopkg-debug/1-elf.zh_CN.md)
