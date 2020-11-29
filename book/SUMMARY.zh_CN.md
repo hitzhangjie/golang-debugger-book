@@ -43,6 +43,8 @@
   * [7.x More...](7-develop-inst-debugger/x-more.zh_CN.md)
 * [8 挺进符号级调试器](8-headto-sym-debugger/README.zh_CN.md)
   * [8.1 理解ELF文件](8-headto-sym-debugger/1-elf.zh_CN.md)
+  * [8.2 符号&符号表](8-headto-sym-debugger/2-syms.zh_CN.md)
+  * [8.3 符号的解析](8-headto-sym-debugger/3-syms-resolve.zh_CN.md)
   * [8.2 go标准库debug/\*](8-headto-sym-debugger/2-gopkg-debug/README.zh_CN.md)
     * [8.2.1 debug/elf](8-headto-sym-debugger/2-gopkg-debug/1-elf.zh_CN.md)
     * [8.2.2 debug/gosym](8-headto-sym-deubgger/2-gopkg-debug/2-gosym.zh_CN.md)
