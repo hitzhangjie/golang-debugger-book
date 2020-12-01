@@ -54,6 +54,12 @@ Unix系统中的每个程序都运行在一个进程上下文中，都有自己�
 
 上述过程只是笼统的介绍，实际的加载过程要考虑的问题更多。
 
+### 链接与加载
+
+链接，指的是，链接器将多个可重定位文件（目标文件、库文件）进行符号解析、重定位、将多个文件结合成一个可执行程序的过程。
+
+加载，指的是，加载器将可执行程序、共享库等从磁盘加载到内存，组织好内存布局为程序执行做好准备的过程。
+
 可以肯定的是，链接器和加载器之间不是完全孤立的，它们之间也是一种协作关系。
 
 - 静态链接，静态加载。链接器/usr/bin/ld使用静态库(.a)链接，加载器是内核本身；
@@ -76,5 +82,7 @@ Unix系统中的每个程序都运行在一个进程上下文中，都有自己�
 
    深入理解计算机系统, 龚奕利 雷迎春 译, p450-p479
 
-2. Advanced Programming in Unix Environment
+2. What are the executable ELF files respectively for static linker, dynamic linker, loader and dynamic loader, Roel Van de Paar, https://www.youtube.com/watch?v=yzI-78zy4HQ
+
+3. Advanced Programming in Unix Environment
 
