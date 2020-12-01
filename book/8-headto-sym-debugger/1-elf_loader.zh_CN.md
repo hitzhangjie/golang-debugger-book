@@ -6,9 +6,8 @@
 
 ![img](file:///Users/zhangjie/debugger101/golang-debugger-book/book/8-headto-sym-debugger/assets/elf_loader.png?lastModify=1606581371)
 
-- 静态加载，指的是，在程序启动前加载过程中，执行可执行程序、库的内存地址映射；
+- 
 
-- 动态加载：指的是，在进程启动之后，执行库的内存地址映射；
 
 ### 工作原理
 
