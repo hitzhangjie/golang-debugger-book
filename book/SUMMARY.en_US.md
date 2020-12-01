@@ -46,7 +46,7 @@
   * [8.2 Symbols & Symbol Table](8-headto-sym-debugger/2-syms.md)
   * [8.3 Symbol Resolve](8-headto-sym-debugger/3-syms-resolve.md)
   * [8.4 Relocations](8-headto-sym-debugger/4-syms-reloc.md)
-  * [8.5 Loading](8-headto-sym-deubgger/5-loading.md)
+  * [8.5 Loading](8-headto-sym-debugger/5-loading.md)
   * [8.6 Go stdlib debug/\*](8-headto-sym-debugger/2-gopkg-debug/README.md)
     * [8.6.1 debug/elf](8-headto-sym-debugger/2-gopkg-debug/1-elf.md)
     * [8.6.2 debug/gosym](8-headto-sym-deubgger/2-gopkg-debug/2-gosym.md)
