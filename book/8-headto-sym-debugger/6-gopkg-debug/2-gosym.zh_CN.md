@@ -1,6 +1,4 @@
-## 符号级调试基础
-
-### pkg debug/gosym
+## pkg debug/gosym 应用
 
 ELF文件中符号表信息一般会存储在`.symtab` section中，go程序有点特殊在go1.2及之前的版本有一个特殊的.gosymtab，其中存储了接近plan9风格的符号表结构信息，但是在go1.3之后，.gosymtab不再包含任何符号信息。
 

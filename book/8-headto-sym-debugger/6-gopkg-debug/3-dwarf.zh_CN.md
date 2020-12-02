@@ -1,6 +1,4 @@
-## 符号级调试基础
-
-### pkg debug/dwarf
+## pkg debug/dwarf 应用
 
 Dwarf v2 aims to solve how to represent the debugging information of all programming languages, there’s too much to introduce it. Dwarf debugging information may be generated and stored into many debug sections, but in package debug/dwarf, only the following debug sections are handled:
 
