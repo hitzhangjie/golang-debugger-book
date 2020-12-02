@@ -137,7 +137,7 @@ func main() {
 }
 ```
 
-运行测试`go run main.go ../testdata/loop`，程序额外输出了如下段头表信息，从中我们可以看到各个segments的索引编号、段类型、权限位、虚拟存储器地址、段占用内存大小（有的段与文件大小可能不同，如多出来的规划给bss段）。
+运行测试`go run main.go ../testdata/loop`，程序会出如下段头表信息，从中我们可以看到各个segments的索引编号、段类型、权限位、虚拟存储器地址、段占用内存大小（有的段与文件大小可能不同，如多出来的规划给bss段）。
 
 ```bash
 No.   Type               Flags       VAddr      MemSize
@@ -150,43 +150,148 @@ No.   Type               Flags       VAddr      MemSize
 6     PT_LOOS+84153728   0x2a00      0x0        0
 ```
 
-FIXME: WHY READ OK but x86asm.Decode ERROR?
+#### 读取文件节头表
 
-如果要读取段中的数据呢？以text段为例，它显然是索引值为2的段，因为只有这个段为PT_LOAD类型并且具备可执行权限。我们尝试读取这个段中的数据。
+只需要遍历file.Sections即可读取节头表信息，注意SectionHeader entry在当前pkg实现中被组织到了每一个elf.Section中。
+
+```go
+package main
+
+import (
+    "text/tabwriter"
+    ...
+)
+
+func main() {
+    ...
+    file, err := elf.Open(prog)
+	...    
+
+	tw = tabwriter.NewWriter(os.Stdout, 0, 4, 3, ' ', 0)
+	heading := "No.\tName\tType\tFlags\tAddr\tOffset\tSize\tLink\tInfo\tAddrAlign\tEntSize\tFileSize\n"
+	fmt.Fprintf(tw, heading)
+	for idx, s := range file.Sections {
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%#x\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+			idx, s.Name, s.Type.String(), s.Flags.String(), s.Addr, s.Offset,
+			s.Size, s.Link, s.Info, s.Addralign, s.Entsize, s.FileSize)
+	}
+	tw.Flush()
+}
+```
+
+运行测试`go run main.go ../testdata/loop`，程序会输出如下节头表信息，从中我们可以看到各个section的编号、名称、类型、flags、虚拟地址、偏移量、大小、连接信息，等等。
+
+```bash
+No.   Name                 Type           Flags                     Addr       Offset    Size     Link   Info   AddrAlign   EntSize   FileSize
+0                          SHT_NULL       0x0                       0x0        0         0        0      0      0           0         0
+1     .text                SHT_PROGBITS   SHF_ALLOC+SHF_EXECINSTR   0x401000   4096      622868   0      0      32          0         622868
+2     .rodata              SHT_PROGBITS   SHF_ALLOC                 0x49a000   630784    278566   0      0      32          0         278566
+3     .typelink            SHT_PROGBITS   SHF_ALLOC                 0x4de200   909824    1844     0      0      32          0         1844
+4     .itablink            SHT_PROGBITS   SHF_ALLOC                 0x4de938   911672    80       0      0      8           0         80
+5     .gosymtab            SHT_PROGBITS   SHF_ALLOC                 0x4de988   911752    0        0      0      1           0         0
+6     .gopclntab           SHT_PROGBITS   SHF_ALLOC                 0x4de9a0   911776    392567   0      0      32          0         392567
+7     .go.buildinfo        SHT_PROGBITS   SHF_WRITE+SHF_ALLOC       0x53f000   1306624   32       0      0      16          0         32
+8     .noptrdata           SHT_PROGBITS   SHF_WRITE+SHF_ALLOC       0x53f020   1306656   58560    0      0      32          0         58560
+9     .data                SHT_PROGBITS   SHF_WRITE+SHF_ALLOC       0x54d4e0   1365216   29712    0      0      32          0         29712
+10    .bss                 SHT_NOBITS     SHF_WRITE+SHF_ALLOC       0x554900   1394928   196400   0      0      32          0         196400
+11    .noptrbss            SHT_NOBITS     SHF_WRITE+SHF_ALLOC       0x584840   1394928   10312    0      0      32          0         10312
+12    .zdebug_abbrev       SHT_PROGBITS   0x0                       0x588000   1394928   281      0      0      1           0         281
+13    .zdebug_line         SHT_PROGBITS   0x0                       0x588119   1395209   117701   0      0      1           0         117701
+14    .zdebug_frame        SHT_PROGBITS   0x0                       0x5a4cde   1512910   25178    0      0      1           0         25178
+15    .zdebug_pubnames     SHT_PROGBITS   0x0                       0x5aaf38   1538088   5283     0      0      1           0         5283
+16    .zdebug_pubtypes     SHT_PROGBITS   0x0                       0x5ac3db   1543371   13539    0      0      1           0         13539
+17    .debug_gdb_scripts   SHT_PROGBITS   0x0                       0x5af8be   1556910   44       0      0      1           0         44
+18    .zdebug_info         SHT_PROGBITS   0x0                       0x5af8ea   1556954   211236   0      0      1           0         211236
+19    .zdebug_loc          SHT_PROGBITS   0x0                       0x5e320e   1768190   92521    0      0      1           0         92521
+20    .zdebug_ranges       SHT_PROGBITS   0x0                       0x5f9b77   1860711   35995    0      0      1           0         35995
+21    .note.go.buildid     SHT_NOTE       SHF_ALLOC                 0x400f9c   3996      100      0      0      4           0         100
+22    .symtab              SHT_SYMTAB     0x0                       0x0        1896712   70944    23     443    8           24        70944
+23    .strtab              SHT_STRTAB     0x0                       0x0        1967656   67996    0      0      1           0         67996
+24    .shstrtab            SHT_STRTAB     0x0                       0x0        2035652   280      0      0      1           0         280
+
+```
+
+#### 读取指定section
+
+现在我们看下如何读取指定的section的数据，以调试器过程中将使用到的section作为示例是一个不错的注意。读取prog的数据并无二致，本质上也是调用的section reader。
+
+**.text section：**
+
+```go
+package main
+
+import (
+    "text/tabwriter"
+    ...
+)
+
+func main() {
+    ...
+    file, err := elf.Open(prog)
+	...    
+
+	// .text section
+	dat, err := file.Section(".text").Data()
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("% x\n", dat[:32])
+}
+```
+
+运行测试`go run main.go ../testdata/loop`，程序会以16进制形式输出.text section的前32个bytes。
+
+```bash
+64 48 8b 0c 25 f8 ff ff ff 48 3b 61 10 76 38 48 83 ec 18 48 89 6c 24 10 48 8d 6c 24 10 0f 1f 00
+```
+
+只是查看一堆16进制数，并没有什么特别大帮助，我们可以调用反汇编框架将这些指令转换为汇编语言，方便阅读，方便进行一些指令级调试相关的操作。下面的程序将反汇编前10条指令数据并输出。
+
+```go
+import (
+    ""golang.org/x/arch/x86/x86asm""
+)
+
+func main() {
+    ...
+	// .text section
+	dat, err := file.Section(".text").Data()
+    ...
+    
+    offset := 0
+	for i := 0; i < 10; i++ {
+		inst, err := x86asm.Decode(dat[offset:], 64)
+		if err != nil {
+			break
+		}
+		fmt.Println(x86asm.GNUSyntax(inst, 0, nil))
+		offset += inst.Len
+	}
+}
+```
+
+**.data section：**
+
+按照相同的方法，我们可以读取.data section的数据，但是下面的程序同样只能打印16进制数，这并没有太大帮助。联想到.text section可以通过反汇编框架进行反汇编（指令编解码是有规律的），我们如何解析这里的数据呢？
+
+这就要用到对go程序类型系统的理解了，比如.data中存储的一个string，或者一个struct，或者一个interface{}，只有对类型系统有了深入的理解，我们才能正确解释这里的数据，并对我们的调试过程提供帮助。
 
 ```go
 func main() {
     ...
-    file, err := elf.Open(prog)
-    ...
-    
-	text := file.Progs[2]
-	buf := make([]byte, text.Filesz, text.Filesz)
-	n, err := text.ReadAt(buf, 0)
+    dat, err := file.Section(".data").Data()
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("i have read some data: %d bytes\n", n)
+	fmt.Printf("% x\n", dat[:32])
 }
 ```
 
-运行测试`go run main.go ../testdata/loop`:
+直接读写内存数据的场景，往往是我们知道了一个变量的内存地址，既然是变量当然也知道其类型，然后我们再查看并解析该内存地址处的数据，如pmem命令的使用。pmem需要我们手动指定每个元素字节大小才能正确解析。
 
-```bash
-i have read some data: 626964 bytes
-```
+更方便的做法是借助调试符号信息，分析这个符号对应的类型信息，以及在内存中的位置，然后我们再读取内存数据并按照类型进行解析。我们将在debug/dwarf一节开始介绍。
 
-
-
-
-
-#### 读取文件节头表
-
-#### 读取sections列表
-
-#### 读取指定section
-
-
+本节内容我们介绍了debug/elf的常用操作，我们接下来介绍下debug/gosym包的使用。
 
 ### 参考内容
 
