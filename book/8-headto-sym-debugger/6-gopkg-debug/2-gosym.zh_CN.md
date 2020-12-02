@@ -69,6 +69,8 @@ go程序的很多核心开发者本身就是Plan9的开发者，go中借鉴Plan9
 
 这是我们的一个测试程序 testdata/loop2.go，我们先展示下其源文件信息，接下来执行`go build -gcflags="all=-N -l" -o loop2 loop2.go`将其编译成可执行程序loop2，后面我们读取loop2并继续做实验。
 
+#### PC与源文件互转
+
 **testdata/loop2.go：**
 
 ```go
@@ -96,9 +98,71 @@ go程序的很多核心开发者本身就是Plan9的开发者，go中借鉴Plan9
     22  }
 ```
 
+下面我们通过`debug/gosym`来写个测试程序，目标是实现虚地址pc和源文件位置、函数之间的转换。
 
+**main.go：**
 
+````go
+import (
+    "debug/elf"
+	"debug/gosym"
+)
 
+func main() {
+    if len(os.Args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: go run main.go <prog>")
+		os.Exit(1)
+	}
+	prog := os.Args[1]
+
+	// open elf
+	file, err := elf.Open(prog)
+	if err != nil {
+		panic(err)
+	}
+    
+	gosymtab, _ := file.Section(".gosymtab").Data()
+	gopclntab, _ := file.Section(".gopclntab").Data()
+
+	pclntab := gosym.NewLineTable(gopclntab, file.Section(".text").Addr)
+	table, _ := gosym.NewTable(gosymtab, pclntab)
+
+	pc, fn, err := table.LineToPC("/root/debugger101/testdata/loop2.go", 3)
+	if err != nil {
+		fmt.Println(err)
+	} else {
+		fmt.Printf("pc => %#x\tfn => %s\n", pc, fn.Name)
+	}
+	pc, fn, _ = table.LineToPC("/root/debugger101/testdata/loop2.go", 9)
+	fmt.Printf("pc => %#x\tfn => %s\n", pc, fn.Name)
+	pc, fn, _ = table.LineToPC("/root/debugger101/testdata/loop2.go", 11)
+	fmt.Printf("pc => %#x\tfn => %s\n", pc, fn.Name)
+	pc, fn, _ = table.LineToPC("/root/debugger101/testdata/loop2.go", 17)
+	fmt.Printf("pc => %#x\tfn => %s\n", pc, fn.Name)
+
+	f, l, fn := table.PCToLine(0x4b86cf)
+	fmt.Printf("pc => %#x\tfn => %s\tpos => %s:%d\n", 0x4b86cf, fn.Name, f, l)
+}
+````
+
+运行测试`go run main.go ../testdata/loop2`，注意以上程序中指定源文件时使用了绝对路径，我们将得到如下输出：
+
+```bash
+$ go run main.go ../testdata/loop2
+no code at /root/debugger101/testdata/loop2.go:3
+pc => 0x4b86cf  fn => main.init.0.func1
+pc => 0x4b8791  fn => main.init.0.func1
+pc => 0x4b85b1  fn => main.main
+pc => 0x4b86cf  fn => main.init.0.func1 pos => /root/debugger101/testdata/loop2.go:9
+```
+
+在上述测试程序中，我们一开始指定了一个源文件位置loop2.go:3的位置，查看源码可知，这个位置处是一些import声明，没有函数，所以这里找不到对应的指令，所以才会返回错误信息“no code at ....loop2.go:3”。剩余几行测试都指定了有效的源码位置，分别输出了几个源文件位置。
+
+然后我们从输出的结果中选择第一个的pc值0x4b86cf作为table.PCToLine(...)的参数，用于测试从pc转换为源文件位置，程序也正确输出了源文件位置信息。
+
+#### 运行时栈跟踪
+
+TODO
 
 ### 参考内容
 
