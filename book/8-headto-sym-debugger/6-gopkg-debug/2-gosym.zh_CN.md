@@ -225,6 +225,67 @@ main.main()
 
 前面我们不止一次提到go运行时调用栈信息是基于.pclntab构建出来的，but how？
 
+#### 栈跟踪如何实现
+
+栈跟踪（stack unwinding）如何实现呢，我们先来说下一般性的思路：
+
+- 首先获取当前程序的pc信息，pc确定了就可以确定当前函数f对应的栈帧；
+- 再获取当前程序的bp信息（go里面称为fp），进而可以拿到函数返回地址；
+- 返回地址往往就是在caller对应的函数ff的栈帧中了，将该返回地址作为新的pc；
+- 重复前面几步，直到栈跟踪深度达到要求为止；
+
+**go runtime如何利用.gopclntab实现栈跟踪？**
+
+要理解这点首先应该理解.gopclntab的设计，这部分内容可以参考[Go 1.2 Runtime Symbol Information](https://docs.google.com/document/d/1lyPIbmsYbXnpNj57a261hgOYVpNRcgydurVQIyZOz_o/pub)，然后我们可以看下实现，即gosym.Table及相关类型的结构。
+
+在本文开头我们已经展示了gosym package的类图，从中我们可以看到Table表结构包含了很多Syms、Funcs、Files、Objs，进一步结合其暴露的Methods不难看出，我们可以轻松地在pc、file、lineno、func之间进行转换。
+
+但是调用栈是什么？调用栈是一系列方法调用的caller-callee关系，这个Table里面可没有，它只是用来辅助查询的。
+
+- 如果要获得调用栈，首先你要能拿到goroutine当前的pc值，这个go runtime肯定可以拿到，有了pc我们就可以通过gosym.Table找到当前函数名；
+- 然后我们需要知道当前函数调用的返回地址，那就需要通过go runtime获得bp（go里面称之为fp），通过它找到存放返回地址的位置，拿到返回地址；
+- 返回地址绝大多数情况下都是返回到caller对应的函数调用中（除非尾递归优化不返回，但是go编译器不支持尾递归优化，所以忽略），将这个返回地址作为pc，去gosym.Table中找对应的函数定义，这样就确定了一个caller；
+- 重复上述过程即可直到符合unwind深度要求。
+
+go标准库`runtime/debug.PrintStack()`就是这么实现的，只是它考虑的更周全，比如打印所有goroutine调用栈需要STW，调用栈信息过大可能超出goroutine栈上限，所以会先切到systemstack再生成调用栈信息，会考虑对gc的影响，等等。
+
+**调试器如何利用.gopclntab实现栈跟踪？**
+
+根据前面对gosym.Table的分析，我们很容易明白，如果只是单纯利用.gopclntab来实现stack unwinding，那是不可能的。而且调试器里面也很难像go runtime那样灵活自如地对goroutine进行控制，如获取goroutine的各种上下文信息。
+
+那调试器应该如何做呢？
+
+研究delve源码发现，在[go-delve/delve@913153e7](https://sourcegraph.com/github.com/go-delve/delve@913153e7ffb62512ccdf850bc37bf3abd3aecc2b/-/blob/pkg/proc/stack.go?subtree=true#L115)及之前的版本中是借助gosym.Table结合DWARF FDE实现的：
+
+- dlv首先利用DWARF .debug_frame section来构建FDE列表；
+
+- dlv获得tracee的pc值，然后遍历FDE列表，找到FDE地址范围覆盖pc的FDE，这个FDE就是对应的函数栈帧了；
+- 然后再找caller，此时dlv再获取bp值，再计算出返回地址位置，再读取返回地址，然后再去遍历FDE列表找地址范围覆盖这个返回地址的FDE，这个FDE对应的就是caller；
+- 重复以上过程即可直到符合unwind深度要求；
+
+找caller-callee关系，dlv是这么处理的，找对应的函数名、源文件位置信息，还是通过gosym.Table来实现的。
+
+其实这里go-delve/delve的实现走了一点“捷径”，本来它可以通过.debug_line来实现pc和file:lineno的转换，也可以通过.debug_frame来确定调用栈。
+
+这里需要明确的是，.gopclntab只记录了纯go程序的pc、源文件位置映射信息，对于cgo程序的部分是不会相关信息的，因为调用的c编译器都不理解有这些东西的，就有一定的局限性。但是生成.debug_line信息，常见编译器都是支持的，是可以更好地解决这里的局限性问题的。
+
+[go-delve/delve@6d405179](https://sourcegraph.com/github.com/go-delve/delve@6d405179/-/blob/pkg/proc/stack.go?subtree=true#L113)，项目核心开发aarzilli解决了这个问题，并在提交记录里特别强调了这个问题：
+
+```bash
+commit 6d40517944d40113469b385784f47efa4a25080d
+Author: aarzilli <alessandro.arzilli@gmail.com>
+Date:   Fri Sep 1 15:30:45 2017 +0200
+
+	proc: replace all uses of gosymtab/gopclntab with uses of debug_line
+    
+    gosymtab and gopclntab only contain informations about go code, linked
+    C code isn't there, we should use debug_line instead to also cover C.
+    
+    Updates #935
+```
+
+ok，这里大家应该明白实现原理了，我们将在下一章调试器开发过程中加以实践。
+
 ### 参考内容
 
 1. How to Fool Analysis Tools, https://tuanlinh.gitbook.io/ctf/golang-function-name-obfuscation-how-to-fool-analysis-tools
