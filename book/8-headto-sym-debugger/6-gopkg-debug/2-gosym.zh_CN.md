@@ -162,7 +162,68 @@ pc => 0x4b86cf  fn => main.init.0.func1 pos => /root/debugger101/testdata/loop2.
 
 #### 运行时栈跟踪
 
-TODO
+go程序出了通过error来传播错误，还有一种方式是通过panic来传播异常，由于panic传播路径可能会比较长，直到它被当前goroutine recover或者进程crash。
+
+当出现panic时，如果我们主动recover了，也会希望通过打印调用栈来追踪问题的源头；如果没有recover导致进程crash了，那么运行时也会打印每个goroutine的调用栈信息。两种方式的目的都是为了帮助我们容易定位panic的源头位置。
+
+下面是一个延时go程序panic时recover并打印调用栈信息的示例：
+
+**main.go**
+
+```go
+1  package main
+2  
+3  import (
+4      "runtime/debug"
+5  )
+6  
+7  func main() {
+8      defer func() {
+9          if e := recover(); e != nil {
+10              debug.PrintStack()
+11          }
+12      }()
+13      f1()
+14  }
+15  
+16  func f1() {
+17      f2()
+18  }
+19  
+20  func f2() {
+21      panic("let's panic")
+22  }
+```
+
+运行`go run main.go`进行测试：
+
+```bash
+$ go run main.go
+
+goroutine 1 [running]:
+runtime/debug.Stack(0xc00001408b, 0x8, 0xc000096df0)
+	/usr/local/go/src/runtime/debug/stack.go:24 +0x9f
+runtime/debug.PrintStack()
+	/usr/local/go/src/runtime/debug/stack.go:16 +0x25
+main.main.func1()
+	/Users/zhangjie/main.go:10 +0x45
+panic(0x1084480, 0x10aff40)
+	/usr/local/go/src/runtime/panic.go:969 +0x175
+main.f2(...)
+	/Users/zhangjie/main.go:21
+main.f1(...)
+	/Users/zhangjie/main.go:17
+main.main()
+	/Users/zhangjie/main.go:13 +0x5d
+```
+
+上述调用栈信息如何看呢：
+
+- 首先从上往下看，runtime/debug.Stack->runtime/debug.PrintStack->main.main.func1，这里是panic被recover的位置；
+- 继续往下看，可以看到panic在何处生成的，panic->main.f2，注意到这个函数第21行调用了panic方法，找到panic发生的位置了；
+- 调用栈剩下的就没有必要看了；
+
+前面我们不止一次提到go运行时调用栈信息是基于.pclntab构建出来的，but how？
 
 ### 参考内容
 
