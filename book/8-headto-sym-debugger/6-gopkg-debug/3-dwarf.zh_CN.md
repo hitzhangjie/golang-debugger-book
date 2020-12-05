@@ -1,5 +1,31 @@
 ## pkg debug/dwarf 应用
 
+### 数据类型及关系
+
+标准库提供了package `debug/dwarf` 来读取go工具链为外部调试器生成的一些DWARF数据，如.debug_info、.debug_line等等。
+
+注意go生成DWARF调试信息时，可能会考虑减少go binary尺寸，所以会对DWARF信息进行压缩后，再存储到不同的section中，比如开启压缩前，描述types、variables、function定义的未压缩的.debug_info数据，开启压缩压缩后的数据将被保存到.zdebug_info中，其他几个调试用section类似。在读取调试信息需要注意一下。
+
+package debug/dwarf中的相关重要数据结构，如下图所示：
+
+![image-20201206022523363](assets/image-20201206022523363.png)
+
+当我们打开了一个elf.File之后，便可以读取DWARF数据，当我们调用elf.File.Data()时便可以返回读取、解析后的DWARF数据，接下来便是在此基础上进一步读取DWARF中的各类信息，以及与对源码的理解结合起来。
+
+### 常用操作及示例
+
+#### 打开一个elf文件
+
+#### 读取dwarf数据
+
+#### 读取编译单元信息
+
+#### 读取行号表信息
+
+#### 读取调用栈信息
+
+#### 读取符号信息表
+
 Dwarf v2 aims to solve how to represent the debugging information of all programming languages, there’s too much to introduce it. Dwarf debugging information may be generated and stored into many debug sections, but in package debug/dwarf, only the following debug sections are handled:
 
 1)    .debug_abbrev
