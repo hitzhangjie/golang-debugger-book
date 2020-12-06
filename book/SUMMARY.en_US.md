@@ -49,7 +49,7 @@
   * [8.5 Loading](8-headto-sym-debugger/5-loading.md)
   * [8.6 Go stdlib debug/\*](8-headto-sym-debugger/6-gopkg-debug/README.md)
     * [8.6.1 debug/elf](8-headto-sym-debugger/6-gopkg-debug/1-elf.md)
-    * [8.6.2 debug/gosym](8-headto-sym-deubgger/6-gopkg-debug/2-gosym.md)
+    * [8.6.2 debug/gosym](8-headto-sym-debugger/6-gopkg-debug/2-gosym.md)
     * [8.6.3 debug/dwarf](8-headto-sym-debugger/6-gopkg-debug/3-dwarf.md)
   * [8.7 Headto DWARF](8-headto-sym-debugger/7-headto-dwarf/README.md)
 * [9 Develop Symbolic Level Debugger](9-develop-sym-debugger/README.md)
