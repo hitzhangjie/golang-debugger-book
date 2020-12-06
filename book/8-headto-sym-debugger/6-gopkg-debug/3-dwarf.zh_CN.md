@@ -14,9 +14,40 @@ package debug/dwarf中的相关重要数据结构，如下图所示：
 
 ### 常用操作及示例
 
-#### 打开一个elf文件
+#### 读取DWARF数据
 
-#### 读取dwarf数据
+读取DWARF数据之前，首先要打开elf文件，然后再读取DWARF相关的多个sections并解析，索性后面两步操作go标准库已经帮我们实现了，并且考虑了DWARF数据压缩、解压缩的问题。
+
+下面的程序打开一个elf文件并返回解析后的DWARF数据：
+
+```go
+import (
+    "debug/elf"
+     "fmt"
+)
+func main() {
+	if len(os.Args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: go run main.go <prog>")
+		os.Exit(1)
+	}
+	prog := os.Args[1]
+
+	// open elf
+	file, err := elf.Open(prog)
+	if err != nil {
+		panic(err)
+	}
+    
+    // dwarf调试信息遍历
+	dw, err := file.DWARF()
+	if err != nil {
+		panic(err)
+	}
+    fmt.Println("read dwarf ok")
+}
+```
+
+运行测试go run main.go ../testdata/loop2`，程序只是简单地打印一行读取成功的信息，在此基础上我们将实现DWARF数据中各类信息的读取。
 
 #### 读取编译单元信息
 
