@@ -202,7 +202,7 @@ type CompileUnit struct {
 
 var compileUnits = []*CompileUnit{}
 
-func parseDebugInfo(dw *dwarf.Data) error {
+func parseDwarf(dw *dwarf.Data) error {
 	rd := dw.Reader()
 
 	var curCompileUnit *CompileUnit
@@ -330,9 +330,74 @@ attr: Location [145 160 127] ClassExprLoc
 
 #### 读取行号表信息
 
+每个编译单元CompileUnit都有自己的行号表信息，当我们从DWARF数据中读取出一个tag类型为DW_TAG_compile_unit的DIE时，就可以尝试去行表.debug_line/.zdebug_line中读取行号表信息了。这里debug/dwarf也提供了对应的实现，dwarf.LineReader每次从指定编译单元中读取一行行表信息dwarf.LineEntry。
 
+后续基于行表数据可以轻松实现源文件位置和虚拟地址之间的转换。
+
+我们先实现行表的读取，只需在此前代码基础上做少许变更即可：
+
+```go
+func main() {
+    ...
+	err = parseDwarf(dw)
+	...
+	pc, err := find("/root/debugger101/testdata/loop2.go", 16)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("found pc: %#x\n", pc)
+}
+
+type CompileUnit struct {
+	Source []string
+	Funcs  []*Function
+	Lines  []*dwarf.LineEntry
+}
+
+func parseDwarf(dw *dwarf.Data) error {}
+	...
+	for idx := 0; ; idx++ {
+        ...
+        
+		if entry.Tag == dwarf.TagCompileUnit {
+			lrd, err := dw.LineReader(entry)
+			...
+
+			for {
+				var e dwarf.LineEntry
+				err := lrd.Next(&e)
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					return err
+				}
+				curCompileUnit.Lines = append(curCompileUnit.Lines, &e)
+			}
+		}
+        ...
+    }
+}
+```
+
+我们查找下源文件位置`testdata/loop2.go:16`对应的虚拟地址（当前我们是硬编码的此位置），执行测试`go run main.go ../testdata/loop2`：
+
+```bash
+$ go run main.go ../testdata/loop2
+
+found pc: 0x4b85af
+```
+
+程序正确找到了上述源文件位置对应的虚拟内存地址。
+
+读者朋友可能想问，为什么示例陈谷中不显示出源文件位置对应的函数定义呢？这里涉及到对.debug_frame/.zdebug_frame调用栈信息表的读取、解析。很遗憾go标准库没有对这些sections提供良好的支持，我们要靠自己了。没关系，it's easy!
+
+有了调用栈信息表之后，我们就可以根据每个栈帧覆盖的虚拟内存地址范围，找到pc对应的栈帧，进而确定出对应的是哪个函数定义。
 
 #### 读取调用栈信息
+
+
 
 #### 读取符号信息表
 
