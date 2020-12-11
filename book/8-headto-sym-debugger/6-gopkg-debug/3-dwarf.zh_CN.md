@@ -24,7 +24,7 @@ package debug/dwarf中的相关重要数据结构，如下图所示：
 
 #### 读取DWARF数据
 
-读取DWARF数据之前，首先要打开elf文件，然后再读取DWARF相关的多个sections并解析，索性后面两步操作go标准库已经帮我们实现了，并且考虑了DWARF数据压缩、解压缩的问题。
+首先要打开elf文件，然后再读取DWARF相关的多个section数据并解析，go标准库已经帮我们实现了DWARF数据是否压缩、是否需要解压缩的问题。
 
 下面的程序打开一个elf文件并返回解析后的DWARF数据：
 
@@ -55,7 +55,7 @@ func main() {
 }
 ```
 
-运行测试go run main.go ../testdata/loop2`，程序只是简单地打印一行读取成功的信息，在此基础上我们将实现DWARF数据中各类信息的读取。
+运行测试`go run main.go ../testdata/loop2`，程序只是简单地打印一行读取成功的信息，在此基础上我们将实现DWARF数据中各类信息的读取。
 
 #### 读取编译单元信息
 
