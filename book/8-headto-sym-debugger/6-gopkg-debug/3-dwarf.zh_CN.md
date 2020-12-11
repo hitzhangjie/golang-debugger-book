@@ -2,17 +2,25 @@
 
 ### 数据类型及关系
 
-标准库提供了package `debug/dwarf` 来读取go工具链为外部调试器生成的一些DWARF数据，如.debug_info、.debug_line等等。
+标准库提供了package `debug/dwarf` 来读取go编译工具链生成的DWARF数据，比如.debug_info、.debug_line。
 
-注意go生成DWARF调试信息时，可能会考虑减少go binary尺寸，所以会对DWARF信息进行压缩后，再存储到不同的section中，比如开启压缩前，描述types、variables、function定义的未压缩的.debug_info数据，开启压缩压缩后的数据将被保存到.zdebug_info中，其他几个调试用section类似。在读取调试信息需要注意一下。
+go生成DWARF调试信息时，会对DWARF信息进行压缩再存储到不同的section中，比如描述types、variables、function定义的数据，开启压缩前是存储在.debug_info中，开启压缩后则被存储到.zdebug_info中，描述其他调试信息的section也会做类似处理。
+
+从elf文件中读取调试信息时，需要检查信息是存储在.debug前缀的section中，还是存储在.zdebug前缀的section中，如果是后者需要执行zlib解压操作。`debug/dwarf`提供了部分DWARF信息的读取，内部处理了这部分检测读取哪个section、解压缩逻辑。但是标准库未提供调用栈信息的读取，这部分需要自行实现，因此了解这些信息是必要的。
 
 package debug/dwarf中的相关重要数据结构，如下图所示：
 
 ![image-20201206022523363](assets/image-20201206022523363.png)
 
-当我们打开了一个elf.File之后，便可以读取DWARF数据，当我们调用elf.File.Data()时便可以返回读取、解析后的DWARF数据，接下来便是在此基础上进一步读取DWARF中的各类信息，以及与对源码的理解结合起来。
+当我们打开了一个elf.File之后，便可以读取DWARF数据，当我们调用elf.File.Data()时便可以返回读取、解析后的DWARF数据（即类图中Data），接下来便是在此基础上进一步读取DWARF中的各类信息，以及与对源码的理解结合起来。
+
+通过Data可以获取一个读取解析.debug_info（或.zdebug_info）section的Reader，通过它可以遍历DIE（即类图中Entry），每个DIE都由一个Tag和一系列Attr构成。
+
+当我们读取到一个Tag类型为DW_TAG_compile_unit的DIE时，表明当前是一个编译单元，每个编译单元都有一个自己的行号表，通过Data即该DIE，可以得到一个读取.debug_line（或.zdebug_line）的LineReader，通过它可以读取行号表中的记录（即类图中LineEntry），它记录了虚拟内存地址、源文件名、行号、列号等的一些对应关系。
 
 ### 常用操作及示例
+
+前面大致介绍了标准库提供的支持、局限性，以及标准库的大致使用方式，接下来我们提供几个示例来演示如何读取并解析DWARF调试信息，如何从中提取我们关心的内容。
 
 #### 读取DWARF数据
 
@@ -391,7 +399,7 @@ found pc: 0x4b85af
 
 程序正确找到了上述源文件位置对应的虚拟内存地址。
 
-读者朋友可能想问，为什么示例陈谷中不显示出源文件位置对应的函数定义呢？这里涉及到对.debug_frame/.zdebug_frame调用栈信息表的读取、解析。很遗憾go标准库没有对这些sections提供良好的支持，我们要靠自己了。没关系，it's easy!
+读者朋友可能想问，为什么示例程序中不显示出源文件位置对应的函数定义呢？这里涉及到对.debug_frame/.zdebug_frame调用栈信息表的读取、解析。很遗憾go标准库没有对这些sections提供良好的支持，我们要靠自己了。没关系，it's easy!
 
 有了调用栈信息表之后，我们就可以根据每个栈帧覆盖的虚拟内存地址范围，找到pc对应的栈帧，进而确定出对应的是哪个函数定义。
 
