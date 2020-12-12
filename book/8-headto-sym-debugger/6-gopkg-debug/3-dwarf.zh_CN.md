@@ -407,90 +407,11 @@ found pc: 0x4b85af
 
 #### 读取调用栈信息
 
-elf文件中，调用栈信息表存储在.debug_frame或.zdebug_frame中，后者启用了zlib方案，我们先尝试数据的读取。
+elf文件中，调用栈信息表存储在.debug_frame或.zdebug_frame中，go标准库`debug/dwarf`不支持这部分信息的解析，为了避免大家对标准库实现产生理解上的偏差，我们将在《挺近DWARF小节》中详细描述如何读取、解析、应用调用栈信息。
 
 
 
-#### 读取符号信息表
-
-Dwarf v2 aims to solve how to represent the debugging information of all programming languages, there’s too much to introduce it. Dwarf debugging information may be generated and stored into many debug sections, but in package debug/dwarf, only the following debug sections are handled:
-
-1)    .debug_abbrev
-
-2)    .debug_info
-
-3)    .debug_str
-
-4)    .debug_line
-
-5)    .debug_ranges
-
-6)    .debug_types
-
- 
-
-1)    const.go, it defines the constansts defined in Dwarf, including constants for tags, attributes, operation, etc.
-
-2)    entry.go, it defines a DIE parser, type *dwarf.Entry* abstracts a DIE entry including 3 important members, Tag(uint32), Field{Attr,Val,Class}, Children(bool).
-
-It defines a DIE Reader for traversing the .debug_info which is constructed as a DIE tree via:
-
-```go
-f, e := elf.Open(elf)
-dbg, e := f.DWARF()
-r := dbg.Reader()
-
-for {
-	entry, err := r.Next()
-
-	if err != nil || entry == nil {
-		break
-	}
-
-	//do something with this DIE*
-	//…
-}
-```
-
-3)    line.go, each single compilation unit has a .debug_line section, it contains a sequence of LineEntry structures. In line.go, a LineReader is defined for reading this sequence of LineEntry structures.
-
-`func (d \*dwarf.Data) LineReader(cu \*Entry) (\*LineReader, error)`, the argument must be a DIE entry with tag TagCompileUnit, i.e., we can only get the LineReader from the DIE of compilation unit.
-
-```go
-f, e := elf.Open(elf)
-dbg, e := f.DWARF()
-r := dbg.Reader()
-
-for {
-	entry, _ := r.Next()
-	if err != nil || entry == nil {
-		break;
-	}
-
-	// read the line table of this DIE
-
-	lr, _ := dbg.LineReader(entry)
-	if lr != nil {
-		le := dwarf.LineEntry{}
-		for {
-			e := lr.Next(&le)
-			if e == io.EOF {
-				break;
-			}
-		}
-	}
-}
-```
-
-4)    type.go, Dwarf type information structures.
-
-5)    typeunit.go, parse the type units stored in a Dwarf v4 .debug_types section, each type unit defines a single primary type and an 8-byte signature. Other sections may then use formRefSig8 to refer to the type.
-
-6)    unit.go, Dwarf debug info is split into a sequence of compilation units, each unit has its own abbreviation table and address size.
-
-### 
-
-参考内容：
+### 参考内容
 
 1. How to Fool Analysis Tools, https://tuanlinh.gitbook.io/ctf/golang-function-name-obfuscation-how-to-fool-analysis-tools
 
