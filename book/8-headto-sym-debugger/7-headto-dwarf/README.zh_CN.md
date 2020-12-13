@@ -1,24 +1,28 @@
-### 挺近DWARF
+## 挺近DWARF
+
+### debug/dwarf
 
 在前面的小节中，我们介绍了go标准库`debug/elf`对读取elf文件的支持，介绍了`debug/gosym`对运行时行号表信息的解析应用，还介绍了`debug/dwarf`对DWARF调试信息的解析应用。
 
-我们有提到`debug/dwarf`只支持部分调试信息sections的解析，包括（省略前缀）：
+我们有提到`debug/dwarf`只支持部分调试信息的解析，包括：
 
-- abbrev，描述一些缩写信息，info section中会引用；
+- .debug_abbrev，描述一些缩写信息，info section中会引用；
 
-- info，描述编译单元、类型、变量、函数；
+- .debug_info，描述编译单元、类型、变量、函数；
 
   > types section也可以保存类型描述信息，何时需将类型描述放在types section？
   >
   > 有些情况下，一个类型在多个编译单元中出现，可能会造成多个编译单元重复生成类型对应的调试信息，导致二进制文件尺寸偏大，此时可以考虑将该类型的描述从Info section转移到types section，利用链接器COMPAT模式，减少文件尺寸。
 
-- str，描述字符串表，info section中会引用；
+- .debug_str，描述字符串表，info section中会引用；
 
-- line，描述行号表信息；
+- .debug_line，描述行号表信息；
 
-- ranges，查询表，用于在pc和编译单元之间映射；
+- .debug_ranges，查询表，用于在pc和编译单元之间映射；
 
-这点可以从源码 `debug/elf/file.go` 中看出来：
+关于支持哪些调试信息，哪些不支持，这点我们可以从下面的源码看出来。
+
+**debug/elf/file.go**
 
 ```go
 func (f *File) DWARF() (*dwarf.Data, error) {
@@ -59,11 +63,29 @@ func (f *File) DWARF() (*dwarf.Data, error) {
 }
 ```
 
-这就有点尴尬了，一方面 `debug/dwarf` 确实实现了部分调试信息的解析，可以拿来复用，另一方面，调试器又不止是依赖这点调试信息，还需要其他信息的支持，如调用栈信息，这部分还得单独编码实现。
+ `debug/dwarf` 确实实现了部分调试信息的解析，可以拿来复用，但另一方面，调试器又不只是依赖这点调试信息，还需要其他信息的支持，如调用栈信息.debug_frame、位置列表信息.debug_loc等等，这些都需要单独编码实现了。
 
-`go-delve/delve` 中是如何处理DWARF调试信息的，没有使用标准库吗？来看点历史，我们使用命令 `git log -S "DWARF()"`来搜索下提交记录，找到几条关键信息：
+### cmd/internal/dwarf
 
-1. 最开始也是使用的标准库 `debug/dwarf`
+除了debug/dwarf这个package，go编译工具链`src/cmd/internal/dwarf`中也包含了一部分DWARF相关的信息：
+
+- dwarf_defs.go，定义了DWARF中的一些常量，DW_TAG类型、DW_CLS类型、DW_AT属性类型、DW_FORM编码形式、DW_OP操作指令、DW_ATE属性编码类型、DW_ACCESS访问修饰、DW_VIS可见性修饰、DW_VIRTUALITY虚函数修饰、DW_LANG语言类型（go是22）、DW_INL内联类型、DW_ORD按行按列主序、DW_LNS行号表操作指令、DW_MACINFO宏定义操作、DW_CFA调用栈信息表操作，等等；
+
+  这些定义在`go-delve/delve`中被归类到了不同的package中，这样更清晰一点。
+
+- dwarf.go，定义了一些生成、编码DWARF调试信息的公共代码，DWARF调试信息的生成是由编译器和链接器完成的，dwarf.go中的公共代码在编译器、链接器中都有使用。
+
+  该文件中给出了一些对调试器开发很有帮助的信息，比如缩写表中定义了描述不同的程序构造对应的属性列表，如描述一个subprogram需要哪些属性信息。
+
+即使这里的代码比较有意义，我们也很难复用，因为它是放在internal下，专门给go编译工具链使用的。即便要用，也要copy、paste再改造。
+
+## go-delve/delve
+
+### dwarf解析变化
+
+以流行的go调试器`go-delve/delve`为例，它是如何处理DWARF调试信息的呢？有没有使用标准库呢？为了求证这几点，可以在git仓库下执行 `git log -S "DWARF()"`来搜索下提交记录，找到几条关键信息：
+
+1. delve早期也是使用的标准库 `debug/dwarf`来实现调试信息解析，那个时候对go、delve都是一个相对早期的阶段，各方面都还不很成熟。
 
    ```bash
    commit f1e5a70a4b58e9caa4b40a0493bfb286e99789b9
@@ -77,7 +99,7 @@ func (f *File) DWARF() (*dwarf.Data, error) {
    1.4 are now captured in /vendor/debug/*.
    ```
 
-2. 后面发现 `debug/dwarf`有些问题，使用`x/debug/dwarf`予以替换
+2. delve开发者发现某些类型信息解析， `debug/dwarf`有些问题，使用`x/debug/dwarf`予以了替换，临时解决了这个问题。现在再看`x/debug/dwarf`这个package，我们发现之前的一些源文件不见了，因为它已经被迁移到go源码树中。
 
    ```bash
    commit 54f1c9b3d40f606f7574c971187e7331699f378e
@@ -96,7 +118,7 @@ func (f *File) DWARF() (*dwarf.Data, error) {
         Fixes #356 and #293
    ```
 
-3. 后面 `debug/dwarf`修复了之前的问题，又替换回来了
+3. 后面 `debug/dwarf`修复了之前遇到的问题，delve又从`x/debug/dwarf`替换回了`debug/dwarf`，与go标准库保持同步是合理的。
 
    ```bash
    commit 1e3ff49610690e9890a669c95d903184baae1f4f
@@ -110,7 +132,7 @@ func (f *File) DWARF() (*dwarf.Data, error) {
        remove x/debug/dwarf from vendoring.
    ```
 
-4. 有自己实现对debug_line的解析，并于标准库对比了结果
+4. 后续delve自己实现对debug_line的解析，并与标准库对比了处理结果，发现处理的功能正确性上与标准库已经一致了。为什么要自己实现呢？我理解一方面是go、delve都在快速演进，go官方团队也没有在调试方面同步下那么多功夫。另外不可避免地delve团队要自己解析一部分调试信息，把.debug_line连同其他部分全部重写，使得delve对调试信息的解析具备更好的功能完备性。
 
    ```bash
    commit 3f9875e272cbaae7e507537346757ac4db6d25fa
@@ -128,26 +150,66 @@ func (f *File) DWARF() (*dwarf.Data, error) {
        ...
    ```
 
-   为什么要自己实现呢？
+总之标准库对调试信息的读取解析支持有限，go、delve都在快速演进中，很明显delve对DWARF的需求是明显比go本身强烈的。delve一开始使用标准库，后面发现有局限性，于是开始自己重写DWARF调试信息的读取解析，当然这个重写的过程中，也有借鉴go标准库中的实现。
 
-5. 使用debug_line完全替换掉gosymtab/gopclntab
+### dwarf解析介绍
 
-   ```bash
-   commit 6d40517944d40113469b385784f47efa4a25080d
-   Author: aarzilli <alessandro.arzilli@gmail.com>
-   Date:   Fri Sep 1 15:30:45 2017 +0200
-   
-       proc: replace all uses of gosymtab/gopclntab with uses of debug_line
-       
-       gosymtab and gopclntab only contain informations about go code, linked
-       C code isn't there, we should use debug_line instead to also cover C.
-       
-       Updates #935
-   ```
+go-delve/delve里面dwarf操作相关的部分主要是在package `pkg/dwarf`中。
 
-6. ....
+- pkg/dwarf/util
 
-anyway，总之就是标准库实现比较鸡肋，并且标准库也是在演进中的，delve也是并发的开发中的，delve对dwarf的需求是明显走在go本身前面的。delve一开始有使用标准库，后面发现有局限性，开始参考了标准库的部分实现，然后开始自己写dwarf解析这块。并慢慢把需要用到的所有DWARF sections都实现了解析。
+  其中有些代码是从go标准库里面copy过来修改的，比如`pkg/dwarf/util/buf.go`大部分是标准库代码，只做了一点微调、加减了几个方法。
 
-后面我们将参考go-delve/delve中的实现也实现自己的DWARF解析部分，并用它来辅助我们后续的调试器开发过程。
+  `pkg/dwarf/util/util.go`则增加了几个工具函数，用来读取变长编码的数值，以及读取字符串和编译单元开头的DWARF信息。
+
+- pkg/dwarf/dwarfbuilder
+
+  这个package下的代码提供了一些工具类、工具函数来快速对DWARF信息进行编码，比如向.debug_info中增加编译单元、增加函数、增加变量、增加类型。还有就是往.debug_loc中增加LocEntry信息。
+
+  go-delve/delve为什么要提供这样的package实现呢？我认为一方面go标准库没有提供这方面信息，对如何使用DWARF调试信息来完善地描述go类型系统等等也没有快速地跟进，go-delve/delve这里应该也是做了一部分这方面的探索，然后和go开发团队来协调共建的方式。最后go编译工具链团队可能采纳了这里的某些描述方法。
+
+- pkg/dwarf/frame
+
+  这个package下提供了对.debug_frame、.zdebug_frame sections的解析，每个编译单元都有自己的.debug_frame，最后链接器将其合并成一个。对每个编译单元来说，都是先编码CIE信息，然后再跟着一系列的FDE信息。然后再是下一个编译单元的CIE、FDEs。因此对这部分信息的解析，使用一个状态机来解析是比较自然的做法。
+
+- pkg/dwarf/line
+
+  这个package下提供了对.debug_line的解析，之所以自己实现，不用go标准库中的debug/gosym，前面已经提过很多次了，标准库实现只支持纯go代码，cgo代码不支持，缺失了这部分行表数据。之所以也不用标准库debug/dwarf，我认为也是delve的一种实现策略，相对来说，保证了delve调试器实现DWARF解析的完整性。
+
+- pkg/dwarf/godwarf
+
+  这里的代码，和go标准库debug/dwarf对比，有很多相似的地方，应该是在标准库基础上修改的。它主要是实现了DWARF信息的读取，并且支持ZLIB解压缩。以及为了支持DWARF v5中新增的.debug_addr增加的代码，.debug_addr有助于简化现有的重定位操作。还提供了对DWARF标准中规定的一些类型信息的读取。也支持.debug_info中DIE的读取解析，为了更方便使用，它将其组织成一棵DIE Tree的形式。
+
+- pkg/dwarf/loclist
+
+  同一个对象在其生命周期内，其位置有可能是会发生变化的，位置列表信息就是用来描述这种情况的。DWARF v2~v4都有这方面的描述，DWARF v5也有改进。
+
+- pkg/dwarf/op
+
+  DWARF中定义了很多的操作指令，这个package主要是实现这些指令的操作。
+
+- pkg/dwarf/reader
+
+  在标准库dwarf.Reader上的进一步封装，以实现更加方便的DWARF信息访问。
+
+- pkg/dwarf/util
+
+  提供了一些DWARF数据解析需要用到的buffer实现，以及读取一些LEB128编解码相关的工具函数，还有读取字符串标中以null结尾的字符串的工具函数。
+
+## 本文小结
+
+后面我们将参考go-delve/delve中的实现来实现自己的DWARF解析部分，并用它来辅助我们后续的调试器开发过程。实际上，这部分代码与DWARF调试信息标准息息相关，如读者能够结合前面介绍的DWARF标准的内容或者手边常备DWARF v4/v5调试信息标准来阅读，理解起来会更加顺利、透彻。
+
+由于这部分代码量会偏多，实现起来也略显枯燥，我们可能会借用go-delve/delve中的部分解析代码，并删减关系不是很紧密的代码（如与ELF无关的PE、Macho文件操作代码），然后结合标准进行进一步的详细解释、示例代码演示。
+
+这样一来可节省笔者时间，保证全书整体进度，不至于在过多的细节上耽搁太久，也好以更快的进度完成全书并勘误。尽管如此，沉淀知识使每位读者具备调试器开发的能力，是我写作这本书始终不变的初衷。关于《挺近DWARF》的介绍部分，就介绍到这里。
+
+忍不住回头看下，我们一起走过的路：
+
+- 我们一起浏览了DWARF调试信息标准，大致掌握了其描述代码和数据的方式；
+- 我们一起实现了指令级调试器，了解了调试的底层工作原理；
+- 我们了解了go语言调试相关的部分源码，了解了大致的历史；
+- 我们还以业界流行的go-delve/delve调试器作为参考，了解了其对dwarf的运用；
+
+读者朋友能够坚持到现在，相信已经没什么可畏惧的了。下面我们将进一步走进DWARF，认识DWARF中精心编码的源码信息，也一窥DWARF标准委员会高屋建瓴的抽象建模能力。
 
