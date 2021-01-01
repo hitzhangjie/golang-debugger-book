@@ -62,5 +62,6 @@
   * [9.7 goroutines & threads](9-develop-sym-debugger/7-goroutines.md)
   * [9.x Stdlib](9-develop-sym-debugger/x-gopkg.md)
   * [9.x More...](9-develop-sym-debugger/x-more.md)
-* [10 Appendix](10-appendix/README.md)
-  * [10.1 Go Programme Startup](10-appendix/1-go-programme-start.md)
+* [10 Thanks](10-thanks.md)
+* [11 Appendix](11-appendix/README.md)
+  * [11.1 Go Programme Startup](11-appendix/1-go-programme-start.md)
