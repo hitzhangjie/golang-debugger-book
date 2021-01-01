@@ -2,11 +2,9 @@
 
 ## 1.1 About
 
-Hi, I am a developer. I am curious about something unknown. Full of curiousity makes me excited. 
+Hi, my name is Zhang Jie. I am currently working at Tencent (Shenzhen) Technology Co., Ltd. as a senior back-end engineer. 
 
-In 2018, I began learning go programming, then I noticed [delve](https://github.com/go-delve/delve), a really good debugger. **delve** is opensource, I am curious about the mechanism it works, so I try to read its code. It's really an exciting journey. I see the perfect thinkings and ideas behind DWARF to blueprint a programming language, I see the relations between CPU, Operating System, building toolchains, ELF and DWARF, it even improves my understanding of design internals of go programming language.
-
-I think it's a good entry to inspect the secrets of computer technologies. I want to share the journey of learning developing a golang debugger.
+During the work at Tencent, I successively engaged in the construction of backend development at Now, QQ Kandian, and information flow content processing system. As PMC, I successively participated in the design and development of microservice framework goneat and trpc. And I was also responsible for the formulation of company-level code specification and code review.
 
 ## 1.2 Introduction
 
@@ -16,22 +14,15 @@ In this book, I will start from a debugger's perspective to go through the journ
 
 I think this book will be interesting and helpful. That makes me excited.
 
-## 1.3 Plan
+## 1.3 Samples
 
-- ~ - 2019.10.06~2019.10.13 debugging information format: Dwarf v4
-- ~ - 2019.10.14~2019.10.20 based on go v1.12.6+linux, finish developing instruction level debugger
-- ~ - 2019.10.21~2019.10.27 be familiar with the go standard library: debug、elf
-- ~ - 2019.10.28~2019.11.03 based on go v1.12.6+linux，finish developing symbolic level debugger
-    - parsing ELF
-    - parsing .debug_info
-    - parsing .debug_line
-    - ...
+The project "**golang-debugger-book**" also provides a repository "**golang-debugger-lessons**" which contains sample code. Readers can view the sample code according to the chapter correspondence. The directory "**0-godbg**" provides a relatively complete implementation of a symbol-level debugger for go language.
 
->Remark: 
->
->This plan started in 2018.7, but it is held on for nearly one year...my bad.
->
->Hope I can finish this book in 2019!
+Of course, there have been some debuggers for the Go language, such as gdb, dlv, etc. To develop a debugger from scratch is not just to develop a new debugger, but to use the debugger as an entry point, that could help us integrate relevant knowledge. The technical points here involve the go language itself (type system, goroutine scheduling), the cooperation between the compiler and the debugger (DWARF), the operating system kernel (virtual memory, task scheduling, system calls, instructions patching) and processor-related instructions, etc.
+
+In short, I hope to start with the development of a go language debugger as an entry point to help beginners quickly get started with go language development, and gradually understand the mechanisms behind operating system, compiler, debugger, and processor, so we could deepen the overall understanding of the computer system.
+
+I hope that this book and related samples can be smoothly completed. It can be regarded as a way for me to hone my temperament and improve myself. It would be great if it can really help everyone.
 
 ## 1.4 Contact
 

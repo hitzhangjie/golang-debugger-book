@@ -10,6 +10,16 @@ To develop a symbolic debugger need to combine the knowledge of CPU instruction 
 
 I think it's very helpful, So I am really excited to write this documents.
 
+## Samples
+
+The project "**golang-debugger-book**" also provides a repository "**golang-debugger-lessons**" which contains sample code. Readers can view the sample code according to the chapter correspondence. The directory "**0-godbg**" provides a relatively complete implementation of a symbol-level debugger for go language.
+
+Of course, there have been some debuggers for the Go language, such as gdb, dlv, etc. To develop a debugger from scratch is not just to develop a new debugger, but to use the debugger as an entry point, that could help us integrate relevant knowledge. The technical points here involve the go language itself (type system, goroutine scheduling), the cooperation between the compiler and the debugger (DWARF), the operating system kernel (virtual memory, task scheduling, system calls, instructions patching) and processor-related instructions, etc.
+
+In short, I hope to start with the development of a go language debugger as an entry point to help beginners quickly get started with go language development, and gradually understand the mechanisms behind operating system, compiler, debugger, and processor, so we could deepen the overall understanding of the computer system.
+
+I hope that this book and related samples can be smoothly completed. It can be regarded as a way for me to hone my temperament and improve myself. It would be great if it can really help everyone.
+
 ## Read the Book
 
 1. clone the repository
