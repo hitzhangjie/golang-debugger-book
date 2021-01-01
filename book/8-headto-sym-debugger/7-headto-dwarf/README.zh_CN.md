@@ -69,7 +69,7 @@ func (f *File) DWARF() (*dwarf.Data, error) {
 
 除了debug/dwarf这个package，go编译工具链`src/cmd/internal/dwarf`中也包含了一部分DWARF相关的信息：
 
-- dwarf_defs.go，定义了DWARF中的一些常量，DW_TAG类型、DW_CLS类型、DW_AT属性类型、DW_FORM编码形式、DW_OP操作指令、DW_ATE属性编码类型、DW_ACCESS访问修饰、DW_VIS可见性修饰、DW_VIRTUALITY虚函数修饰、DW_LANG语言类型（go是22）、DW_INL内联类型、DW_ORD按行按列主序、DW_LNS行号表操作指令、DW_MACINFO宏定义操作、DW_CFA调用栈信息表操作，等等；
+- dwarf_defs.go，定义了DWARF中的一些常量，DW_TAG类型、DW_CLS类型、DW_AT属性类型、DW_FORM编码形式、DW_OP操作指令、DW_ATE属性编码类型、DW_ACCESS访问修饰、DW_VIS可见性修饰、DW_VIRTUALITY虚函数修饰、DW_LANG语言类型（go是22）、DW_INL内联类型、DW_ORD按行（列）主序、DW_LNS行号表操作指令、DW_MACINFO宏定义操作、DW_CFA调用栈信息表操作，等等；
 
   这些定义在`go-delve/delve`中被归类到了不同的package中，这样更清晰一点。
 
