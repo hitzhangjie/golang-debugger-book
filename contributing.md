@@ -13,20 +13,6 @@ In a word, we want to use developping a symbolic golang debugger as a chance to 
 
 Thanks to the contributors of gdb, delve, DWARF, etc. I learned a lot from them. Now I want to share the knowledge.
 
-# project plan
-
-- ~ - 2018.11.30 write the debugger on Linux
-- ~ - 2018.12.31 book chapter: dwarf
-- ~ - 2019.01.31 book chapter: develop golang debugger from scratch
-- ~ - 2019.02.28 book chapter: from debugger's view, understand golang type system
-- ~ - 2019.03.31 book chapter: from debugger's view, understand golang runtime scheduler
-- ~ - 2019.04.30 book review:
-- ~ - 2019.05.31 book publish: via press or electronic
-
-# suggestions
-
-Please contact me `hit.zhangjie@gmail.com`，if you have any suggestions.
-
 # contribution
 
 Our work will be around with github.com:
@@ -39,4 +25,4 @@ Our work will be around with github.com:
 
 # welcome
 
-I Welcome anyone willing to contribute to this book to integrate the knowledge and share them.
+Welcome you to contribute to this book and share them.
