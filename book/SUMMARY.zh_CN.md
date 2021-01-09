@@ -41,6 +41,7 @@
   * [7.11 打印内存数据](7-develop-inst-debugger/11-pmem.zh_CN.md)
   * [7.12 打印寄存器数据](7-develop-inst-debugger/12-pregs.zh_CN.md)
   * [7.20 跟踪多线程程序](7-develop-inst-debugger/20-bugfix-threads.md)
+  * [7.21 重构程序](7-develop-inst-debugger/21-refactor.md)
   * [7.x More...](7-develop-inst-debugger/x-more.zh_CN.md)
 * [8 挺进符号级调试器](8-headto-sym-debugger/README.zh_CN.md)
   * [8.1 理解ELF文件](8-headto-sym-debugger/1-elf.zh_CN.md)
