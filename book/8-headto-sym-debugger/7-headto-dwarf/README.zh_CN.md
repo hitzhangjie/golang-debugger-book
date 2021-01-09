@@ -12,7 +12,9 @@
 
   > .debug_types section也可以保存类型描述信息，何时需将类型描述放在types section？
   >
-  > 有些情况下，一个类型在多个编译单元中出现，可能会造成多个编译单元重复生成类型对应的调试信息，导致二进制文件尺寸偏大，此时可以考虑将该类型的描述从.debug_info section转移到.debug_types section，并利用链接器COMPAT模式，减少文件尺寸。
+  > 有些情况下，一个类型在多个编译单元中出现，可能会造成多个编译单元重复生成类型对应的调试信息，导致二进制文件尺寸偏大，此时可以考虑将该类型的描述从.debug_info section转移到.debug_types section，并利用COMDAT section+链接器对COMDAT groups的处理，可以减少文件尺寸。
+  >
+  > see https://gcc.gnu.org/wiki/DwarfSeparateTypeInfo
 
 - .debug_str，描述字符串表，info section中会引用；
 
