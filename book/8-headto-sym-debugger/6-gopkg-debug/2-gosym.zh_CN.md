@@ -162,7 +162,7 @@ pc => 0x4b86cf  fn => main.init.0.func1 pos => /root/debugger101/testdata/loop2.
 
 #### 运行时栈跟踪
 
-go程序出了通过error来传播错误，还有一种方式是通过panic来传播异常，由于panic传播路径可能会比较长，直到它被当前goroutine recover或者进程crash。
+go程序除了通过error来传播错误，还有一种方式是通过panic来传播异常，由于panic传播路径可能会比较长，直到它被当前goroutine recover或者进程crash。
 
 当出现panic时，如果我们主动recover了，也会希望通过打印调用栈来追踪问题的源头；如果没有recover导致进程crash了，那么运行时也会打印每个goroutine的调用栈信息。两种方式的目的都是为了帮助我们容易定位panic的源头位置。
 
