@@ -9,13 +9,9 @@ set -e
 printf "\033[0;32mDeploying updates to GitHub...\033[0m\n"
 
 # build the book
-cd book
-rm -rf ./_book
-ln -sf ./1-introduction.zh_CN.md ./README.md
-ln -sf ./SUMMARY.zh_CN.md ./SUMMARY.md
-cd -
+book="book.zh"
 
-gitbook build book $tmpdir
+gitbook build $book $tmpdir
 
 # Go To Public folder
 cd $tmpdir
