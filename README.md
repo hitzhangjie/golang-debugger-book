@@ -1,5 +1,7 @@
 # How to develop a (golang) debugger
 
+You can read this book (Chinese version) here: https://www.hitzhangjie.pro/debugger101.io/ .
+
 ## Introduction
 
 This project aims to introduce how to develop a (golang) debugger, including Operating System's support, how to coordinate work between compiler, linker and debugger, debugging information standard, mapping between machine instruction and source code, etc. 
@@ -20,7 +22,7 @@ In short, I hope to start with the development of a go language debugger as an e
 
 I hope that this book and related samples can be smoothly completed. It can be regarded as a way for me to hone my temperament and improve myself. It would be great if it can really help everyone.
 
-## Read the Book
+## Read the Book locally
 
 1. clone the repository
 ```bash
