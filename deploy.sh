@@ -1,7 +1,7 @@
 #!/bin/sh
 
 deploy=https://github.com/hitzhangjie/debugger101.io
-tmpdir=debugger101.io
+tmpdir=/tmp/debugger101.io
 
 # If a command fails then the deploy stops
 set -e
@@ -11,12 +11,15 @@ printf "\033[0;32mDeploying updates to GitHub...\033[0m\n"
 # build the book
 book="book.zh"
 
-gitbook build $book $tmpdir
+git clone $deploy $tmpdir
 
-# Go To Public folder
+gitbook build $book tmpdir
+cp -r tmpdir/* $tmpdir/
+rm -rf tmpdir
+
+# go to publishdir and commit
 cd $tmpdir
 
-# Add changes to git.
 git add .
 
 # Commit changes.
@@ -30,3 +33,5 @@ git commit -m "$msg"
 git push -f -u origin master
 
 cd -
+
+rm -rf $tmpdir
