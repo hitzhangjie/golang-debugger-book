@@ -37,7 +37,7 @@
     * [7.6.2 debug/gosym](7-headto-sym-debugger/6-gopkg-debug/2-gosym.md)
     * [7.6.3 debug/dwarf](7-headto-sym-debugger/6-gopkg-debug/3-dwarf.md)
   * [7.7 挺进DWARF](7-headto-sym-debugger/7-headto-dwarf/README.md)
-* * [8 调试信息格式: DWARF](8-dwarf/README.md)
+* [8 调试信息标准: DWARF](8-dwarf/README.md)
   * [8.1 发展历史](8-dwarf/1-history.md)
   * [8.2 DWARF结构](8-dwarf/2-structure.md)
   * [8.3 调试信息条目：DIE](8-dwarf/3-die-readme.md)
