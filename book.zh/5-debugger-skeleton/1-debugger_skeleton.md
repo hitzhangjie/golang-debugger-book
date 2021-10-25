@@ -82,9 +82,18 @@
 
 #### 调试命令管理
 
-[spf13/cobra](https://github.com/spf13/cobra)是一个开源的命令管理框架，它支持快速添加cmd，支持为cmd添加subcmd，支持帮助信息汇总展示，支持POSIX风格的参数解析，支持常见数据类型的参数解析，支持为命令圈定必要参数，支持生成shell自动补全脚本，等等。
+[spf13/cobra](https://github.com/spf13/cobra)是一个基于golang的开源的命令行程序开发框架，它具有如下特点：
 
-cobra是一个非常优秀的命令管理框架，在诸多大型开源项目中得以应用，如kubernetes、hugo、github-cli gh，等等。在我的个人项目中，也有大量应用cobra来对命令进行管理。
+- 支持快速添加cmd；
+- 支持为指定cmd添加subcmd；
+- 支持帮助信息汇总展示；
+- 支持POSIX风格的参数解析；
+- 支持常见数据类型的参数解析；
+- 支持为cmd指定必要参数；
+- 支持生成shell自动补全脚本；
+- 等等；
+
+可以说，cobra是一个非常优秀的命令行程序开发框架，在诸多大型开源项目中得以应用，如kubernetes、hugo、github-cli gh，等等。在我的个人项目中，也有不少是采用了cobra来对命令、子命令进行管理。
 
 使用cobra对调试命令进行管理，将给我们带来很大的便利。对于`godbg exec <proc>`、`godbg attach <pid>`类似的命令及选项管理，cobra绰绰有余，使用默认的设置就可以提供很好的支持。
 
@@ -117,7 +126,7 @@ print : print <variable>，显示变量信息
 frame : frame <n>，选择对应的栈帧
 ```
 
-所以对命令的管理，我们就可以安心地使用cobra来完成，它能满足我们的需求。
+综上不管是调试器启动时的命令，还是调试会话中需要交互式键入的调试命令，都可以安心地使用cobra来完成，cobra能很好地满足我们的开发需求。
 
 #### 输入自动补全
 
@@ -133,12 +142,18 @@ frame : frame <n>，选择对应的栈帧
 
 前面我们有提到，如果要对调试会话中的调试命令进行管理的话，我们更希望通过cobra的方式来管理，并且经过一番思考发现是可行的。如果为了自动补全直接使用go-prompt的话，那我们可能将不得不自己管理这些命令。
 
-或者，我们可以将二者的优点结合起来，[cobra-prompt](https://github.com/stromland/cobra-prompt)就是来解决这个问题的，它将go-prompt和cobra进行了一个比较好的集成，我们既拥有go-prompt的自动补全，也拥有cobra的命令管理，其实实现也很简单，将go-prompt获得的用户输入适当处理后，转给cobra debugRootCmd进行处理就可以。
+或者，我们可以将二者的优点结合起来，[cobra-prompt](https://github.com/stromland/cobra-prompt)就是来解决这个问题的，它将go-prompt和cobra进行了一个比较好的集成，既能利用cobra的命令管理，也能发挥go-prompt的自动补全优势。cobra-prompt的实现原理很简单，将go-prompt获得的用户输入适当处理后，转给cobra debugRootCmd进行处理就可以。
+
+> 本书提供的调试器实现，最初采用了cobra-prompt进行开发，但是由于某些原因，最终使用了liner进行代替，因为cobra-prompt的自动补全功能有时也会干扰调试会话，不一定真的有实质性的帮助。
+>
+> 最后，使用liner读取用户键入的调试命令，并通过cobra的命令管理来执行调试动作。简言之，我们仍然具备自动补全能力，只是放弃了go-prompt似的自动补全方式。
 
 ### 代码实现
 
-我们提供了一个基于UI层、符号层、目标层3层架构的调试器轮廓，实现思路已体现在了本节各部分描述中。
+对于业界主流的调试器实现，一般都会将其分为frontend、backend，二者通过service层进行通信，gdb、delve等等，无一例外。
 
-如果您想体验一下，或者想阅读下代码，您可以在本书配套的示例代码项目[debugger101/golang-debugger-lessons](https://github.com/debugger101/golang-debugger-lessons)中找到，本节对应目录“[0_godbg](https://github.com/debugger101/golang-debugger-lessons/tree/master/0_godbg/godbg)”。
+本书提供的调试器实现，是从普及调试器知识角度出发，因此我们更关注调试器底层逻辑的设计实现，所以我们提供的是一个基于UI层、符号层、目标层3层架构的简易调试器实现，实现思路已体现在了本节各部分描述中。
 
-如您发现有问题，或者有更好的建议，欢迎请在本书项目issues中留言 :) 。
+本书提供的配套的完整版调试器实现的源码地址为[hitzhangjie/godbg](https://github.com/hitzhangjie/godbg)。为了方便大家按照章节循序渐进地学习，本书也提供了按照章节组织、循序渐进地开发调试器的代码示例，其源码地址为[hitzhangjie/golang-debugger-lessons](https://github.com/debugger101/golang-debugger-lessons)。
+
+欢迎读者朋友们下载体验，如您发现有问题，或者有更好的建议，欢迎请在本书项目issues中留言 :) 。
