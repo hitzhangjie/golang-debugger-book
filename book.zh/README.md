@@ -42,6 +42,9 @@ Hi，我是张杰，目前就职于腾讯（深圳）科技有限公司，后台
 
 ## 1.5 联系方式
 
-如果您有任何建议，请邮件联系 `hit.zhangjie@gmail.com`，标题中注明来意`GoDebugger交流`。
+如果您有任何建议，请提[Issues](https://github.com/hitzhangjie/golang-debugger-book/issues)，或邮件联系 `hit.zhangjie@gmail.com`，标题中注明来意`GoDebugger交流`。
 
 希望该书及相关示例，能顺利完成，也算是我磨练心性、自我提高的一种方式，如果能对大家确实起到帮助的作用那是再好不过了。
+
+如果喜欢本书，别忘了 [Star](https://github.com/hitzhangjie/golang-debugger-book) 一下对作者予以支持 :)
+
