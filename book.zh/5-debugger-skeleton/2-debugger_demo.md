@@ -2,13 +2,13 @@
 
 结合前面的思考，我们初步实现了一个调试器的雏形，它大致包含了我们需要的交互能力。后面我们将在此基础上一步步实现指令级调试器、符号级调试器。
 
-我们先来看下godbg的执行效果，这样方便读者了解我们讲解的代码对应着哪一部分。
+先看下godbg的执行效果，然后大致介绍下源码的组织方式，方便读者了解讲解的功能点对应代码的哪一部分，后续新增章节的内容、源码就很容易对应上了。
 
 ### 运行效果
 
-#### 运行效果：godbg help
+#### 启动调试器帮助信息
 
-`godbg help`用于展示调试器的使用帮助，我们可以看到它有几个子命令，attach、core、exec分别对应不同的启动调试的方式，help用于查看godbg及子命令的使用信息。
+`godbg help`用于展示启动调试器时的使用帮助信息。我们可以看到它有几个子命令，attach、core、exec分别对应不同的启动调试器的方式，help用于查看godbg及上述几个调试命令的使用帮助信息。
 
 ```bash
 $ godbg help
@@ -33,9 +33,11 @@ Flags:
 Use "godbg [command] --help" for more information about a command.
 ```
 
-#### 运行效果：godbg>
+#### 调试器调试会话界面
 
 当启动godbg之后，默认会以弹出提示列表的方式来列出调试器支持的命令信息，这个只会在godbg启动时展示一次，期间为了保证调试会话不被污染，在没有用户输入时是不会显示任何提示信息的。
+
+调试器启动成功后，会通过“**godbg>**”来表示当前创建好的调试会话，我们在此调试会话中输入调试命令来完成对应的调试动作。
 
 ![godbg prompt showAtStart](assets/godbg_prompt1.png)
 
@@ -47,9 +49,15 @@ Use "godbg [command] --help" for more information about a command.
 
 ![godbg prompt suggestions](assets/godbg_prompt3.png)
 
-#### 运行效果：godbg> help
+这是关于调试会话界面的运行效果展示。
 
-下面我们在调试器内部运行以下帮助命令，可以看到调试器已经支持了这些命令，并且对这些命令按照功能进行了归类，如断点[breakpoint]相关的有命令break、clear、clearall，代码相关的有list、disass，控制流相关的有next、step、finish，等等。
+> NOTE: 有必要提及的是，当前小节在撰写时是基于cobra-prompt实现的调试器版本进行描述的，在后续开发中，我们移除了cobra-prompt的自动补全方式，转而采用对用户干扰的自动补全方式，文档中的描述暂未来得及更新。
+
+#### 调试会话中帮助信息
+
+调试器调试会话中支持多个调试命令，各调试命令的功能是什么，又如何使用呢？
+
+在调试器内部运行一下帮助命令“**godbg> help**”，就可以列出调试器已经支持的所有命令及其功能说明，并且对这些命令按照功能进行了归类，如断点相关的命令break、clear、clearall全部放置在了分组“**[breakpoint]**”下面，代码相关的有list、disass全部放置在了“**[code]**”分组下面，控制流相关的有next、step、finish全部放在了“**[ctrlflow]**”下面，还有其他一些调试命令。
 
 ```bash
 godbg> help
@@ -82,7 +90,11 @@ exit            :	结束调试会话
 help [command]  :	Help about any command
 ```
 
-#### 运行效果：godbg> list main.go
+如果想详细了解某一个调试命令如何使用，可以运行“**godbg> help <cmd>**”，如想查看break命令的使用运行“**godbg> help break**”。
+
+
+
+#### 调试会话显示源码信息：godbg> list main.go
 
 ```bash
 godbg> list main.go
