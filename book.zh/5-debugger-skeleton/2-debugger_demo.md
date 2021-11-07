@@ -55,11 +55,11 @@ Use "godbg [command] --help" for more information about a command.
 >
 > 读者也不用过于担心，这点不一致还不至于给上手学习带来负担。后续，我们会基于最新版实现更新这里的交互界面。
 
-#### 调试会话中帮助信息
+#### 会话中显示帮助信息
 
 调试器调试会话中支持多个调试命令，各调试命令的功能是什么，又如何使用呢？
 
-在调试器内部运行一下帮助命令“**godbg> help**”，就可以列出调试器已经支持的所有命令及其功能说明，并且对这些命令按照功能进行了归类，如断点相关的命令break、clear、clearall全部放置在了分组“**[breakpoint]**”下面，代码相关的有list、disass全部放置在了“**[code]**”分组下面，控制流相关的有next、step、finish全部放在了“**[ctrlflow]**”下面，还有其他一些调试命令。
+在调试器内部运行帮助命令“**godbg> help**”，就可以列出调试器已经支持的所有命令及其功能说明，并且对这些命令按照功能进行了归类，如断点相关的命令break、clear、clearall全部放置在了分组“**[breakpoint]**”下面，代码相关的有list、disass全部放置在了“**[code]**”分组下面，控制流相关的有next、step、finish全部放在了“**[ctrlflow]**”下面，还有其他一些调试命令。
 
 ```bash
 godbg> help
@@ -96,7 +96,9 @@ help [command]  :	Help about any command
 
 
 
-#### 调试会话显示源码信息：godbg> list main.go
+#### 会话中执行调试命令
+
+这里以显示源码信息为例，来演示如何在调试会话中执行调试动作。调试会话中执行调试命令“**godbg> list main.go**”来显示main.go中的源码信息。
 
 ```bash
 godbg> list main.go
