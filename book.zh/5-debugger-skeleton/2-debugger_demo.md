@@ -299,3 +299,6 @@ list codes in file
 我们试运行命令`list main.go`发现输出了一行语句，代表命令已经顺利执行了，我们后面会实现真实的展示源代码的功能。
 
 现在，我们大致介绍了godbg的一个相对完整的骨架，相信读者朋友们已经跃跃欲试想进入下一步的开发了 :) 。
+
+> Note：在该调试器demo的完整版实现中，详见 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 中，我们已经彻底移除了cobraprompt，动态提示对调试会话干扰性有点大，在其他的非高频输入的命令行程序中使用更合适。
+
