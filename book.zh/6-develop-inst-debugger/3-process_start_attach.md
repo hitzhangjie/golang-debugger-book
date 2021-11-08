@@ -4,11 +4,11 @@
 
 #### 思考：如何让进程刚启动就停止？
 
-前面我们介绍了如何通过`exec.Command(prog, args...)`启动一个进程，也介绍了如何通过ptrace系统调用attach到一个运行中的进程。
+前面小节介绍了通过`exec.Command(prog, args...)`来启动一个进程，也介绍了通过ptrace系统调用attach一个运行中的进程。读者是否有疑问，这样启动调试的方式能满足调试要求吗？
 
-一个运行中的进程被attached时，其正在运行的指令可能已经越过了我们关心的位置。比如，我们想通过调试追踪下golang程序在执行main.main之前的初始化步骤，但是通过先启动程序再attach的方式无疑就太滞后了，main.main可能早已经开始执行，甚至程序都已经执行结束了。
+当尝试attach一个运行中的进程时，进程正在执行的指令可能早已经越过了我们关心的位置。比如，我们想调试追踪下golang程序在执行main.main之前的初始化步骤，但是通过先启动程序再attach的方式无疑太滞后了，main.main可能早已经开始执行，甚至程序都已经执行结束了。
 
-考虑到这，不禁要思索在“启动进程”小节的实现方式有没有问题。我们如何让进程在启动之后立即停下来等待被调试器调试呢？如果做不到这点，就很难做到理想的调试。
+考虑到这，不禁要思索在“启动进程”小节的实现方式有没有问题。我们如何让进程在启动之后立即停下来等待调试呢？如果做不到这点，就很难做到高效的调试。
 
 #### 内核：启动进程时内核做了什么？
 
@@ -18,16 +18,16 @@ cmd := exec.Command(prog, args...)
 cmd.Run()
 ```
 
-- cmd.Run()首先通过fork创建一个子进程；
-- 然后子进程再通过execve函数加载目标程序、运行；
+- cmd.Run()首先通过`fork`创建一个子进程；
+- 然后子进程再通过`execve`函数加载目标程序、运行；
 
 但是如果只是这样的话，程序会立即执行，可能根本不会给我们预留调试的机会，甚至我们都来不及attach到进程添加断点，程序就执行结束了。
 
-我们需要在cmd对应的目标程序指令在开始执行之前就立即停下来！要做到这一点，就要依靠ptrace操作PTRACE_TRACEME。
+我们需要在cmd对应的目标程序指令在开始执行之前就立即停下来！要做到这一点，就要依靠ptrace操作`PTRACE_TRACEME`。
 
 #### 内核：PTRACE_TRACEME到底做了什么？
 
-先使用c语言写个程序来简单说明下这一过程，为什么用c，因为接下来我们要看些内核代码，加深对PTRACE_TRACEME操作以及进程启动过程的理解，当然这些代码也是c语言实现的。
+先使用c语言写个程序来简单说明下这一过程，在这之后我们还要看些内核代码，加深对PTRACE_TRACEME操作以及进程启动过程的理解，这些代码是c语言实现的，这个简短的示例使用c语言实现也是为了让读者提前联想一下c语言的语法。
 
 ```c
 #include <sys/ptrace.h>
@@ -45,7 +45,7 @@ int main()
     }
     else {
         wait(NULL);
-        orig_eax = ptrace(PTRACE_PEEKUSER, child, 4 * ORIG_EAX, NULL);
+        orig_eax = ptrace(PTRACE_PEEKUSER, child, 4 * ORIG_EAX, gg);
         printf("The child made a system call %ld\n", orig_eax);
         ptrace(PTRACE_CONT, child, NULL, NULL);
     }
@@ -105,22 +105,22 @@ c语言库函数中，常见的exec族函数包括execl、execlp、execle、exec
 
 ```c
 -> sys_execve
--> do_execve
--> do_execveat_common
+ |-> do_execve
+   |-> do_execveat_common
 ```
 
-函数do_execveat_common的代码执行路径大致包括下面列出这些，其作用是将当前进程的代码段、数据段、初始化未初始化数据通通用新加载的程序替换掉，然后执行新程序。
+函数do_execveat_common的代码执行路径大致包括下面列出这些，其作用是将当前进程的代码段、数据段、初始化&未初始化数据用新加载的程序替换掉，然后执行新程序。
 
 ```c
 -> retval = bprm_mm_init(bprm);
--> retval = prepare_binprm(bprm);
--> retval = copy_strings_kernel(1, &bprm->filename, bprm);
--> retval = copy_strings(bprm->envc, envp, bprm);
--> retval = exec_binprm(bprm);
--> retval = copy_strings(bprm->argc, argv, bprm);
+ |-> retval = prepare_binprm(bprm);
+   |-> retval = copy_strings_kernel(1, &bprm->filename, bprm);
+     |-> retval = copy_strings(bprm->envc, envp, bprm);
+       |-> retval = exec_binprm(bprm);
+         |-> retval = copy_strings(bprm->argc, argv, bprm);
 ```
 
-这里牵扯到的代码量比较多，我们重点关注一下上述过程中`exec_binprm(bprm)`，这是执行程序的部分逻辑。
+这里牵扯到的代码量比较多，我们重点关注一下上述过程中`exec_binprm(bprm)`，这里包含了执行新程序的部分逻辑。
 
 **file: fs/exec.c**
 
@@ -178,29 +178,29 @@ static inline void ptrace_event(int event, unsigned long message)
 
 在Linux下面，SIGTRAP信号将使得进程暂停执行，并向父进程通知自身的状态变化，父进程通过wait系统调用来获取子进程状态的变化信息。
 
-父进程也可通过`ptrace(PTRACE_COND, pid, ...)`操作来恢复子进程执行，使其执行execve加载的新程序。
+父进程也可通过`ptrace(PTRACE_COND, pid, ...)`操作来恢复子进程执行，使其继续执行execve加载的新程序。
 
 #### Put it Together
 
 现在，我们结合上述示例，再来回顾一下整个过程、理顺一下。
 
-首先，父进程调用fork、子进程创建成功之后是处于就绪态的，是可以运行的。
+首先，父进程调用fork、子进程创建成功之后是处于就绪态的，是可以运行的。然后，子进程先执行`ptrace(PTRACE_TRACEME, ...)`告诉内核“**当前进程希望在后续execve执行新程序时停下来，等待父进程的ptrace操作，所以请通知我在合适的时候停下来**”。子进程再执行execve加载新程序，重新初始化进程执行所需要的代码段、数据段等等。
 
-然后，子进程先执行`ptrace(PTRACE_TRACEME, ...)`告诉内核“**该进程希望在后续execve执行新程序时停下来等待tracer attach**”。子进程再执行execve加载新程序，重新初始化进程执行所需要的代码段、数据段等等。
+重新初始化完成之前内核会将进程状态调整为“**UnInterruptible Wait**”阻止其被调度、响应外部信号，完成之后，再将其调整为“**Interruptible Wait**”，即可以被信号唤醒，意味着如果有信号到达，则允许进程对信号进行处理。
 
-重新初始化完成之前内核会将进程状态调整为“UnInterruptible Wait”阻止其被调度、响应外部信号，完成之后，再将其调整为“Interruptible Wait”，即可以被信号唤醒，意味着如果有信号到达，则允许进程对信号进行处理。
+接下来，如果该进程没有特殊的ptrace标记位，子进程状态将被更新为可运行等待下次调度。当内核发现这个子进程ptrace标记位为PT_PTRACED时，则会执行这样的逻辑：内核给这个子进程发送了一个**SIGTRAP**信号，该信号将被追加到进程的pending信号队列中，并尝试唤醒该进程，当内核任务调度器调度到该进程时，发现其有pending信号到达，将执行SIGTRAP的信号处理逻辑，只不过SIGTRAP比较特殊是内核代为处理。
 
-接下来，如果没有该标记位，子进程状态将被更新为可运行等待下次调度。当内核发现这个子进程ptrace标记位为PT_PTRACED时，则会执行这样的逻辑，内核给这个子进程发送了一个SIGTRAP信号，该信号将被追加到进程的pending信号队列中，并尝试唤醒该进程，当内核任务调度器调度到该进程时，发现其有pending信号到达，将执行SIGTRAP的信号处理逻辑，只不过SIGTRAP比较特殊是内核代为处理。
-
-SIGTRAP信号处理具体做什么呢？它会暂停目标进程的执行，并向父进程通知自己的状态变化。此时父进程通过系统调用wait就可以获取到子进程状态变化的情况。
+**SIGTRAP信号处理具体做什么呢？**它会暂停目标进程的执行，并向父进程通知自己的状态变化，此时父进程通过系统调用wait就可以获取到子进程状态变化的情况。一旦父进程tracer发现子进程tracee已经停下来，就可以发起后续的ptrace操作，如读写内存数据。
 
 ### 代码实现
 
-go标准库里面只有一个ForkExec函数可用，并不能直接写fork+exec的方式，但是呢，go标准库提供了另一种用起来更加友好的思路。
+类似c语言fork+exec的方式，go标准库提供了一个ForkExec函数实现，以此可以用go重写上述c语言示例。但是，go标准库提供了另一种更简洁的方式。
 
-我们首先通过`cmd := exec.Command(prog, args...)`获取一个cmd对象，接着通过cmd对象获取进程Process结构体，然后修改其内部状态为ptrace即可。这样之后再启动子进程`cmd.Start()`，然后调用`Wait`函数来获取子进程的状态，等子进程停下来，然后父进程可以先做一些调试工作。
+我们首先通过`cmd := exec.Command(prog, args...)`获取一个cmd对象，在`cmd.Start()`启动进程前打开进程标记位`cmd.SysProcAttr.Ptrace=true`，然后再`cmd.Start()`启动进程，最后调用`Wait`函数来等待子进程（因为SIGTRAP）停下来并获取子进程的状态。
 
-这里的示例代码，我们在以前示例代码基础上修改，修改后代码如下：
+在这之后，父进程便可以继续做些调试相关的工作了，如读写内存等。
+
+这里的示例代码，是在以前示例代码基础上修改得来，修改后代码如下：
 
 ```go
 package cmd
@@ -264,7 +264,7 @@ var execCmd = &cobra.Command{
 	PostRunE: func(cmd *cobra.Command, args []string) error {
 		debug.NewDebugShell().Run()
 		// let target process continue
-		return syscall.PtraceCont(pid, 0)
+		return syscall.PtraceCont(pid, 0) 
 	},
 }
 
@@ -291,11 +291,25 @@ cmd  go.mod  go.sum  LICENSE  main.go  syms  target
 
 godbg将启动ls进程，并通过PTRACE_TRACEME让内核把ls进程停下（通过SIGTRAP），可以看到调试器输出`process 2479 stopped:true`，表示被调试进程pid是2479已经停止执行了。
 
-并且还启动了一个调试回话，终端命令提示符应变成了`godbg> `，表示调试会话正在等待用户输入调试命令，我们这里还没有实现真正的调试命令，我们输入`exit`退出调试会话。
+并且还启动了一个调试回话，终端命令提示符应变成了`godbg> `，表示调试会话正在等待用户输入调试命令，我们除了`exit`命令还没有实现其他的调试命令，我们输入`exit`退出调试会话。
+
+> NOTE：关于调试会话
+>
+> 这里的调试会话，不过是个允许用户输入调试命令的黑窗口，用户所有的输入都会转交给cobra生成的debugRootCmd处理，debugRootCmd下包含了很多的subcmd，比如breakpoint、list、continue、step等调试命令。
+>
+> 在写这篇文档时，我们还是基于cobraprompt来管理调试会话命令及输入补全的，将上述debugRootCmd交给cobraprompt管理后，当我们输入一些信息后，prompt就会处理我们的输入并交给debugRootCmd注册的同名命令进行处理。
+>
+> 如我们输入了exit，则会调用debugRootCmd中注册的exitCmd进行处理。exitCmd只是执行os.Exit(0)让进程退出，在退出之前内核会自动做些清理操作，如正在被其跟踪的tracee会被内核执行ptrace(PTRACE_COND,...)解除跟踪，让tracee恢复执行。
 
 当我们退出调试会话时，会通过`ptrace(PTRACE_COND,...)`操作来恢复被调试进程继续执行，也就是ls正常执行列出目录下文件的命令，我们也看到了它输出了当前目录下的文件信息`cmd go.mod go.sum LICENSE main.go syms target`。
 
 `godbg exec <prog>`命令现在一切正常了！
+
+> NOTE: 示例中在execCmd.PostRunE中显示调用了`ptrace(PTRACE_COND,...)`，其实是没有必要的，原因在介绍调试会话时以提及，内核会代为处理接触tracee的跟踪状态。
+>
+> 其实，如果tracee如果是我们显示启动的，那么在调试器退出时应该kill掉该进程（或者允许选择kill进程或让其继续执行），而不应该默认让其继续执行。
+
+> FIXME：本文第一版撰写时间偏早，示例代码与调试器示例最新代码已不一致，但对读者朋友们学习影响并不大，不要因此而受影响，有时间我会尽快更新。
 
 ### 参考内容：
 
