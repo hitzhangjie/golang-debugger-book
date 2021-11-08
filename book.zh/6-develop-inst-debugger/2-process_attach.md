@@ -4,23 +4,37 @@
 
 有时待进程已经在运行了，如果要对其进行调试需要将进程挂住(attach)，让其停下来等待调试器对其进行控制。
 
-常见的调试器如dlv、gdb等都支持通过参数 `-p pid` 的形式来传递目标进程号来对运行重的进程进行调试。
+常见的调试器如dlv、gdb等都支持通过参数 `-p pid` 的形式来传递目标进程号来对运行中的进程进行调试。
 
-我们将实现程序godbg，它支持exec子命令，支持接收参数 `-p pid`，如果目标进程存在，godb将attach到目标进程，此时目标进程会暂停执行。然后我们让godbg休眠几秒钟，再detach目标进程，目标进程会恢复执行。这里休眠的几秒钟，可以演变成一系列的调试操作，如设置断点、检查进程寄存器、检查内存等等。
+我们将实现程序godbg，它支持exec子命令，支持接收参数 `-p pid`，如果目标进程存在，godb将attach到目标进程，此时目标进程会暂停执行。然后我们让godbg休眠几秒钟，再detach目标进程，目标进程会恢复执行。
+
+> ps: 这里休眠的几秒钟，用户可以先将其假想成一系列的调试操作过程，如设置断点、检查进程寄存器、检查内存等等，后面小节中我们将支持这些能力。
 
 ### 基础知识
 
+#### tracee
+
 首先要进一步明确tracee的概念，虽然我们看上去是对进程进行调试，实际上调试器内部工作时，是对一个一个的线程进行调试。
 
-tracee，指的是被调试的线程，而不是进程，对于一个多线程程序而言，可能要将部分或者全部的线程作为tracee以方便调试，没有被traced的线程将会继续执行，而被traced的线程则受调试器控制。甚至同一个被调试进程中的不同线程，可以由不同的tracer来控制。
+tracee，指的是被调试的线程，而不是进程，对于一个多线程程序而言，可能要trace（跟踪）部分或者全部的线程以方便调试，没有被traced的线程将会继续执行，而被traced的线程则受调试器控制。甚至同一个被调试进程中的不同线程，可以由不同的tracer来控制。
+
+#### tracer
 
 tracer，指的是向tracee发送调试控制命令的调试进程，准确地说，也是线程。
 
-一旦tracer和tracee建立了联系之后，tracer就可以给tracee发送各种调试命令。通常，如果调试器也是多线程程序，通常要考虑将发送调试命令给特定tracee的task绑定到特定线程上，因为从tracee角度而言，它认为调试命令应该来自同一个tracer（同一个线程）。所以，在我们参考dlv等调试器的实现时会发现，发送调试命令的goroutine通常会调用`runtime.LockOSThread()`来绑定一个线程，专门用来向attached tracee发送调试指令（也就是各种ptrace操作）。
+一旦tracer和tracee建立了联系之后，tracer就可以给tracee发送各种调试命令。
 
->runtime.LockOSThread()，被绑定的线程只会用来执行调用该函数的goroutine，除非该goroutine调用了runtime.UnLockOSThread()解除这种绑定关系，否则该线程不会用来调度其他goroutine。
+#### ptrace
 
-当我们调用了attach之后，attach返回时，tracee有可能还没有停下来，这个时候需要通过wait方法来等tracee停下来，并获取tracee的状态信息。当结束调试时，可以通过detach操作，让tracee恢复执行。
+我们的调试器示例是基于Linux平台编写的，调试能力依赖于Linux ptrace。
+
+通常，如果调试器也是多线程程序，就要考虑将发送调试命令给特定tracee的task（如goroutine）绑定到特定线程上，因为从tracee角度而言，它认为调试命令应该来自同一个tracer（同一个线程）。
+
+所以，在我们参考dlv等调试器的实现时会发现，发送调试命令的goroutine通常会调用`runtime.LockOSThread()`来绑定一个线程，专门用来向attached tracee发送调试指令（也就是各种ptrace操作）。
+
+>runtime.LockOSThread()，将调用该函数的goroutine绑定到该操作系统线程上，意味着该操作系统线程只会用来执行该goroutine上的操作，除非该goroutine调用了runtime.UnLockOSThread()解除这种绑定关系，否则该线程不会用来调度其他goroutine。调用了该函数之后就可以满足tracee对tracer的要求。
+
+当我们调用了attach之后，attach返回时，tracee有可能还没有停下来，这个时候需要通过wait方法来等待tracee停下来，并获取tracee的状态信息。当结束调试时，可以通过detach操作，让tracee恢复执行。
 
 >PTRACE_ATTACH  
     Attach to the process specified in pid, making it a tracee of
@@ -222,9 +236,9 @@ Sat Nov 14 14:29:10 UTC 2020 pid: 1311
 Sat Nov 14 14:29:11 UTC 2020 pid: 1311
 Sat Nov 14 14:29:12 UTC 2020 pid: 1311
 Sat Nov 14 14:29:13 UTC 2020 pid: 1311
-Sat Nov 14 14:29:14 UTC 2020 pid: 1311  ==> 14s attached and stopped
+Sat Nov 14 14:29:14 UTC 2020 pid: 1311  ==> at 14s, attached and stopped
 
-Sat Nov 14 14:29:24 UTC 2020 pid: 1311  ==> 24s detached and continued
+Sat Nov 14 14:29:24 UTC 2020 pid: 1311  ==> at 24s, detached and continued
 Sat Nov 14 14:29:25 UTC 2020 pid: 1311
 Sat Nov 14 14:29:26 UTC 2020 pid: 1311
 Sat Nov 14 14:29:27 UTC 2020 pid: 1311
@@ -272,11 +286,11 @@ func main() {
 
 因为go程序天然是多线程程序，sysmon、gc等等都可能会用到独立线程，我们attach时只是简单的attach了pid对应进程的某一个线程，其他的线程仍然是没有被调试跟踪的，是可以正常执行的。
 
-那我们ptrace时指定了pid到底attach了哪一个线程呢？这个pid对应的线程难道不是执行main.main的线程吗？
+那我们ptrace时指定了pid到底attach了哪一个线程呢？**这个pid对应的线程难道不是执行main.main的线程吗？先回答读者问题：没错，还真不一定是！**
 
-先回答读者问题：没错，还真不一定是！**go程序中函数main.main是由main goroutine来执行的，但是在main.main方法执行时，main goroutine并没有和main thread存在任何默认的绑定关系**。所以认为main.main一定运行在pid对应的线程之上是错误的！
+**go程序中函数main.main是由main goroutine来执行的，但是main goroutine并没有和main thread存在任何默认的绑定关系**。所以认为main.main一定运行在pid对应的线程之上是错误的！
 
-> ps：附录《go runtime: go程序启动流程》中对go程序的启动流程做了分析，可以帮读者朋友打消疑虑。
+> ps：附录《go runtime: go程序启动流程》中对go程序的启动流程做了分析，可以帮读者朋友打消这里main.main、main goroutine、main thread的一些疑虑。
 
 在Linux下，线程其实是通过轻量级进程（LWP）来实现的，这里的ptrace参数pid实际上是线程对应的LWP的进程id。意思是只有这个线程会被调试跟踪。
 
@@ -296,11 +310,11 @@ func main() {
 > 	_CLONE_THREAD /* revisit - okay for now */
 > ```
 >
-> 关于clone选项的更多作用，您可以通过查看man手册`man 2 ptrace`来了解。
+> 关于clone选项的更多作用，您可以通过查看man手册`man 2 clone`来了解。
 
 pid标识的线程（或LWP）与发送ptrace请求的线程（或LWP）二者之间建立ptrace link，它们的角色分别为tracee、tracer，后续tracee期望收到的所有ptrace请求都来自这个tracer。
 
-被调试进程中的其他线程，如果有，仍然是可以运行的，这就是为什么我们某些读者发现有时候被调试程序仍然在不停输出。
+被调试进程中如果有其他线程，仍然是可以运行的，这就是为什么我们某些读者发现有时候被调试程序仍然在不停输出，因为tracer没有attach到正在输出的goroutine对应的线程。
 
 #### 问题：想让执行main.main的线程停下来？
 
@@ -310,7 +324,7 @@ pid标识的线程（或LWP）与发送ptrace请求的线程（或LWP）二者�
 
   比如，列出`/proc/<pid>/task`下的线程对应的LWP pid，逐个attach。
 
-- 方法2，被测试程序启动到时候通过变量GOMAXPROCS=1限制最大并发执行线程数；
+- 方法2，被测试程序启动的时候通过变量GOMAXPROCS=1限制最大并发执行线程数；
 
   go程序依然是多线程，只是同一时刻只有一个线程执行，现在我们attach了某个线程之后，这个线程暂停执行，即便其他线程能执行也会迅速停下来，失去后续执行机会。
 
@@ -343,6 +357,8 @@ pid标识的线程（或LWP）与发送ptrace请求的线程（或LWP）二者�
   'T' = traced or stopped
   'Z' = zombie
   ```
+
+  通过状态 **'T'** 可以识别多线程程序中哪些线程正在被调试跟踪。
 
 - `ls /proc/<pid>/task`
 
