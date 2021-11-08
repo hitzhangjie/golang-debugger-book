@@ -311,7 +311,7 @@ godbg将启动ls进程，并通过PTRACE_TRACEME让内核把ls进程停下（通
 
 > FIXME：本文第一版撰写时间偏早，示例代码与调试器示例最新代码已不一致，但对读者朋友们学习影响并不大，不要因此而受影响，有时间我会尽快更新。
 
-### 参考内容：
+### 参考内容
 
 - Playing with ptrace, Part I, Pradeep Padala, https://www.linuxjournal.com/article/6100
 - Playing with ptrace, Part II, Pradeep Padala, https://www.linuxjournal.com/article/6210
