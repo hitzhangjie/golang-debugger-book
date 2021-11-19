@@ -6,7 +6,7 @@
 
 汇编指令是和硬件强相关的，其实汇编指令不过是些助记符，一条汇编指令的操作码、操作数通过规定的编码方式进行编码，就得到了机器指令。不同指令的操作码占用字节数可能是相同的，也可能是不同的，操作数占用字节数也可能相同或不同。
 
-汇编指令本来就有很多，除了指令定长、变长编码以外，还有些其他因素也给反汇编带来了一定的难度，比如我们有非常多的硬件平台，有不同的指令集架构等等，要想实现反汇编还真的不是一件容易的事情。
+不同硬件平台、指令集架构、诸多的汇编指令以及指令的定长编码、变长编码等等因素都给反汇编带来了一定的难度，要想凭一人之力实现反汇编还真的不是一件容易的事情。
 
 幸好已经有反汇编框架[Capstone](http://www.capstone-engine.org/)来专门解决这个问题，对于go语言而言可以考虑使用go版本的[Gapstone](https://github.com/bnagy/gapstone)。或者，我们使用go官方提供的反汇编工具类[arch/x86/x86asm](https://golang.org/x/arch/x86/x86asm)，注意到在流行的go语言调试器dlv里面也是使用x86asm进行反汇编操作的。
 
@@ -14,13 +14,19 @@
 
 ### 代码实现
 
-实现反汇编操作，这里的任务也分几步，我们首先掌握对一个完整的程序进行反汇编操作，然后再进一步获取当前断点处指令地址，并对指令地址处机器指令进行反汇编操作。
+实现反汇编操作，主要是要掌握这几个操作：
+
+-   如何读取指定进程的完整指令数据；
+-   如何对一个完整的程序进行反汇编操作；
+-   如何对断点处指令进行反汇编操作。
 
 #### 根据pid找到可执行程序
 
-调试器和被调试进程的交互，很多操作都需要依赖pid，如果我们要读取pid对应的可执行程序的指令数据，那就必须先通过pid找到对应的可执行程序路径，怎么做呢？
+tracer对tracee的控制，很多操作都依赖tracee的pid，如果要读取pid对应的可执行程序的完整指令数据，那就必须先通过pid找到对应的可执行程序路径，怎么做呢？
 
-在Linux系统下，虚拟文件系统路径`/proc/<pid>/exe`是一个符号链接，它指向了`pid`标识的进程对应的可执行程序文件的路径。在go程序里面读取该符号链接指向的目的位置就可以了。
+>   直接读取pid对应进程实例的内存数据是没用的，因为里面的指令数据可能不全。进程的指令数据也是按需加载的，详细可了解下Linux PageFault相关内容。
+
+在Linux系统下，虚拟文件系统路径`/proc/<pid>/exe`是一个符号链接，它指向了进程`pid`对应的可执行程序的绝对路径。go程序里读取该符号链接信息即可获知程序路径。
 
 比如这样操作：
 
@@ -32,7 +38,7 @@ func GetExecutable(pid int) (string, error) {
 	exeLink := fmt.Sprintf("/proc/%d/exe", pid)
 	exePath, err := os.Readlink(exeLink)
 	if err != nil {
-		return "", err
+    return "", fmt.Errorf("find executable by pid err: %w", err)
 	}
 	return exePath, nil
 }
@@ -51,7 +57,7 @@ func GetExecutable(pid int) (string, error) {
 这其实是ELF格式为构建两种不同的视图所特意设计的：
 
 - segments视图，是为linker提供的视图，用来指导linker如何执行segments中指令；
-- 另一种视图就是将指令和数据进行区分的视图，如指令和数据secitions的区分；
+- 另一种视图就是将指令和数据进行区分的视图，如指令和数据sections的区分；
 
 那现在我们要想实现反汇编操作的话，我们就必须能够将ELF文件解析成上述格式，并能够从提取出程序对应的机器指令。
 
@@ -113,9 +119,9 @@ func main() {
 }
 ```
 
-这里的代码逻辑比较完整，它接收一个pid，然后获取对应的可执行文件路径，然后通过标准库提供的elf package来取文件并解析成ELF文件。从中读取.text section的数据。众所周知，.text端内部数据即为程序的执行指令。
+这里的代码逻辑比较完整，它接收一个pid，然后获取对应的可执行文件路径，然后通过标准库提供的elf package来读取文件并按ELF文件进行解析。从中读取.text section的数据。众所周知，.text section内部数据即为程序的指令。
 
-拿到指令之后，我们就可以通过官方提供的golang.org/x/arch/x86/x86asm来进行反汇编操作了，因为指令是变长编码，反汇编成功后返回的信息中包含了当前反汇编指令的内存编码数据长度，方便我们调整偏移量继续进行反汇编。
+拿到指令之后，我们就可以通过golang.org/x/arch/x86/x86asm`来进行反汇编操作了，因为指令是变长编码，反汇编成功后返回的信息中包含了当前反汇编指令的内存编码数据长度，方便我们调整偏移量继续进行后续的反汇编。
 
 #### 对断点位置进行反汇编
 
@@ -123,7 +129,7 @@ func main() {
 
 动态断点，往往是通过指令patch来实现的，即将任意完整机器指令的第一字节数据保存，然后将其替换成`0xCC (int 3)`指令，处理器执行完0xCC之后自身就会停下来，这就是断点的效果。
 
-断点通过指令patch来实现必须覆盖指令的第一字节，不能覆盖其他字节，原因很简单，指令为了提高解码效率、支持更多操作类型，往往都是采用的变长编码。如果不写第一字节，那么可能会产生错误，或者造成解析时困难。比如，如果一条指令只有一个字节，我们非要写到第二个字节存起来，那就起不到断点的作用。因为执行到这个断点时，前面本不应该执行的一字节指令执行了。
+断点通过指令patch来实现必须覆盖指令的第一字节，不能覆盖其他字节，原因很简单，指令为了提高解码效率、支持更多操作类型，往往都是采用的变长编码。如果不写第一字节，那么处理器执行时可能会产生错误。比如一条指令操作码有多个字节，结果因为覆盖的原因导致变成了一个错误的操作码，执行时就会有异常。再比如一条指令只有一个字节，我们非要写到第二个字节存起来，那就起不到断点的作用，因为执行到这个断点时，前面本不应该执行的一字节指令却执行了。
 
 前面我们有系统性地介绍过指令patch的概念、应用场景等（比如调试器、mock测试框架gomonkey等等），如您还感到不熟悉，请回头查看相关章节，或者问下google。
 
@@ -141,7 +147,7 @@ offset: 0xcc 0x1 0x2 0x3 0x4   | orig: <offset,0x0>
 - 再次，要知道offset处的指令不是完整整理，第一字节指令被patch了，需要还原；
 - 最后，要知道PC值是特殊寄存器值，要将其PC值减去1，让指令执行位置往后退1字节，然后重新读取接下来的指令；
 
-这大概就是断点位置的相关操作，如果对应位置处不是断点就不需要执行pc=pc-1这一rewind动作。
+这大概就是断点位置的相关操作，如果对应位置处不是断点就不需要执行`pc=pc-1`。
 
 #### Put It Together
 
@@ -175,12 +181,12 @@ var disassCmd = &cobra.Command{
 		}
 
 		buf := make([]byte, 1)
-		n, err := syscall.PtracePeekText(TraceePID, uintptr(regs.PC()), buf)
+		n, err := syscall.PtracePeekText(TraceePID, uintptr(regs.PC()-1), buf)
 		if err != nil || n != 1 {
 			return fmt.Errorf("peek text error: %v, bytes: %d", err, n)
 		}
 		fmt.Printf("read %d bytes, value of %x\n", n, buf[0])
-		// read a breakpoint
+		// PC前一字节为0xCC表示当前PC应回退1字节才能读取到完整指令数据
 		if buf[0] == 0xCC {
 			regs.SetPC(regs.PC() - 1)
 		}
@@ -192,6 +198,9 @@ var disassCmd = &cobra.Command{
 			return fmt.Errorf("peek text error: %v, bytes: %d", err, n)
 		}
 		fmt.Printf("size of text: %d\n", n)
+    
+    // TODO 在实现了断点功能之后，需注意读取到的dat[0]为0xCC，此时需注意还原指令数据，
+    // 否则反汇编操作是有错误的。
 
 		// 反汇编这里的指令数据
 		offset := 0
@@ -215,7 +224,7 @@ func GetExecutable(pid int) (string, error) {
 	exeLink := fmt.Sprintf("/proc/%d/exe", pid)
 	exePath, err := os.Readlink(exeLink)
 	if err != nil {
-		return "", err
+    return "", fmt.Errorf("find executable by pid err: %w", err)
 	}
 	return exePath, nil
 }
@@ -278,7 +287,7 @@ size of text: 1024
 
 汇编指令有go、intel、gnu 3种常见风格，gnu风格的俗称at&t风格。
 
-为了方便不同习惯的开发者能顺畅地阅读相关反汇编出来的指令，我们后续又为disass命令添加了选项`disass -s <syntax>`来指定汇编指指令的风格，如我本人比较倾向于阅读at&t格式的，则可以通过`disass -s gnu`来查看对应风格的汇编指令。
+为了方便不同习惯的开发者能顺畅地阅读相关反汇编出来的指令，我们后续又为disass命令添加了选项`disass -s <syntax>`来指定汇编指指令的风格，如过您倾向于阅读at&t格式汇编，则可以通过`disass -s gnu`来查看对应风格的汇编指令。
 
 函数`instSyntax(inst x86asm.Inst, syntax string) (string, error)`实现了对不同汇编风格的转换支持：
 
@@ -299,7 +308,7 @@ func instSyntax(inst x86asm.Inst, syntax string) (string, error) {
 }
 ```
 
-另外我们也添加了选项`disass -n <num>`来指定一次反汇编操作要decode的指令条数，因为调试会话中往往更关心当前待执行的指令，所以没必要一次反汇编成千上万行指令，那仅会分散调试人员的注意力、带来更多不便而已。
+另外我们也添加了选项`disass -n <num>`来指定一次反汇编操作要decode的指令条数，因为调试会话中往往更关心当前待执行的指令，所以没必要一次反汇编成千上万行指令，那仅会分散调试人员的注意力而已。
 
-您可以在源文件`cmd/debug/disass.go`中查看完整实现。
+您可以在源文件`cmd/debug/disass.go`中查看完整反汇编实现。
 
