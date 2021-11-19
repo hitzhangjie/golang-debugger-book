@@ -4,19 +4,17 @@
 
 前面介绍了如何添加断点、显示断点列表，现在我们来看看如何移除断点。
 
-移除断点与新增断点，都是需要借助ptrace来实现。回想下新增断点首先通过PTRACEPEEKDATA/PTRACEPOKEDATA来实现对指令数据的备份、覆写，移除断点的逻辑有点相反，将原来备份的指令数据覆写回断点对应的指令地址处。
-
-然后，将待移除断点从已添加断点集合中移除即可。
+移除断点与新增断点，都是需要借助ptrace来实现。回想下新增断点首先通过PTRACEPEEKDATA/PTRACEPOKEDATA来实现对指令数据的备份、覆写，移除断点的逻辑有点相反，先将原来备份的指令数据覆写回断点对应的指令地址处，然后，从已添加断点集合中移除即可。
 
 >   ps: 在Linux下PTRACE_PEEKTEXT/PTRACE_PEEKDATA，以及PTRACE_POKETEXT/PTRACE_POKEDATA并没有什么不同，所以执行ptrace操作的时候，ptrace request可以任选一个。
+>
+>   为了可读性，读写指令时倾向于PTRACE_PEEKTEXT/PTRACE_POKETEXT，读写数据时则倾向于PTRACE_PEEKDATA/PTRACE_POKEDATA。
 
 ### 代码实现
 
-首先解析断点编号参数`-n ?`，并从已添加断点集合中查询，是否有编号为n的断点存在，如果没有则`-n ?`为无效参数。
+首先解析断点编号参数`-n <breakNo>`，并从已添加断点集合中查询，是否有编号为n的断点存在，如果没有则`<breakNo>`为无效参数。
 
-如果断点确实存在，则执行ptrace(PTRACE_POKEDATA,...)将原来备份的1字节指令数据覆写回原指令地址，即消除了断点。
-
-然后再从已添加断点集合中删除这个断点。
+如果断点确实存在，则执行ptrace(PTRACE_POKEDATA,...)将原来备份的1字节指令数据覆写回原指令地址，即消除了断点。然后，再从已添加断点集合中删除这个断点。
 
 ```go
 package debug
