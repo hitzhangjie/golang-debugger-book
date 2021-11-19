@@ -106,7 +106,7 @@ func main() {
 		panic(err)
 	}
 
-	// 逐语句解析机器指令并反汇编，然后打印出来
+  // 逐语句解析机器指令并反汇编，然后打印出来
 	offset := 0
 	for {
 		inst, err := x86asm.Decode(buf[offset:], 64)
@@ -199,8 +199,8 @@ var disassCmd = &cobra.Command{
 		}
 		fmt.Printf("size of text: %d\n", n)
     
-		// TODO 在实现了断点功能之后，需注意读取到的dat[0]为0xCC，此时需注意还原指令数据，
-		// 否则反汇编操作是有错误的。
+    // TODO 在实现了断点功能之后，需注意读取到的dat[0]为0xCC，此时需注意还原指令数据，
+    // 否则反汇编操作是有错误的。
 
 		// 反汇编这里的指令数据
 		offset := 0
