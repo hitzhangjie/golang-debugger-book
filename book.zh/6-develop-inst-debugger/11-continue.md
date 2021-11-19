@@ -4,13 +4,15 @@
 
 运行到下个断点处，可以理解为一系列的singlestep操作，直到判断PC处对应的指令为0xCC为止，然后再singlestep一次。
 
-但是不用这么麻烦，操作系统提供了`ptrace(PTRACE_COND,...)`操作，允许我们直接运行到下个断点处。但是在执行上述调用前，同样要检查下当前`PC-1`地址处的数据是否为`0xCC`，如果是需要将其替换会原始指令首字节数据。
+但是不用这么麻烦，操作系统提供了`ptrace(PTRACE_COND,...)`操作，允许我们直接运行到下个断点处。但是在执行上述调用前，同样要检查下当前`PC-1`地址处的数据是否为`0xCC`，如果是则需要将其替换为原始指令数据。
 
 ### 代码实现
 
-continue命令执行时，首先检查当前PC-1处数据是否为0xCC，如果是则说明这里之前是个多字节指令，但是被指令patch添加了断点，需要还原回原始数据。然后，我们再执行PTRACE_COND操作请求操作系统恢复执行被调试进程，进程运行到断点处停下来。
+continue命令执行时，首先检查当前PC-1处数据是否为0xCC，如果是则说明这里之前是个多字节指令，但是被指令patch添加了断点，需要还原回原始数据。
 
-这个时候我们通过wait等待并检查下被调试进程停下来，然后输出当前PC值。注意当前PC值是执行了0xCC指令之后的值，因此PC=断点地址+1。
+然后，我们再执行PTRACE_COND操作请求操作系统恢复执行被调试进程，进程运行到断点处停下来。
+
+最后，我们通过wait等待并检查下被调试进程停下来，然后输出当前PC值。注意当前PC值是执行了0xCC指令之后的值，因此PC=断点地址+1。
 
 **file: cmd/debug/continue.go**
 
@@ -42,7 +44,7 @@ var continueCmd = &cobra.Command{
 		}
 
 		buf := make([]byte, 1)
-		n, err := syscall.PtracePeekText(TraceePID, uintptr(regs.PC()), buf)
+		n, err := syscall.PtracePeekText(TraceePID, uintptr(regs.PC()-1), buf)
 		if err != nil || n != 1 {
 			return fmt.Errorf("peek text error: %v, bytes: %d", err, n)
 		}
@@ -97,7 +99,7 @@ func init() {
 
 需要注意的是，添加断点时要简单看下汇编指令的含义，因为考虑到代码执行时的分支控制逻辑，我们添加的断点并不一定在代码实际的执行路径上，所以可能不能验证continue运行到断点的功能（但是仍然可以验证运行到进程执行结束）。
 
-为了验证运行到下个断点，我多次运行dis、step，指导发现有一段指令可以连续执行，中间没有什么跳转操作，如下图所示：
+为了验证运行到下个断点，我多次运行dis、step，直到发现有一段指令可以连续执行，中间没有什么跳转操作，如下图所示：
 
 ```bash
 godbg> dis
