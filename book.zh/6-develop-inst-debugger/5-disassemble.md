@@ -52,12 +52,26 @@ func GetExecutable(pid int) (string, error) {
 
 ![elf](assets/elf_layout.png)
 
-我们看到一个ELF Header包含了`Program Header (Segments)`、`Section Header (Sections)`以及一系列的Data。
+我们看到一个ELF文件包含了ELF Header、Program Header Table、Section Header Table以及一系列的Sections，Program Header Table、Section Header Table中引用Sections。
 
-这其实是ELF格式为构建两种不同的视图所特意设计的：
+Program Header Table和Section Header Table，是为构建两种不同视图特意设计的：
 
-- segments视图，是为linker提供的视图，用来指导linker如何执行segments中指令；
-- 另一种视图就是将指令和数据进行区分的视图，如指令和数据sections的区分；
+- Program Header Table构造了segments视图，它描述了程序加载时loader如何通过mmap将引用的sections映射到内存空间；
+- Section Header Table构造了sections视图，描述了二进制程序中sections的顺序位置，以及指导linker如何进行链接；
+
+这两种视图互不干扰，分别用于指导loader、linker的设计实现。
+
+> **What You Need To Know About ELF for CS452**
+>
+> **Two views of the world**
+>
+> There are two views of an ELF file. The *section view* sees the file as a bunch of sections, which are to be linked or loaded in some manner. The *program view* sees the file as a bunch of *ELF segments* (not to be confused with Intel segments) which are to be loaded into memory in order to execute the program.
+>
+> This split is designed to allow someone writing a linker to easily get the information they need (using the section view) and someone writing a loader (that's you) easily get the information they need without worrying about a lot of the complications of linking (using the program view).
+>
+> Because you are writing a loader, not a linker, **you can completely ignore the section view**. You only care about the program view. This throws away around 80% of the ELF spec. Doesn't that make you feel good?
+>
+> see: https://student.cs.uwaterloo.ca/~cs452/W18/elf/elf.html
 
 那现在我们要想实现反汇编操作的话，我们就必须能够将ELF文件解析成上述格式，并能够从提取出程序对应的机器指令。
 
@@ -312,3 +326,6 @@ func instSyntax(inst x86asm.Inst, syntax string) (string, error) {
 
 您可以在源文件`cmd/debug/disass.go`中查看完整反汇编实现。
 
+### 参考文献
+
+1. What You Need To Know About ELF, https://student.cs.uwaterloo.ca/~cs452/W18/elf/elf.html
