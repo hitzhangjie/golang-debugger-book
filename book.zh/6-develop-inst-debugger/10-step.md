@@ -43,7 +43,7 @@ var stepCmd = &cobra.Command{
 		}
 
 		buf := make([]byte, 1)
-		n, err := syscall.PtracePeekText(TraceePID, uintptr(regs.PC()), buf)
+		n, err := syscall.PtracePeekText(TraceePID, uintptr(regs.PC()-1), buf)
 		if err != nil || n != 1 {
 			return fmt.Errorf("peek text error: %v, bytes: %d", err, n)
 		}
@@ -142,7 +142,7 @@ godbg>
 
 我们执行了step指令3次，step每次执行一条指令之后，会输出执行指令后的PC值，依次是0x40ab4e、0x40ab53、0x40ab58，依次是下条指令的首地址。
 
-有意思的是，我们想知道`ptrace(PTRACE_SINGLESTEP,...)`情况下内核是如何实现逐指令执行的，显然它没有采用指令patch的方式，如果也是指令patch的方式，上述step命令输出的PC值应该分别+1。
+有意思的是，我们想知道`ptrace(PTRACE_SINGLESTEP,...)`情况下内核是如何实现逐指令执行的，显然它没有采用指令patch的方式（如果也是指令patch的方式，上述step命令输出的PC值应该是在当前显示的值基础上分别+1）。
 
 ### 更多相关内容：SINGLESTEP
 
@@ -155,9 +155,7 @@ godbg>
 
 man(2)手册里面没有任何信息，要么细节不值一提，要么可能跟不同硬件平台的特性有关系，难以几句话概括。查看内核源码以及Intel开发手册之后，可以了解到相关的原因。
 
-SINGLESTEP调试在Intel平台上是借助硬件特性来实现的，
-
-参考《Intel® 64 and IA-32 Architectures Software Developer's Manual Volume 1: Basic Architecture》中提供的信息，我们了解到Intel架构处理器是有一个标识寄存器EFLAGS，当通过内核将标志寄存器的TF标志置为1时，处理器会自动进入单步执行模式。
+SINGLESTEP调试在Intel平台上是借助硬件特性来实现的，参考《Intel® 64 and IA-32 Architectures Software Developer's Manual Volume 1: Basic Architecture》中提供的信息，我们了解到Intel架构处理器是有一个标识寄存器EFLAGS，当通过内核将标志寄存器的TF标志置为1时，处理器会自动进入单步执行模式。
 
 > **3.4.3.3 System Flags and IOPL Field**
 >
