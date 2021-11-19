@@ -6,7 +6,7 @@
 
 ### 代码实现
 
-查看进程寄存器数据，需要通过`ptrace(PTRACE_GETREGS,...)`操作就可以获取被调试进程上下文所有的寄存器列表及其数据。
+查看进程寄存器数据，需要通过`ptrace(PTRACE_GETREGS,...)`操作来读取被调试进程的寄存器数据。
 
 **file: cmd/debug/pregs.go**
 
@@ -55,11 +55,13 @@ func prettyPrintRegs(regs syscall.PtraceRegs) {
 }
 ```
 
-程序首先通过ptrace获取寄存器数据，然后通过prettyPrintRegs打印寄存器信息，prettyPrintRegs函数使用了tabwriter对分列展示的寄存器数据进行格式化输出。
+程序首先通过ptrace获取寄存器数据，然后通过prettyPrintRegs打印寄存器信息。其中，prettyPrintRegs函数使用了`tabwriter`对寄存器数据按样式“**Register	寄存器名	寄存器值**”格式化输出，便于查看。
+
+>   tabwrite对于需要输出多行、多列数据且需要对每列数据进行对齐的场景非常适用。
 
 ### 代码测试
 
-首先启动一个测试程序充当被调试进程，获取其pid，然后通过`godbg attach <pid>`对目标进程进行调试。等调试会话准别就绪后，输入命令pregs查看寄存器信息。
+首先启动一个测试程序充当被调试进程，获取其pid，然后通过`godbg attach <pid>`对目标进程进行调试。等调试会话准备就绪后，输入命令pregs查看寄存器信息。
 
 ```bash
 $ godbg attach 116
@@ -102,4 +104,4 @@ godbg>
 -   第2列为寄存器名称，为了美观采用了左对齐；
 -   第3列为寄存器当前值，采用16进制数打印，为了美观采用了左对齐；
 
-调试时有时是有需要查看、修改寄存器状态的，比如查看、修改返回值，我们通常可以修改rax寄存器的值来实现。
+调试过程中有时需要查看、修改寄存器状态，比如查看、修改返回值（返回值通常记录在rax寄存器中，但是go语言有点特殊）。
