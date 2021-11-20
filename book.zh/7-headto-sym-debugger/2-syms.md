@@ -34,6 +34,23 @@ func main() {
 >“vim-go”算不算符号？其本身是一个只读数据，存储在.rodata section中，其本身算不上符号，但可以被符号引用，比如 `var s = "vim-go"`则变量s有对应的符号，其符号名称为s，变量值引用自.rodata中的vim-go。
 >
 >ps：可以通过`readelf -p .rodata | grep vim-go`来验证。
+>
+>上述示例中其实会生成一个临时变量，该临时变量的值为"vim_go"，可以通过`go tool link --dumpdep main.o | grep main.main`验证：
+>
+>```bash
+>$ go tool link --dumpdep main.o | grep main.main
+>
+>runtime.main_main·f -> main.main
+>main.main -> main..stmp_0
+>main.main -> go.itab.*os.File,io.Writer
+>main.main -> fmt.Fprintln
+>main.main -> gclocals·8658ec02c587fb17d31955e2d572c2ff
+>main.main -> main.main.stkobj
+>main..stmp_0 -> go.string."vim-go"
+>main.main.stkobj -> type.[1]interface {}
+>```
+>
+>可以看到生成了一个临时变量main..stmp_0，它引用了go.string."vim-go"，并作为fmt.Println的参数。
 
 .symtab section，存储了符号表，其实这就是符号数组，其中每个元素都是一个符号，我们来看下每个符号的具体定义：
 
@@ -244,7 +261,7 @@ func main() {
 
 另外我们也注意到示例中有很多符号类型是`U`，这些符号都是在当前模块main.o中未定义的符号，这些符号是定义在其他模块中的，将来需要链接器来解析这些符号并完成重定位。
 
-之前我们提到，可重定位文件中，存在一些.rel.text、.rel.data sections来实现重定位，但我们也提到了，go目标文件是自定义的，它参考了plan9目标文件格式（当然现在又调整了`go tool link --go115newobj`），Linuxx binutils提供的readelf工具是无法读取的，go提供了工具objdump来查看。
+之前我们提到，可重定位文件中，存在一些.rel.text、.rel.data sections来实现重定位，但我们也提到了，go目标文件是自定义的，它参考了plan9目标文件格式（当然现在又调整了`go tool link --go115newobj`），Linux binutils提供的readelf工具是无法读取的，go提供了工具objdump来查看。
 
 ```bash
 $ go tool objdump main.o | grep R_
@@ -269,6 +286,10 @@ $ ls
 $ ./a.out
 vim-go
 ```
+
+最后需要注意的是，go程序是静态链接的，所以最终构建出的可执行程序中是不存在需要动态符号解析的symbol或section的。
+
+而对c程序且使用了共享库的，构建出的可执行程序中存在一些这样的符号或section，在后续loader加载程序时会调用动态链接器（如ld-linux）来完成动态符号解析。
 
 ### 本节小结
 
