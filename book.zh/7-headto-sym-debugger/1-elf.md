@@ -2,13 +2,13 @@
 
 ### ELF文件结构
 
-ELF ([Executable and Linkable Format](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format))，可执行链接嵌入格式，是Unix、Linux环境下一种十分常见的文件格式，它可用于可执行程序、目标文件、共享库、coredump文件等。
+ELF ([Executable and Linkable Format](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format))，可执行可链接格式，是Unix、Linux环境下一种十分常见的文件格式，它可用于可执行程序、目标文件、共享库、core文件等。
 
 ELF文件格式如下，文件开头是ELF Header，剩下的数据部分包括Program Header Table、Section Header Table、Sections，Sections中的数据由Program Header Table、Section Header Table来引用。
 
 ![img](assets/elf.png)
 
-这里简单列一下上述关键结构的含义和作用：
+先简单介绍一下ELF中关键结构的含义和作用：
 
 - ELF FIle Header，ELF文件头，其描述了当前ELF文件的类型（可执行程序、可重定位文件、动态链接文件、core文件等）、32位or64位寻址、ABI、ISA、程序入口地址、Program Header Table起始地址及元素大小、Section Header Table起始地址及元素大小，等等；
 - Program Header Table，它描述了系统如何创建一个程序的进程映像，每个表项都定义了一个segment（段），其中引用了0个、1个或多个section，它们也有自己的类型，如PT_LOAD，表示系统应按照表项中定义好的虚拟地址范围将引用的sections以mmap的形式映射到进程虚拟地址空间，如进程地址空间中的text段、data段；
@@ -17,13 +17,15 @@ ELF文件格式如下，文件开头是ELF Header，剩下的数据部分包括P
 
 ### ELF PRogram Header Table
 
-它定义了程序执行的视图（executable point of view），或者说是loader加载的视图。
+它定义了segments视图，可以理解为程序执行的视图（executable point of view），主要用来指导loader如何加载。
 
 从可执行程序角度来看，进程运行时需要了解如何将程序中不同部分，加载到进程虚拟内存地址空间中的不同区域（段，segments）。
 
 Linux下进程地址空间的内存布局，大家并不陌生，如data段、text段，它们其实是由Program Header Table预先定义好的，包括在虚拟内存空间中的位置，以及text段中应该包含哪些sections数据。
 
-以测试程序golang-debugger-lessons/testdata/loop2为例，运行`readelf -l`查看其program header table，共有7个program headers，每个program header在虚拟内存中的地址、每个program header包含的sections，都一览无余。如，最终组织好的text segment包含了如下sections .text .note.go.buildid。
+以测试程序golang-debugger-lessons/testdata/loop2为例，运行`readelf -l`查看其program header table，共有7个program headers，每个program header的类型、在虚拟内存中的地址、读写执行权限，以及每个program header包含的sections，都一览无余。
+
+通过`Section to Segment mapping: Segment Sections...`部分可以看到，最终组织好的`text segment`（编号02的segment其Flags为R+E，表示可读可执行，因此可判定为text segment），其包含了如下sections `.text .note.go.buildid`。
 
 ```bash
 $ readelf -l testdata/loop2
@@ -65,7 +67,7 @@ Program Headers:
 
 ### ELF Section Header Table
 
-它定义了程序链接的视图（the linkable point of view），主要是用来指导linker工作。
+它定义了sections视图，即程序链接的视图（the linkable point of view），主要是用来指导linker如何链接。
 
 从链接器角度来看，程序将代码、数据划分成不同的sections，如指令在.text、只读数据在.rodata等。程序中的每个section属于0个、1个或多个segments，每个section在程序运行时会被（或不被）mmap到进程地址空间。
 
@@ -161,7 +163,7 @@ ELF文件会包含很多的sections，前面给出的测试实例中就包含了
 - .bss：未经初始化的全局变量，在ELF文件中只是个占位符，不占用实际空间；
 - .symtab：符号表，每个可重定位文件都有一个符号表，存放程序中定义的全局函数和全局变量的信息，注意它不包含局部变量信息，局部非静态变量由栈来管理，它们对链接器符号解析、重定位没有帮助。也要注意，.symtab和编译器中的调试符号无关（如gcc -g生成）；
 - .debug_*: 调试信息，调试器读取该信息以支持符号级调试（如gcc -g生成）；
-- .strtab：字符串表，内容包括.symtab和.debug_*节中的符号，以及section名；
+- .strtab：字符串表，内容包括.symtab和.(z)debug_*节中的符号，以及section名；
 - .rel.text：一个.text section中位置的列表，当链接器尝试把这个目标文件和其他文件链接时，需要修改这些位置的值，链接之前调用外部函数或者引用外部全局变量的是通过符号进行的，需要对这些符号进行解析、重定位成正确的访问地址。
 - .rel.data：引用的一些全局变量的重定位信息，和.rel.text有些类似；
 
@@ -213,7 +215,7 @@ ELF文件会包含很多的sections，前面给出的测试实例中就包含了
     0x00400ffc 6c473700                            lG7.
   ```
 
-- 其他，如`readelf --relocated-dump | --debug-dump`，可以按需选用。
+- 其他，如`readelf [--relocated-dump | --debug-dump]`，可以按需选用。
 
 本节ELF内容就先介绍到，在此基础上，接下来的几个小节，我们将依次介绍linker、loader、debugger的工作原理。
 
