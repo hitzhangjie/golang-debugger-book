@@ -16,9 +16,9 @@
 
 此外，不同的编程语言也会有自己的取舍，一方面要生成必要的sections来兼容现有二进制的工具，另外，也会生成一些额外的sections来支持其他语言特性。
 
-比如go语言编译器、链接器会生成DWARF调试信息（.(z)debug_* sections）供调试器使用，也会生成.symtab供readelf等通用的二进制分析工具使用。另外，它还额外生成.gosymtab、.gopclntab用于go runtime来跟踪调用栈信息，生成.note.go.buildid来保留go buildid信息。
+比如go语言编译器、链接器会生成DWARF调试信息（.[z]debug_* sections）供调试器使用，也会生成.symtab供readelf等通用的二进制分析工具使用。另外，它还额外生成.gosymtab、.gopclntab用于go runtime来跟踪调用栈信息，生成.note.go.buildid来保留go buildid信息。
 
-不管是.symtab中的符号信息，还是.(z)debug\_\*调试符号信息，还是.note\*自定义vendor信息，都使用了“符号”这个术语，明确它们的不同是很重要的：
+不管是.symtab中的符号信息，还是.[z]debug\_\*调试符号信息，还是.note\*自定义vendor信息，都使用了“符号”这个术语，明确它们的不同是很重要的：
 
 - .symtab是给一些通用的二进制分析工具使用的；
 - .(z)debug\_\*符号信息是给调试器使用的；
