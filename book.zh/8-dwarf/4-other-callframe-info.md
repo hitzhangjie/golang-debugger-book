@@ -1,12 +1,12 @@
-### 5.4.3 调用栈信息（Call Frame Information）
+## 调用栈信息（Call Frame Information）
 
-#### 5.4.3.0 介绍
+### 介绍
 
 DWARF中的调用栈信息（Call Frame Information，简称CFI）为调试器提供了如下信息，函数是如何被调用的，如何找到函数参数，如何找到返回地址，如何找到调用函数（caller）的栈帧信息。 调试器借助CFI可以展开调用栈、查找上一个函数、确定当前函数的被调用位置以及传递的参数值。
 
 与行号表一样，CFI也被编码为一系列字节码指令，这些指令由CFI状态机解释、执行，以创建完整的CFI表。每条机器指令基本都对应CFI表中一行，第一列包含机器地址，而其他列则包含执行该地址处指令之前的各个寄存器值对应的unwind操作。 像行号表一样，完整的CFI也非常庞大。 幸运的是，两条指令之间的变化很小，因此CFI编码非常紧凑。
 
-#### 5.4.3.1 函数调用活动记录（or Call Frame）
+### 函数调用活动记录（or Call Frame）
 
 调试器通常需要能够查看和修改调用栈上任一函数调用的的状态，一次函数调用，如下信息是必须的：
 
@@ -29,7 +29,7 @@ DWARF中的调用栈信息（Call Frame Information，简称CFI）为调试器�
 
 > 联想下gdb调试的过程，通过bt可以看到调用栈，然后通过frame N来选择指定的栈帧，这个时候就是一个虚拟地展开调用栈的过程，目标栈帧中的寄存器状态被恢复，为什么说是虚拟地展开堆栈？因为解开堆栈这个操作并没有改变调用栈上的数据，也没有修改寄存器信息，进程的实际状态并没有发生改变，除非我们人为进行了修改。
 
-#### 5.4.3.2 架构无关编码方式
+### 架构无关编码方式
 
 展开堆栈操作，需要知道寄存器的保存位置以及如何计算调用方的CFA和代码位置。在考虑体系结构无关的信息编码方式时，有些特殊事项需要考虑：
 
@@ -49,7 +49,7 @@ DWARF中的调用栈信息（Call Frame Information，简称CFI）为调试器�
 
 - 一些体系结构处理返回地址值比较特殊。 例如，在有的体系结构中，调用指令可确保调用地址低两位为零，而返回指令将忽略这些位。 这留下了两个存储位，可供其他用途使用，必须对其进行特殊处理。
 
-#### 5.4.3.3 调用栈帧信息表（CFI）结构
+### 调用栈帧信息表（CFI）结构
 
 DWARF定义了独立于体系结构的基本要素来支持“虚拟展开（virtually unwind）”调用栈，这些基础要素能够记录子例程调用期间如何保存和恢复寄存器的状态。对于某些特定机器，其可能拥有些ABI委员会、硬件供应商或编译器生产商定义的体系结构特定的信息，需要借助这些信息对DWARF基本要素进行补充。
 
@@ -85,7 +85,7 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 
 > 如果函数的代码段地址范围不是连续的，那可能存在多个CIEs和FDEs。
 
-##### 5.4.3.3.1 公共信息条目（Common Information Entry）
+#### 公共信息条目（Common Information Entry）
 
 每个公共信息条目CIE的信息，可能会被很多帧描述条目FDE所共享。每个非空的.debug_frame section中至少包含一个CIE，每个CIE都包含如下字段，按照字段存储顺序依次是：
 
@@ -116,7 +116,7 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 11. padding (array of ubyte)，字节填充，通过DW_CFA_nop指令填充结构体，使CIE结构体大小满足length要求，length值加字段字节数必须按照address size对齐；
 
 
-##### 5.4.3.3.2 帧描述条目（Frame Descriptor Entry）
+#### 帧描述条目（Frame Descriptor Entry）
 
 一个FDE包含如下字段，按照字段顺序依次如下：
 
@@ -127,7 +127,7 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 5. instructions (array of ubyte)，FDE中包含的指令序列，在后面进行描述；
 6. padding (array of ubyte)，字节填充，通过DW_CFA_nop指令填充结构体，使FDE结构体大小满足length字段要求；
 
-#### 5.4.3.4 调用帧指令（Call Frame Instructions）
+### 调用帧指令（Call Frame Instructions）
 
 调用帧指令部分，每个指令采用0个或多个操作数，一些操作数可能被编码为操作码的一部分（请参见DWARF v4 section 7.23）。这些说明在以下各节中定义。
 有的调用栈帧指令，其操作数通过DWARF表达式编码（请参见DWARF v4 section 2.5.1）。以下DWARF运算符不能在此类操作数（DWARF表达式）中使用：
@@ -138,7 +138,7 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 
 上述限制适用的调用帧指令包括DW_CFA_def_cfa_expression，DW_CFA_expression和DW_CFA_val_expression。
 
-##### 5.4.3.4.1 CFI表行创建指令（Row Creation Instructions）
+#### CFI表行创建指令（Row Creation Instructions）
 
 1. DW_CFA_set_loc
   
@@ -157,7 +157,7 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 5. DW_CFA_advance_loc4
    DW_CFA_advance_loc4指令采用单个uword操作数来表示恒定增量。 除了增量操作数的编码和大小外，该指令与DW_CFA_advance_loc相同。
 
-##### 5.4.3.4.2 CFI表CFA定义指令（CFA Definition Instructions）
+#### CFI表CFA定义指令（CFA Definition Instructions）
 
 1. DW_CFA_def_cfa
   
@@ -185,7 +185,7 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 
   > ps: 有关可使用的DWARF表达式运算符的限制，请参见第DWARF v4 section 6.4.2。
 
-##### 5.4.3.4.3 CFI表寄存器规则指令（Register Rule Instructions） 
+#### CFI表寄存器规则指令（Register Rule Instructions） 
 
 1. DW_CFA_undefined
    DW_CFA_undefined指令采用单个无符号LEB128操作数来表示寄存器号。该指令指定寄存器unwind规则设置为“undefined”。
@@ -234,7 +234,7 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 12. DW_CFA_restore_extended
     DW_CFA_restore_extended指令采用单个无符号的LEB128操作数来表示寄存器号。 该指令与DW_CFA_restore相同，不同之处在于寄存器操作数的编码和大小。
 
-##### 5.4.3.4.4 CFI表行状态指令（Row State Instructions）
+#### CFI表行状态指令（Row State Instructions）
 
 接下来的两条指令提供了将寄存器状态保存入栈和获取的能力。 比如，对于编译器需要将函数epilogue代码移入函数体中return的地方的时候，它们就很有用。
 
@@ -245,13 +245,13 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 2. DW_CFA_restore_state
    DW_CFA_restore_state指令不接受任何操作数。 所需的操作是将规则集从隐式堆栈中弹出，并将其放置在当前行中。
 
-##### 5.4.3.4.5 CFI表字节填充指令（Padding Instruction）
+#### CFI表字节填充指令（Padding Instruction）
 
 1. DW_CFA_nop
 
    DW_CFA_nop指令没有操作数，也没有必需的操作。 它用作填充字节以使CIE或FDE大小合适。
 
-#### 5.4.3.5 调用帧指令使用（Call Frame Instruction Usage）
+### 调用帧指令使用（Call Frame Instruction Usage）
 
 为了**确定给定位置（L1）的虚拟展开规则集（virtual unwind rule set）**，可以在FDE headers中进行搜索，通过比较FDE headers中initial_location和address_range值以确定L1是否包含在某个FDE中。
 
@@ -264,7 +264,7 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 
 现在，针对位置L1的寄存器集合对应的虚拟展开规则集（virtual unwind rule set）就确定下来了。有关示例，请参见DWARF v4 2附录D.6。
 
-#### 5.4.3.6 调用帧调用地址（Call Frame Calling Address）
+### 调用帧调用地址（Call Frame Calling Address）
 
 当展开调用栈时，DWARF consumers（如调试器）通常会希望获得**子例程（函数）调用时的指令地址**。这些信息并不一定存在（比如尾递归消除了函数调用）。但通常，CFI中会指定一个寄存器（CIE中指定）来存储子例程（函数）调用的返回地址。
 
@@ -282,9 +282,9 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 >
 > 我们通过`gdb> bt`查看当前所有的栈帧，并通过`frame`命令选择栈帧时并不在乎精确的调用地址是什么，只要能够还原对应的栈帧上下文就足够了。
 
-#### 5.4.3.7 Example
+### Example
 
-##### 5.4.3.7.1 机器信息
+#### 机器信息
 
 下面的示例，假定是一个RISC机器，Motorola 88000。
 
@@ -308,13 +308,13 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 
 - 架构ABI委员会指定栈指针`(R7)`与CFA相同；
 
-##### 5.4.3.7.2 foo对应机器指令
+#### foo对应机器指令
 
 下面是函数foo对应的两个机器指令片段，分别是函数序言（prologue）以及函数后记（epilogue）部分，里面除了使用stack pointer以外，还使用了frame pointer。第一列是指令地址，`<fs>`表示stack frame（栈帧）的大小（按字节算），这个示例中是12字节。
 
 <img src="assets/image-20191229171656174.png" alt="image-20191229171656174" style="zoom:16%;" />
 
-##### 5.4.3.7.3 foo对应CFI表
+#### foo对应CFI表
 
 上图63对应的CFI信息表如下图64所示，.debug_frame section中对应的代码片段如图65所示。
 
@@ -329,7 +329,7 @@ CFA列，定义了计算规范栈帧地址值的规则，它可以是寄存器�
 
 <img src="assets/image-20191229172236863.png" alt="image-20191229172236863" style="zoom:16%;" />
 
-##### 5.4.3.7.4 CIE中initial instruction指导创建CFI中第一行
+#### CIE中initial instruction指导创建CFI中第一行
 
 CFI信息表第一行，是由当前被调函数foo对应的FDE所引用的CIE中的initial instructions来创建的，因此想了解第一行为什么是 `foo [R7]+0 s u u u s s s a r1`，就需要结合CIE来看，下图65中给出了CIE的说明。
 
@@ -359,7 +359,7 @@ CIE中规定R8是返回地址寄存器，该机型Motorola 88000规定函数调�
 
 <img src="assets/image-20191229172436047.png" alt="image-20191229172436047" style="zoom:25%;" />
 
-##### 5.4.3.7.5 FDE中指令序列指导创建CFI表中第2行、第3行、第n行
+#### FDE中指令序列指导创建CFI表中第2行、第3行、第n行
 
 然后结合foo机器指令代码片段，我们再来看下其中prologue、epilogue部分，这两部分对应的机器指令对应的FDE中的指令序列应该长什么样子，以及这些指令作用到CFI表又是什么样的效果。
 

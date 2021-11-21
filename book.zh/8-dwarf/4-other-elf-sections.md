@@ -1,4 +1,4 @@
-### 5.4.6 ELF Sections
+## ELF Sections
 
 虽然DWARF的定义方式使其可以与任何目标文件格式一起使用，但最经常与ELF一起使用。
 
