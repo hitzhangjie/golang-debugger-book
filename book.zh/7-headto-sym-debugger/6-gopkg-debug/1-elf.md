@@ -4,9 +4,12 @@
 
 标准库提供了package`debug/elf`来读取、解析elf文件数据，相关的数据类型及其之间的依赖关系，如下图所示：
 
-![image-20201128125408007](assets/image-20201128125408007.png)
+![debug/elf](assets/gopkg-debug-elf.png)
 
-简单讲，elf.File中包含了我们可以从elf文件中获取的所有信息，为了方便使用，标准库又提供了其他package `debug/gosym`来解析符号信息、行号表信息，还提供了`debug/dwarf`来解析调试信息。
+
+
+简单讲，elf.File中包含了我们可以从elf文件中获取的所有信息，为了方便使用，标准库又提供了其他package `debug/gosym`来解析.gosymtab符号信息、.gopclntab行号表信息，还提供了`debug/dwarf`来解析.[z]debug_\*调试信息。
+
 
 ### 常用操作及示例
 
@@ -45,8 +48,10 @@ func main() {
 不难看出，ELF文件中包含了如下关键信息：
 
 - FileHeader，即ELF Header；
-- Sections，Sections中每个Section都包含了一个elf.SectionHeader定义，实际上这个字段是读取ELF文件中节头表、节汇总之后的结果；
-- Progs，即ELF文件中的段头表，其中每个元素都是一个elf.ProgHeader；
+- Sections，Sections中每个Section都包含了一个elf.SectionHeader定义，它取自ELF文件中的节头表；
+- Progs，Progs中每个Prog都包含了一个elf.ProgHeader定义，它取自ELF文件中的段头表；
+
+elf.NewFile()读取ELF文件内容时根据ELF文件头中的Class类型（未知/32bit/64bit），在后续读取ELF文件内容时会有选择地使用Header32/64、Prog32/64、Section32/64中的类型，不管是32bit还是64bit，最终都赋值到了elf.File中的各个字段中并返回elf.File。
 
 通过打印信息，细心的读者会发现：
 
@@ -108,11 +113,9 @@ func main() {
 
 #### 读取文件段头表
 
-通过前面的示例输出不难看出，文件段头表其实是elf.File的一个导出字段Progs，该字段就是解析之后的段头表。
+elf.File中的Progs字段，即为段头表（Program Header Table）。前面示例展示了如何读取ELF文件并打印其结构。在此基础上我们将继续对段头表数据一探究竟。
 
-在前面示例的基础上，我们继续读取段头表信息。
-
-我们遍历ELF文件中段头表数据，查看每个段的类型、权限位、虚拟存储器地址、段大小，当然段头中还有其他数据，我们就不一一打印了。
+现在遍历ELF文件中段头表数据，查看每个段的类型、权限位、虚拟存储器地址、段大小，段中其他数据赞不关心。
 
 ```go
 package main
@@ -137,7 +140,9 @@ func main() {
 }
 ```
 
-运行测试`go run main.go ../testdata/loop`，程序会出如下段头表信息，从中我们可以看到各个segments的索引编号、段类型、权限位、虚拟存储器地址、段占用内存大小（有的段与文件大小可能不同，如多出来的规划给bss段）。
+运行测试`go run main.go ../testdata/loop`，程序输出如下。
+
+我们可以看到各个段的索引编号、段类型、权限位、虚拟存储器地址、段占用内存大小（有的段大小可能大于待加载的数据量大小，如包含.data,.bss的段多出来的就可以给堆）。
 
 ```bash
 No.   Type               Flags       VAddr      MemSize
@@ -215,7 +220,7 @@ No.   Name                 Type           Flags                     Addr       O
 
 现在我们看下如何读取指定的section的数据，以调试器过程中将使用到的section作为示例是一个不错的注意。读取prog的数据并无二致，本质上也是调用的section reader。
 
-**.text section：**
+**示例1：.text section：**
 
 ```go
 package main
@@ -245,7 +250,7 @@ func main() {
 64 48 8b 0c 25 f8 ff ff ff 48 3b 61 10 76 38 48 83 ec 18 48 89 6c 24 10 48 8d 6c 24 10 0f 1f 00
 ```
 
-只是查看一堆16进制数，并没有什么特别大帮助，我们可以调用反汇编框架将这些指令转换为汇编语言，方便阅读，方便进行一些指令级调试相关的操作。下面的程序将反汇编前10条指令数据并输出。
+只是查看一堆16进制数，并没有什么特别大帮助，对于.text节，我们还可以调用反汇编框架将这些指令转换为汇编语言。下面的程序将反汇编前10条指令数据并输出。
 
 ```go
 import (
@@ -270,7 +275,7 @@ func main() {
 }
 ```
 
-**.data section：**
+**示例2：.data section：**
 
 按照相同的方法，我们可以读取.data section的数据，但是下面的程序同样只能打印16进制数，这并没有太大帮助。联想到.text section可以通过反汇编框架进行反汇编（指令编解码是有规律的），我们如何解析这里的数据呢？
 
@@ -291,7 +296,7 @@ func main() {
 
 更方便的做法是借助调试符号信息，分析这个符号对应的类型信息，以及在内存中的位置，然后我们再读取内存数据并按照类型进行解析。我们将在debug/dwarf一节开始介绍。
 
-本节内容我们介绍了debug/elf的常用操作，我们接下来介绍下debug/gosym包的使用。
+本节内容我们介绍了标准库debug/elf的设计并演示了常用操作，我们接下来介绍下debug/gosym包的使用，了解下如何利用go工具链生成的符号、行号信息。
 
 ### 参考内容
 
