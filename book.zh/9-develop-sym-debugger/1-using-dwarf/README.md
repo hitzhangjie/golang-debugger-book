@@ -76,7 +76,14 @@ ${path-to-delve}/pkg/dwarf/
 | line         | 符号级调试很重要的一点是能够在指令地址与源文件名:行号之间进行转换，比如添加给语句添加断点的时候要转化成对指令地址的指令patch，或者停在某个断点处时应该显示出当前停在的源代码位置。行号表就是用来实现这个转换的，行号表被编码为一个字节码指令流，存储在.[z]debug_line中。<br>每个编译单元都有一个行号表，不同的编译单元的行号表数据最终会被linker合并在一起。每个行号表都有固定的结构以供解析，如header字段，然后后面跟着具体数据。<br>line_parser.go中提供了方法ParseAll来解析.[z]debug_line中的所有编译单元的行号表，对应类型DebugLines表示，每个编译单元对应的行号对应类型DebugLineInfo。DebugLineInfo中很重要的一个字段就是指令序列，这个指令序列也是交给一个行号表状态机去执行的，状态机实现定义在state_machine.go中，状态机执行后就能构建出完整的行号表。<br>有了完整的行号表，我们就可以根据pc去查表来找到对应的源码行。 |
 | loclist      | 描述对象在内存中的位置可以用位置表达式，也可以用位置列表。如果在对象生命周期中对象的位置可能发生变化，那么就需要一个位置列表来描述。再者，如果一个对象在内存中的存储不是一个连续的段，而是多个不相邻的段合并起来，那这种也需要用位置列表来描述。<br>在DWARF v2~v4中，位置列表信息存储在.[z]debug_loc中，在DWARF v5中，则存储在.[z]debug_loclist中。loclist包分别针对旧版本（DWARF v2~v4）、新版本（DWARF v5）中的位置列表予以了支持。<br>这个包中定义了Dwarf2Reader、Dwarf5Reader分别用来从旧版本、新版本的位置列表原始数据中读取位置列表。 |
 | op           | 先看op.go，DWARF中前面讲述地址表达式的运算时，提到了地址运算是通过执行一个基于栈操作的程序指令列表来完成的。程序指令都是1字节码指令，这里的字节码在当前package中均有定义，其需要的操作数就在栈中，每个字节码指令都有一个对应的函数stackfn，该函数执行时会对栈中的数据进行操作，取操作数并将运算结果重新入栈。最终栈顶元素即结果。<br>opcodes.go中定义了一系列操作码、操作码到名字映射、操作码对应操作数数量。<br>registers.go定义了DWARF关心的寄存器列表的信息DwarfRegisters，还提供了一些遍历的方法，如返回指定编号对应的的寄存器信息DwarfRegister、返回当前PC/SP/BP寄存器的值。 |
-| reader       | 1、定义了Reader，它内嵌了go标准库中的dwarf.Reader来从.[z]debug_info中读取DIE信息，每个DIE在DWARF中被组织成一棵树的形式，每个DIE对应一个dwarf.Entry，它包括了此前提及的Tag以及[]Field（Field中记录了Attr信息），此外还记录了DIE的Offset、是否包含孩子DIE。<br>这里的Reader，还定义了一些其他函数如Seek、SeekToEntry、AddrFor、SeekToType、NextType、SeekToTypeNamed、FindEntryNamed、InstructionsForEntryNamed、InstructionsForEntry、NextMemberVariable、NextPackageVariable、NextCompileUnit。<br>2、定义了Variable，其中嵌入了描述一个变量的DIE构成的树godwarf.Tree。它还提供了函数Variables用来从指定DIE树中提取包含的变量列表。 |
+| reader       | 该包定义了类型Reader，它内嵌了go标准库中的dwarf.Reader来从.[z]debug_info中读取DIE信息，每个DIE在DWARF中被组织成一棵树的形式，每个DIE对应一个dwarf.Entry，它包括了此前提及的Tag以及[]Field（Field中记录了Attr信息），此外还记录了DIE的Offset、是否包含孩子DIE。<br>这里的Reader，还定义了一些其他函数如Seek、SeekToEntry、AddrFor、SeekToType、NextType、SeekToTypeNamed、FindEntryNamed、InstructionsForEntryNamed、InstructionsForEntry、NextMemberVariable、NextPackageVariable、NextCompileUnit。<br>该包还定义了类型Variable，其中嵌入了描述一个变量的DIE构成的树godwarf.Tree。它还提供了函数Variables用来从指定DIE树中提取包含的变量列表。 |
 | regnum       | 定义了寄存器编号与寄存器名称的映射关系，提供了函数快速双向查询。 |
-| util         |                                                              |
+| util         | 该包定义了一个DWARF数据读取的buffer实现，从中可以方便读取DWARF编码的一些数据，如Uint8、Varint、Uint、Int等。<br>该包还定义了一些导出函数来方便从buf中读取ULEB128、SLEB128、string、DWARF数据长度&版本等，或者编码ULEB128、SLEB128、Uint等到writer。 |
 
+### 本节小结
+
+本小节简要列举了go-delve/delve中的DWARF相关的package pkg/dwarf，并针对这个package下的各个子包的功能作用、大致工作原理进行了简要的陈述。
+
+由于手写一个完整且健壮的DWARF解析库，是要求必须要精通DWARF调试信息标准的，而且还要了解go编译器、链接器在从DWARF v4演变到DWARF v5的过程中所做的各种调整。这里从头实现一个类似go-delve/delve中package pkg/dwarf的库的话工作量会比较大。
+
+我们是出于学习目的，为了尽可能精确地、完整地介绍符号级调试器方方面面知识点的同时，也希望手把手教大家开发的过程也不至于很枯燥，所以决定不打算从头手写DWARF解析库，而是复用go-delve/delve中DWARF解析库（会适当裁剪无关代码）并介绍大致的实现过程。在接下来的小节中我们将展示如何引用它并一步步实现我们的符号级调试器。
