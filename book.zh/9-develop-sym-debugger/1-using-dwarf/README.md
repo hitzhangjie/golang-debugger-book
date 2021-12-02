@@ -1,10 +1,10 @@
-# DWARF解析及应用
+## DWARF解析
 
 介绍下[go-delve/delve](https://github.com/go-delve/delve)中的DWARF解析相关的代码，这里简单介绍下相关package的作用和使用方法，在后续小节中将有更详细的使用。
 
 这里的介绍采用的delve源码版本为：commit cba1a524。您可以检出delve的源码的对应版本，来进一步深入了解，我们先跟随作者的节奏来快速了解。
 
-## 目录结构&说明
+### 目录结构
 
 我们先看下delve中DWARF相关的代码，这部分代码位于项目目录下的pkg/dwarf目录下，根据描述的DWARF信息的不同、用途的不同又细分为了几个不同的package。
 
@@ -64,7 +64,9 @@ ${path-to-delve}/pkg/dwarf/
 11 directories, 37 files
 ```
 
-简单说下上述package的作用：
+### 功能说明
+
+对上述package的具体功能进行简单陈述：
 
 | package      | 作用及用途                                                   |
 | ------------ | ------------------------------------------------------------ |
