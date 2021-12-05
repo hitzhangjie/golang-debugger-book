@@ -301,7 +301,52 @@ ok      github.com/hitzhangjie/codemaster/dwarf/test    0.023s
 
 ### 读取函数定义
 
-TODO
+现在读取下程序中的函数、方法、匿名函数的定义：
+
+```go
+func Test_DWARFReadFunc(t *testing.T) {
+	f, err := elf.Open("fixtures/elf_read_dwarf")
+	assert.Nil(t, err)
+
+	dat, err := f.DWARF()
+	assert.Nil(t, err)
+
+	rd := reader.New(dat)
+	for {
+		die, err := rd.Next()
+		if err != nil {
+			break
+		}
+		if die == nil {
+			break
+		}
+		if die.Tag == dwarf.TagSubprogram {
+			fmt.Println(die)
+		}
+	}
+}
+```
+
+运行命令`go test -v -run Test_DWARFReadFunc`进行测试，我们看到输出了程序中定义的一些函数，也包括我们main package中的函数main.main。
+
+```bash
+$ go test -v -run Test_DWARFReadFunc
+
+=== RUN   Test_DWARFReadFunc
+&{73 Subprogram true [{Name sync.newEntry ClassString} {Lowpc 4725024 ClassAddress} {Highpc 4725221 ClassAddress} {FrameBase [156] ClassExprLoc} {DeclFile 3 ClassConstant} {External true ClassFlag}]}
+&{149 Subprogram true [{Name sync.(*Map).Load ClassString} {Lowpc 4725248 ClassAddress} {Highpc 4726474 ClassAddress} {FrameBase [156] ClassExprLoc} {DeclFile 3 ClassConstant} {External true ClassFlag}]}
+&{272 Subprogram true [{Name sync.(*entry).load ClassString} {Lowpc 4726496 ClassAddress} {Highpc 4726652 ClassAddress} {FrameBase [156] ClassExprLoc} {DeclFile 3 ClassConstant} {External true ClassFlag}]}
+&{368 Subprogram true [{Name sync.(*Map).Store ClassString} {Lowpc 4726656 ClassAddress} {Highpc 4728377 ClassAddress} {FrameBase [156] ClassExprLoc} {DeclFile 3 ClassConstant} {External true ClassFlag}]}
+...
+&{324861 Subprogram true [{Name main.main ClassString} {Lowpc 4949568 ClassAddress} {Highpc 4949836 ClassAddress} {FrameBase [156] ClassExprLoc} {DeclFile 2 ClassConstant} {External true ClassFlag}]}
+...
+&{450220 Subprogram true [{Name reflect.methodValueCall ClassString} {Lowpc 4856000 ClassAddress} {Highpc 4856091 ClassAddress} {FrameBase [156] ClassExprLoc} {DeclFile 1 ClassConstant} {External true ClassFlag}]}
+--- PASS: Test_DWARFReadFunc (41.67s)
+PASS
+ok      github.com/hitzhangjie/codemaster/dwarf/test    41.679s
+```
+
+go程序中除了上述tag为DW_TAG_subprogram的DIE与函数有关，DW_TAG_subroutine_type、DW_TAG_inlined_subroutine_type、DW_TAG_inlined_subroutine也与之有关，后面有机会再展开介绍。
 
 ### 读取行号表信息
 
@@ -314,3 +359,10 @@ TODO
 ### 本节小结
 
 TODO
+
+
+
+### 参考内容
+
+1. go语言中不同数据类型对应的DWARF DIE Tag：https://sourcegraph.com/github.com/golang/go/-/blob/src/cmd/internal/dwarf/dwarf.go?L418
+2. 
