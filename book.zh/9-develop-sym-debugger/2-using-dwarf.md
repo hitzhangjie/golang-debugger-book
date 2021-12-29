@@ -307,6 +307,8 @@ ok      github.com/hitzhangjie/codemaster/dwarf/test    0.023s
 
 ```
 
+注意，在上述测试用例的尾部，我们还校验了变量`s:=main.Student{}`的类型定义的位置偏移量与类型`main.Student`的定义位置进行了校验。
+
 ### 读取函数定义
 
 现在读取下程序中的函数、方法、匿名函数的定义：
