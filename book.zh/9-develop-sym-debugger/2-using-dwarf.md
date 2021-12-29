@@ -217,6 +217,8 @@ PASS
 ok      github.com/hitzhangjie/codemaster/dwarf/test    0.020s
 ```
 
+这里的类型信息如何理解呢？这就需要结合前面讲过的DWARF如何描述数据类型相关的知识点慢慢进行理解了。不用担心，后面我们仍然会遇到这里的知识点，到时候会再次结合相关知识点来描述。
+
 ### 读取变量
 
 现在读取变量定义对我们来说也不是什么难事了，我们来看个示例：
@@ -262,7 +264,7 @@ func Test_DWARFReadVariable(t *testing.T) {
 			continue
 		}
 		// 通过offset限制，只查看main.main中定义的变量名为s的变量
-        // 这里的0x432b9是结合`objdump --dwarf=info`中的结果来推算的
+        // 这里的0x432b9是结合`objdump --dwarf=info`中的结果来硬编码的
 		if entry.Val(dwarf.AttrType).(dwarf.Offset) != dwarf.Offset(0x432b9) {
 			continue
 		}
@@ -278,6 +280,12 @@ func Test_DWARFReadVariable(t *testing.T) {
 
 		// 查看变量s对应的地址 [lowpc, highpc, instruction]
 		fmt.Println("location:", entry.Val(dwarf.AttrLocation))
+        
+		// 最后在手动校验下main.Student的类型与上面看到的变量的类型是否一致
+		// 应该满足：main.Student DIE的位置 == 变量的类型的位置偏移量
+		typeEntry, err := rd.SeekToTypeNamed("main.Student")
+		assert.Nil(t, err)
+		assert.Equal(t, typeEntry.Val(dwarf.AttrType), variableTypeEntry.Offset)
 		break
 	}
 }
