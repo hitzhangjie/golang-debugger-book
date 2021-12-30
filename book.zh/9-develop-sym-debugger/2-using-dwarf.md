@@ -2,6 +2,8 @@
 
 前一小节我们介绍了go-delve/delve中pkg/dwarf下的各个包的作用，本节我们来了解下具体如何应用。
 
+本小节相关代码您可以从这里获取：https://github.com/hitzhangjie/codemaster/tree/master/dwarf/test。涉及到objdump的操作建议您在Linux下进行，macOS提供的对应软件包在功能上与Linux版本有些差异。您可以安装docker，并通过docker-build.sh来构建一个镜像，然后通过docker-start.sh来启动容器，方便您在一致的环境中进行测试。
+
 ### ELF读取DWARF
 
 ELF文件中读取DWARF相关的调试section，并打印section名称及数据量大小：
@@ -509,13 +511,63 @@ func main() {
 
 ### 读取CFI表信息
 
-TODO
+接下来读取CFI（Call Frame Information）信息表：
+
+```go
+func Test_DWARFReadCFITable(t *testing.T) {
+	f, err := elf.Open("fixtures/elf_read_dwarf")
+	assert.Nil(t, err)
+
+	// 解析.[z]debug_frame中CFI信息表
+	dat, err := godwarf.GetDebugSection(f, "frame")
+	assert.Nil(t, err)
+	fdes, err := frame.Parse(dat, binary.LittleEndian, 0, 8, 0)
+	assert.Nil(t, err)
+	assert.NotEmpty(t, fdes)
+
+	//for idx, fde := range fdes {
+	//	fmt.Printf("fde[%d], begin:%#x, end:%#x\n", idx, fde.Begin(), fde.End())
+	//}
+
+	for _, fde := range fdes {
+		if !fde.Cover(0x4b8640) {
+			continue
+		}
+		fmt.Printf("address 0x4b8640 is covered in FDE[%#x,%#x]\n", fde.Begin(), fde.End())
+		fc := fde.EstablishFrame(0x4b8640)
+		fmt.Printf("retAddReg: %s\n", regnum.AMD64ToName(fc.RetAddrReg))
+		switch fc.CFA.Rule {
+		case frame.RuleCFA:
+			fmt.Printf("cfa: rule:RuleCFA, CFA=(%s)+%#x\n", regnum.ARM64ToName(fc.CFA.Reg), fc.CFA.Offset)
+		default:
+		}
+	}
+}
+```
+
+我们首先读取elf文件中的.[z]debug_frame section，然后利用`frame.Parse(...)`方法完成CFI信息表的解析，解析后的数据存储在类型为`FrameDescriptionEntries`的变量fdes中，这个类型其实是 `type FrameDescriptionEntries []*FrameDescriptionEntry`，只不过在这个类型上增加了一些方便易用的方法，如比较常用的`FDEForPC(pc)`用来返回FDE指令地址范围包含pc的那个FDE。
+
+我们可以遍历fdes将每个fde的指令地址范围打印出来。
+
+在读取行号表信息时，我们了解到0x4b8640这个地址为main.main的入口地址，我们不妨拿这条指令来进一步做下测试。我们遍历所有的FDE来检查到底哪个FDE的指令地址范围包含main.main入口指令0x4b8640。
+
+>   ps: 其实这里的遍历+fde.Cover(pc)可以通过通过fdes.FDEForPC代替，这里只是为了演示FrameDescriptionEntry提供了Cover方法。
+
+当找到的时候，我们就检查要计算当前pc 0x4b8640对应的CFA（Canonical Frame Address）。估计对CFA的概念又不太清晰了，再解释下CFA的概念：
+
+>   **DWARFv5 Call Frame Information L8:L12**:
+>
+>    An area of memory that is allocated on a stack called a “call frame.” The call frame is identiﬁed by an address on the stack. We refer to this address as the Canonical Frame Address or CFA. Typically, the CFA is deﬁned to be the value of the stack pointer at the call site in the previous frame (which may be different from its value on entry to the current frame).
+
+有了这个CFA我们就可以找到当前pc对应的栈帧以及caller的栈帧，以及caller的caller的栈帧……每个函数调用对应的栈帧中都有返回地址，返回地址实际为指令地址，借助行号表我们又可以将指令地址映射为源码中的文件名和行号，这样就可以很直观地显示当前pc的调用栈信息。
+
+当然，CFI信息表提供的不光是CFA的计算，它还记录了指令执行过程中对其他寄存器的影响，因此还可以显示不同栈帧中时寄存器的值。通过在不同栈帧中游走，还可以看到栈帧中定义的局部变量的值。
+
+关于CFI的使用我们就先简单介绍到这，后面实现符号级调试时再进一步解释。
 
 ### 本节小结
 
-TODO
-
-
+前一小节总结了go-delve/delve中dwarf相关package的作用，本小节我们使用这些包编写了一些测试用例，分别测试了读取数据类型定义、读取变量、读取函数定义、读取行号表、读取调用栈信息表，通过编写这些测试用例，我们加深了对DWARF的理解以及应用。
 
 ### 参考内容
 
