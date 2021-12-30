@@ -1,8 +1,8 @@
 ## DWARF应用
 
-前一小节我们介绍了go-delve/delve中pkg/dwarf下的各个包的作用，本节我们来了解下具体如何应用。
+前一小节我们介绍了go-delve/delve中pkg/dwarf下的各个包的作用，本节我们来了解下具体如何应用。本小节相关代码您可以从这里获取：https://github.com/hitzhangjie/codemaster/tree/master/dwarf/test。
 
-本小节相关代码您可以从这里获取：https://github.com/hitzhangjie/codemaster/tree/master/dwarf/test。涉及到objdump的操作建议您在Linux下进行，macOS提供的对应软件包在功能上与Linux版本有些差异。您可以安装docker，并通过docker-build.sh来构建一个镜像，然后通过docker-start.sh来启动容器，方便您在一致的环境中进行测试。
+涉及到objdump的操作建议您在Linux下进行，macOS提供的对应软件包在功能上与Linux版本有些差异。您可以安装docker，并通过docker-build.sh来构建一个镜像，然后通过docker-start.sh来启动容器，方便您在一致的环境中进行测试。
 
 ### ELF读取DWARF
 
