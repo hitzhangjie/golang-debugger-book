@@ -3,6 +3,8 @@ englishWordsCnt := $(shell find book.en -iname "*.md" -print0 | grep -z -v zh_CN
 
 .PHONY: english chinese stat clean
 
+PWD := $(shell pwd -P)
+
 english:
 	rm book.en/_book
 	gitbook install book.en
@@ -10,8 +12,11 @@ english:
 
 chinese:
 	rm book.zh/_book
-	gitbook install book.zh
-	gitbook serve book.zh
+	#gitbook install book.zh
+	#gitbook serve book.zh
+	docker run --rm -v ${PWD}/book.zh:/root/gitbook hitzhangjie/gitbook-cli:latest gitbook install .
+	docker run --rm -v ${PWD}/book.zh:/root/gitbook -p 4000:4000 -p 35729:35729 hitzhangjie/gitbook-cli:latest gitbook serve .
+
 
 stat:
 	@echo "Chinese version, words: ${chineseWordsCnt}"
