@@ -7,15 +7,18 @@ PWD := $(shell pwd -P)
 
 english:
 	rm book.en/_book
-	gitbook install book.en
-	gitbook serve book.en
+	#gitbook install book.en
+	#gitbook serve book.en
+	docker run --name gitbook --rm -v ${PWD}/book.en:/root/gitbook hitzhangjie/gitbook-cli:latest gitbook install .
+	docker run --name gitbook --rm -v ${PWD}/book.en:/root/gitbook -p 4000:4000 -p 35729:35729 hitzhangjie/gitbook-cli:latest gitbook serve .
+
 
 chinese:
 	rm book.zh/_book
 	#gitbook install book.zh
 	#gitbook serve book.zh
-	docker run --rm -v ${PWD}/book.zh:/root/gitbook hitzhangjie/gitbook-cli:latest gitbook install .
-	docker run --rm -v ${PWD}/book.zh:/root/gitbook -p 4000:4000 -p 35729:35729 hitzhangjie/gitbook-cli:latest gitbook serve .
+	docker run --name gitbook --rm -v ${PWD}/book.zh:/root/gitbook hitzhangjie/gitbook-cli:latest gitbook install .
+	docker run --name gitbook --rm -v ${PWD}/book.zh:/root/gitbook -p 4000:4000 -p 35729:35729 hitzhangjie/gitbook-cli:latest gitbook serve .
 
 
 stat:
