@@ -46,8 +46,6 @@ gitbook install && gitbook serve
 
 Though gitbook-cli is deprecated offically, it is still a very popular EBook generator. If trying to install gitbook-cli today, we may encounter some errors, because the nodejs, graceful-fs has broken some compatibility with gitbook-cli. Because of this, I have built a docker image `hitzhangjie/gitbook-cli:latest`, you could pull and use this docker image instead of installing by npm or homebrew package manager.
 
-We put the commands into Makefile, you can just run `make chinese` or `make english` to read  the relevant version.
-
 ```bash
 # read the english version
 rm book.en/_book
@@ -60,6 +58,8 @@ rm book.zh/_book
 docker run --name gitbook --rm -v ${PWD}/book.zh:/root/gitbook hitzhangjie/gitbook-cli:latest gitbook install .
 docker run --name gitbook --rm -v ${PWD}/book.zh:/root/gitbook -p 4000:4000 -p 35729:35729 hitzhangjie/gitbook-cli:latest gitbook serve .
 ```
+
+We put the commands into Makefile, you can just run `make chinese` or `make english` to read  the relevant version.
 
 ## Contact
 
