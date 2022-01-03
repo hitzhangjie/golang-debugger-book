@@ -24,50 +24,42 @@ I hope that this book and related samples can be smoothly completed. It can be r
 
 ## Read the Book locally
 
-1. clone the repository
+1. run git to clone the repository
+
 ```bash
 git clone https://github.com/hitzhangjie/golang-debugger-book
 ```
 
-2. install gitbook or gitbook-cli
+2. run gitbook to serve the book
+
+If you have installed gitbook-cli by npm or homebrew, you could run the following command to serve the book:
+
 ```bash
-# macOS
-brew install gitbook-cli
+# read the chinese version
+cd book.zh
+gitbook install && gitbook serve
 
-# linux
-yum install gitbook-cli
-apt install gitbook-cli
-
-# windows
-...
+# read the english version
+cd book.en
+gitbook install && gitbook serve
 ```
 
-3. build the book
+Though gitbook-cli is deprecated offically, it is still a very popular EBook generator. If trying to install gitbook-cli today, we may encounter some errors, because the nodejs, graceful-fs has broken some compatibility with gitbook-cli. Because of this, I have built a docker image `hitzhangjie/gitbook-cli:latest`, you could pull and use this docker image instead of installing by npm or homebrew package manager.
+
+We put the commands into Makefile, you can just run `make chinese` or `make english` to read  the relevant version.
+
 ```bash
-cd golang-debugger-book/book
+# read the english version
+rm book.en/_book
+docker run --name gitbook --rm -v ${PWD}/book.en:/root/gitbook hitzhangjie/gitbook-cli:latest gitbook install .
+docker run --name gitbook --rm -v ${PWD}/book.en:/root/gitbook -p 4000:4000 -p 35729:35729 hitzhangjie/gitbook-cli:latest gitbook serve .
 
-# initialize gitbook plugins
-make init 
 
-# build English version
-make english
-
-# build Chinese version
-make chinese
-
+# read the chinese version
+rm book.zh/_book
+docker run --name gitbook --rm -v ${PWD}/book.zh:/root/gitbook hitzhangjie/gitbook-cli:latest gitbook install .
+docker run --name gitbook --rm -v ${PWD}/book.zh:/root/gitbook -p 4000:4000 -p 35729:35729 hitzhangjie/gitbook-cli:latest gitbook serve .
 ```
-
-4. clean tmpfiles
-```bash
-make clean
-```
-
-> NOTE: please use Node v10.x.
->
-> If you really want to use higher version of Node, please pay attention:
->
-> 1. if you run `gitbook serve` has error and your `gitbook-cli` is installed globally. Find the NPM global installation directory and into dir `node_modules/gitbook-cli/node_modules/npm/node_modules`, run command `npm install graceful-fs@latest --save`
-> 2. if you run `gitbook install` has error, go to user directory and into dir `.gitbook/versions/3.2.3/node_modules/npm`, run command `npm install graceful-fs@latest --save`
 
 ## Contact
 
