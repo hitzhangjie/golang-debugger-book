@@ -311,6 +311,16 @@ godbg将启动ls进程，并通过PTRACE_TRACEME让内核把ls进程停下（通
 
 > FIXME：本文第一版撰写时间偏早，示例代码与调试器示例最新代码已不一致，但对读者朋友们学习影响并不大，不要因此而受影响，有时间我会尽快更新。
 
+再次思考下，如果我们exec执行的是一个go程序，应该如何处理呢？因为go程序天然是多线程程序，从其主线程启动到陆续创建出其他的gc、sysmon、执行众多goroutines的线程是有一个过程的，那么这个过程中我们是很难人为去感知的，调试器如何对这个过程中创建的诸多线程自动发起ptrace attach呢？
+
+没有什么好办法，调试器作为一个普通用户态程序，只能请求操作系统提供的服务代为处理，这就涉及到ptrace attach的具体选项`PTRACE_O_TRACECLONE`了，添加了这个选项内核会在clone创建新线程时给新线程发送必要的信号，等新线程调度时自然会停下来。
+
+> **PTRACE_O_TRACECLONE***:
+>
+> Stop the tracee at the next clone(2) and automatically start tracing the newly cloned process, which will start with a SIGSTOP, or PTRACE_EVENT_STOP if PTRACE_SEIZE was used.
+
+
+
 ### 参考内容
 
 - Playing with ptrace, Part I, Pradeep Padala, https://www.linuxjournal.com/article/6100
