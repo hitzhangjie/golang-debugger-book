@@ -275,7 +275,7 @@ import (
     "os"
 )
 func main() {
-    {
+    for  {
         time.Sleep(time.Second)
         fmt.Println("pid:", os.Getpid())
     }
@@ -292,9 +292,9 @@ func main() {
 
 > ps：附录《go runtime: go程序启动流程》中对go程序的启动流程做了分析，可以帮读者朋友打消这里main.main、main goroutine、main thread的一些疑虑。
 
-在Linux下，线程其实是通过轻量级进程（LWP）来实现的，这里的ptrace参数pid实际上是线程对应的LWP的进程id。意思是只有这个线程会被调试跟踪。
+在Linux下，线程其实是通过轻量级进程（LWP）来实现的，这里的ptrace参数pid实际上是线程对应的LWP的进程id。只对进程pid进行ptrace attach操作，结果是将只有这个进程pid对应的线程会被调试跟踪。
 
-**在调试场景中，tracee永远指的是一个线程，而非一个进程或者多线程的进程**，尽管我们有时候为了描述方便，在术语上会选择倾向于使用进程。
+**在调试场景中，tracee指的是一个线程，而非一个进程包含的所有线程**，尽管我们有时候为了描述方便，在术语上会选择倾向于使用进程。
 
 > 一个多线程的进程，其实是可以理解成一个包含了多个线程的线程组，线程组中的线程在创建的时候都通过clone+CLONE_THREAD选项来创建，来保证所有新创建的线程拥有相同的pid，类似clone+CLONE_PARENT使得克隆出的所有子进程都有相同的父进程id一样。
 >
@@ -312,21 +312,13 @@ func main() {
 >
 > 关于clone选项的更多作用，您可以通过查看man手册`man 2 clone`来了解。
 
-pid标识的线程（或LWP）与发送ptrace请求的线程（或LWP）二者之间建立ptrace link，它们的角色分别为tracee、tracer，后续tracee期望收到的所有ptrace请求都来自这个tracer。
+pid标识的线程（或LWP）与发送ptrace请求的线程（或LWP）二者之间建立ptrace link，它们的角色分别为tracee、tracer，后续tracee期望收到的所有ptrace请求都来自这个tracer。因为这个原因，天然就是多线程的go程序就需要保证实际发送ptrace请求的goroutine必须执行在同一个线程上。
 
-被调试进程中如果有其他线程，仍然是可以运行的，这就是为什么我们某些读者发现有时候被调试程序仍然在不停输出，因为tracer没有attach到正在输出的goroutine对应的线程。
+被调试进程中如果有其他线程，仍然是可以运行的，这就是为什么我们某些读者发现有时候被调试程序仍然在不停输出，因为tracer并没有在main.main内部设置断点，执行该函数的main goroutine可能由其他未被trace的线程执行，所以仍然可以看到程序不停输出。
 
 #### 问题：想让执行main.main的线程停下来？
 
-如果想让被调试进程停止执行，有两个办法可以做到：
-
-- 方法1，调试器枚举被调试进程下所有的线程，逐个attach；
-
-  比如，列出`/proc/<pid>/task`下的线程对应的LWP pid，逐个attach。
-
-- 方法2，被测试程序启动的时候通过变量GOMAXPROCS=1限制最大并发执行线程数；
-
-  go程序依然是多线程，只是同一时刻只有一个线程执行，现在我们attach了某个线程之后，这个线程暂停执行，即便其他线程能执行也会迅速停下来，失去后续执行机会。
+如果想让被调试进程停止执行，调试器需要枚举进程中包含的线程并对它们逐一进行ptrace attach操作。具体到Linux，可以列出`/proc/<pid>/task`下的线程对应的LWP pid，逐个执行ptrace attach。
 
 我们将在后续过程中进一步完善attach命令，使其也能胜任多线程环境下的调试工作。
 
@@ -339,7 +331,7 @@ pid标识的线程（或LWP）与发送ptrace请求的线程（或LWP）二者�
   `-H`选项将列出进程pid下的线程列表，以下进程5293下有4个线程，Linux下线程是通过轻量级进程实现的，PID列为5293的轻量级进程为主线程。
 
   ```bash
-  $ top -h -p 5293
+  $ top -H -p 5293
   ........
   PID USER      PR  NI    VIRT    RES    SHR S %CPU %MEM     TIME+ COMMAND                                                             
    5293 root      20   0  702968   1268    968 S  0.0  0.0   0:00.04 loop                                                                
