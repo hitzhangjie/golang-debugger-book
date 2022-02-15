@@ -10,7 +10,7 @@ ELF文件格式如下，文件开头是ELF Header，剩下的数据部分包括P
 
 先简单介绍一下ELF中关键结构的含义和作用：
 
-- ELF FIle Header，ELF文件头，其描述了当前ELF文件的类型（可执行程序、可重定位文件、动态链接文件、core文件等）、32位or64位寻址、ABI、ISA、程序入口地址、Program Header Table起始地址及元素大小、Section Header Table起始地址及元素大小，等等；
+- ELF FIle Header，ELF文件头，其描述了当前ELF文件的类型（可执行程序、可重定位文件、动态链接文件、core文件等）、32位/64位寻址、ABI、ISA、程序入口地址、Program Header Table起始地址及元素大小、Section Header Table起始地址及元素大小，等等；
 - Program Header Table，它描述了系统如何创建一个程序的进程映像，每个表项都定义了一个segment（段），其中引用了0个、1个或多个section，它们也有自己的类型，如PT_LOAD，表示系统应按照表项中定义好的虚拟地址范围将引用的sections以mmap的形式映射到进程虚拟地址空间，如进程地址空间中的text段、data段；
 - Section Header Table，它描述了文件中包含的每个section的位置、大小、类型、链接顺序，等等，主要目的是为了指导链接器进行链接；
 - Sections，ELF文件中的sections数据，夹在Program Header Table和Section Header Table中间，由一系列的sections数据构成。
@@ -163,11 +163,11 @@ ELF文件会包含很多的sections，前面给出的测试实例中就包含了
 - .bss：未经初始化的全局变量，在ELF文件中只是个占位符，不占用实际空间；
 - .symtab：符号表，每个可重定位文件都有一个符号表，存放程序中定义的全局函数和全局变量的信息，注意它不包含局部变量信息，局部非静态变量由栈来管理，它们对链接器符号解析、重定位没有帮助。也要注意，.symtab和编译器中的调试符号无关（如gcc -g生成）；
 - .debug_*: 调试信息，调试器读取该信息以支持符号级调试（如gcc -g生成）；
-- .strtab：字符串表，内容包括.symtab和.[z]debug_*节中的符号，以及section名；
+- .strtab：字符串表，包括.symtab和.[z]debug_*节符号的字符串值，以及section名；
 - .rel.text：一个.text section中位置的列表，当链接器尝试把这个目标文件和其他文件链接时，需要修改这些位置的值，链接之前调用外部函数或者引用外部全局变量的是通过符号进行的，需要对这些符号进行解析、重定位成正确的访问地址。
 - .rel.data：引用的一些全局变量的重定位信息，和.rel.text有些类似；
 
-当然除了列出的这些，还有很多其他sections，ELF也允许vendor自定义sections，以支持一些期望的功能，如go语言就添加了.gosymtab、.gopclntab、.note.build.id来支持go运行时的一些操作。
+当然除了列出的这些，还有很多其他sections，ELF也允许vendor自定义sections，以支持一些期望的功能，如go语言就添加了.gosymtab、.gopclntab、.note.build.id来支持go运行时、go工具链的一些操作。
 
 我们来简单介绍下如何查看sections中的内容：
 
