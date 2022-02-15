@@ -9,3 +9,8 @@
 
 
 TODO 任务优先级：高
+
+
+
+基于这种架构进行设计的时候，也需要考虑将来调试器如何和其他工具的集成，比如微软就提出了DAP（debugger adapter protocol），调试器适配器协议，如果调试器要与vscode集成，在backend这里实现DAP定义的协议操作就可以了。也就是真正的backend也要支持可扩展，比如dlv启动的时候可以通过参数--backend来选择native、dap、lldb、gdbserial等不同的backend实现。see https://github.com/hitzhangjie/tinydbg/issues/3。
+
