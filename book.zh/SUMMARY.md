@@ -57,6 +57,7 @@
   * [8.5 DWARF总结](8-dwarf/5-dwarf-summary.md)
   * [8.6 解析DWARF](8-dwarf/6-parsing-dwarf.md)
   * [8.7 使用DWARF](8-dwarf/7-using-dwarf.md)
+  * [8.8 本章总结](8-dwarf/8-summary.md)
 * [9 开发go符号级调试器](9-develop-sym-debugger/README.md)
   * [9.1 设计目标](9-develop-sym-debugger/1-design-goals/README.md)
   * [9.2 技术思路](9-develop-sym-debugger/2-big-pictures/README.md)
