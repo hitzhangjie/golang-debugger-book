@@ -98,21 +98,21 @@ go符号级调试器的功能性需求，大家联想下常见调试器的使用
 
 **6 Other commands**
 
-| 命令        | 别名      | 描述                                                |
-| ----------- | --------- | --------------------------------------------------- |
-| config      |           | Changes configuration parameters.                   |
-| disassemble | disass    | Disassembler.                                       |
-| dump        |           | Creates a core dump from the current process state  |
-| edit        | ed        | Open where you are in $DELVE_EDITOR or $EDITOR      |
-| exit        | quit \| q | Exit the debugger.                                  |
-| funcs       |           | Print list of functions.                            |
-| help        | h         | Prints the help message.                            |
-| libraries   |           | List loaded dynamic libraries                       |
-| list        | ls \| l   | Show source code.                                   |
-| source      |           | Executes a file containing a list of delve commands |
-| sources     |           | Print list of source files.                         |
-| types       |           | Print list of types.                                |
-| ptype       |           | Print type info of specific datatype.               |
+| 命令        | 别名     | 描述                                                |
+| ----------- | -------- | --------------------------------------------------- |
+| config      |          | Changes configuration parameters.                   |
+| disassemble | disass   | Disassembler.                                       |
+| dump        |          | Creates a core dump from the current process state  |
+| edit        | ed       | Open where you are in $DELVE_EDITOR or $EDITOR      |
+| exit        | quit / q | Exit the debugger.                                  |
+| funcs       |          | Print list of functions.                            |
+| help        | h        | Prints the help message.                            |
+| libraries   |          | List loaded dynamic libraries                       |
+| list        | ls / l   | Show source code.                                   |
+| source      |          | Executes a file containing a list of delve commands |
+| sources     |          | Print list of source files.                         |
+| types       |          | Print list of types.                                |
+| ptype       |          | Print type info of specific datatype.               |
 
 大家都有使用过调试器，上面列出的调试命令至少有一部分是比较熟悉的。上述调试能力大致是一个现代go符号级调试器所要支持的功能全集，可以达到工程上的应用要求了。如果读者有使用过go-delve/delve，你会发现上面的功能基本上全是go-delve/delve的调试命令？没错，我这里就是罗列了go-delve/delve的调试命令，额外增加了一个受gdb启发的ptype打印类型详情的命令。
 
