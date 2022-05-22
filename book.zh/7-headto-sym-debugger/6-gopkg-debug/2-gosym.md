@@ -23,7 +23,7 @@ ELF文件中符号表信息一般会存储在`.symtab` section中，go程序有�
 - go程序执行时，其运行时部分会加载.gosymtab、.gopclntab的数据到进程内存中，用来执行栈跟踪（stack tracebacks），比如runtime.Callers。但是.symtab、.[z]debug_\* sections并没有被加载到内存中，它是由外部调试器来读取并加载的，如gdb、delve。
     ```bash
     $ readelf -l <prog>
-  
+    
     Program Headers:
       Type           Offset             VirtAddr           PhysAddr
                      FileSiz            MemSiz              Flags  Align
@@ -34,7 +34,7 @@ ELF文件中符号表信息一般会存储在`.symtab` section中，go程序有�
       LOAD           ...// 04 .go.buildinfo ...
       GNU_STACK      ...
       LOOS+5041580   ...
-  
+    
      Section to Segment mapping:
       Segment Sections...
        00     
@@ -44,7 +44,7 @@ ELF文件中符号表信息一般会存储在`.symtab` section中，go程序有�
        04     .go.buildinfo .noptrdata .data .bss .noptrbss 
        05     
        06 
-  
+    
     ```
 
   对一个构建好的go程序执行命令`readelf -l <prog>`我们可以看到段索引02、03、04位LOAD类型表示是要加载到内存中的，这个段对应的sections也显示包含.gosymtab、.gopclntab但是不包含.[z]debug_\*相关的sections。
@@ -90,7 +90,7 @@ go程序的很多核心开发者本身就是Plan9的开发者，go中借鉴Plan9
 
 通过package `debug/gosym`可以构建出pcln table，通过其方法PcToLine、LineToPc等，可以帮助我们快速查询指令地址与源文件中位置的关系，也可以通过它来进一步分析调用栈，如程序panic时我们希望打印调用栈来定位出错的位置。
 
-我理解，**对调用栈信息的支持才是.gosymtab、.gopclntab所主要解决的问题**，go1.3之后调用栈数据应该是完全由.gopclntab支持了，所以.gosymtab也就为空了。所以它和调试器需要的.[z]debug_line、.[z]debug_frame设计目的上有着很大区别，其中.[z]debug_frame不仅可以追踪调用栈信息，也可以追踪每一个栈帧中的寄存器数据的变化，其数据编码、解析、运算逻辑也更加复杂。
+我理解，**对调用栈信息的支持才是.gosymtab、.gopclntab所主要解决的问题**，go1.3之后调用栈数据应该是完全由.gopclntab支持了，所以.gosymtab也就为空了。和调试器需要的.[z]debug_line、.[z]debug_frame等在设计目的上有着很大区别，其中.[z]debug_frame不仅可以追踪调用栈信息，也可以追踪每一个栈帧中的寄存器数据的变化，其数据编码、解析、运算逻辑也更加复杂。
 
 那.gosymtab、.gopclntab能否用于调试器呢？也不能说完全没用，只是这里面的数据相对DWARF调试信息来说，缺失了一些调试需要的信息，我们还是需要用到DWARF才能完整解决调试场景中的问题。
 
