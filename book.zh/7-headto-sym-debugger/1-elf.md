@@ -15,7 +15,7 @@ ELF文件格式如下，文件开头是ELF Header，剩下的数据部分包括P
 - Section Header Table，它描述了文件中包含的每个section的位置、大小、类型、链接顺序，等等，主要目的是为了指导链接器进行链接；
 - Sections，ELF文件中的sections数据，夹在Program Header Table和Section Header Table中间，由一系列的sections数据构成。
 
-### ELF PRogram Header Table
+### ELF Program Header Table
 
 它定义了segments视图，可以理解为程序执行的视图（executable point of view），主要用来指导loader如何加载。
 
@@ -69,7 +69,11 @@ Program Headers:
 
 它定义了sections视图，即程序链接的视图（the linkable point of view），主要是用来指导linker如何链接。
 
-从链接器角度来看，程序将代码、数据划分成不同的sections，如指令在.text、只读数据在.rodata等。程序中的每个section属于0个、1个或多个segments，每个section在程序运行时会被（或不被）mmap到进程地址空间。
+> 以C语言为例每个编译单元编译过程中生成的\*.o目标文件也是一个ELF文件，里面包含了当前文件的section信息，最终链接器将所有\*.o文件的相同sections合并在一起，所以说它是用来指导链接器连接的一个视图。
+>
+> see：https://stackoverflow.com/a/51165896
+
+从链接器角度来看，程序将代码、数据划分成不同的sections，如指令在.text、只读数据在.rodata等。程序中的每个section属于0个、1个或多个segments，每个section在程序运行时会被按需mmap到进程地址空间。
 
 以测试程序golang-debugger-lessons/testdata/loop2测试程序为例，我们来看下其链接器角度的视图，可以看到其包含了25个sections，每个section都有类型、偏移量、大小、链接顺序、对齐等信息，用以指导链接器完成链接操作。
 
