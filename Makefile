@@ -46,6 +46,5 @@ deploy:
 	git add .
 	git commit -m "rebuilding site"
 	git push -f -u origin master
-	cd - 
 	rm -rf ${tmpdir}
 
