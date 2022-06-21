@@ -14,13 +14,13 @@ book="book.zh"
 
 git clone $deploy $tmpdir
 
-docker run --name gitbook --rm \
-    -v ${PWD}:/root/gitbook \
-    -v $tmpdir:$tmpdir \
-    hitzhangjie/gitbook-cli:latest \
-    gitbook build $book tmpdir
+#docker run --name gitbook --rm \
+#    -v ${PWD}:/root/gitbook \
+#    -v $tmpdir:$tmpdir \
+#    hitzhangjie/gitbook-cli:latest \
+#    gitbook build $book tmpdir
 
-#gitbook build $book tmpdir
+gitbook build $book tmpdir
 cp -r tmpdir/* $tmpdir/
 rm -rf tmpdir
 
