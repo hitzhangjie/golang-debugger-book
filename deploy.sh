@@ -2,6 +2,7 @@
 
 deploy=https://github.com/hitzhangjie/debugger101.io
 tmpdir=/tmp/debugger101.io
+rm -rf $tmpdir
 
 # If a command fails then the deploy stops
 set -e
@@ -13,7 +14,13 @@ book="book.zh"
 
 git clone $deploy $tmpdir
 
-gitbook build $book tmpdir
+docker run --name gitbook --rm \
+    -v ${PWD}:/root/gitbook \
+    -v $tmpdir:$tmpdir \
+    hitzhangjie/gitbook-cli:latest \
+    gitbook build $book tmpdir
+
+#gitbook build $book tmpdir
 cp -r tmpdir/* $tmpdir/
 rm -rf tmpdir
 
