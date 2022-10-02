@@ -97,6 +97,26 @@ ps: what，进程还有寄存器、内存数据？如果想不明白，可以了
 
 > Linux平台对SIGSTOP信号的处理，可以参考：[How does SIGSTOP work in Linux kernel?](https://stackoverflow.com/questions/31946854/how-does-sigstop-work-in-linux-kernel)
 
+> **ps：简单提下内存保护模式的实现，这样有助于理解为什么现在调试器一般通过操作系统系统调用来实现，比如Linux ptrace。**
+>
+> **实模式大致原理：**
+>
+> 这里以x86处理器发展史来简单说明下，8086处理器是实模式寻址，意味着你可以写个程序通过CS:IP来跳到任意指令地址执行指令，或者DS:Offset读写任意内存地址数据，这样就很不安全。
+>
+> 在Intel后续处理器上为了建立起内存保护模式，首先引入了特权级的概念，ring0~ring3（ring0权限最高），Linux中仅使用ring0、ring3这两个（区分内核态和用户态够用了）。然后又引入了GDT、LDT的概念，这个什么用呢，它们是个表结构，记录了一系列的内存区间以及访问这些内存位置所需要的特权级。在访问真正的内存区域之前，需要先查表检查特权级是否足够。
+>
+> **阻止执行任意位置指令：**
+>
+> 实模式下的CS:IP直接可以计算后用来寻址，保护模式下不行，CS的含义已经变了，不再是代码段起始地址，它（CS部分位字段）变成了一个指向GDT、LDT中的索引，查GDT、LDT可以知道访问对应的内存区所需要的特权级信息。如果当前特权级（CS部分位字段）低于CS对应的GDT描表项中的特权级，则不能访问对应内存区。这样执行指令的时候，就不能够随意指定个地址去执行该位置的指令了。
+>
+> **阻止读写任意位置数据：**
+>
+> 对于如何阻止读写任意位置的数据，这个问题应该可以通过类似的方式来做到，就不进一步展开了，感兴趣读者可以自己查阅资料。
+>
+> 关于80286实现内存保护模式的更多信息，可参考[protected mode basics by Robert Collins](http://www.rcollins.org/articles/pmbasics/tspec_a1_doc.html)，我是基于《Linux源码情景分析》中关于保护模式的内容回忆来补充这部分信息的，Robert Collins还额外描述了中断情况下如何保证保护模式。
+>
+> 那保护模式下当我们希望执行tracee的指令、读写tracee的数据时，利用系统调用来搞定这些不就行了？是的，也只能这么做。
+
 #### 4.2.2.3 解释器
 
 如果是调试一门解释型的语言，那就比通过系统调用的方式直接多了，因为所有的调试基础设施都可以直接内建在解释器中。通过一个解释器，就可以无限制地访问执行引擎。所有的调试操作及其依赖的能力都是运行在用户空间而非内核空间，也就不需要借助系统调用了。没有什么东西是被隐藏的。所要做的就是增加扩展来处理断点、单步执行等操作。
@@ -108,6 +128,22 @@ ps: what，进程还有寄存器、内存数据？如果想不明白，可以了
 你需要一个内核调试器！
 
 内核调试器，能够指挥、控制中央处理器（CPU），这样就可以通过单步执行、断点等操作对内核代码进行调试、检查。这意味着内核调试器必须能够避开内存保护模式机制，通常内核级调试器都是与操作内核镜像打包在一起的。有些厂商要实现自己的内核级调试器，也会考虑将调试器作为设备驱动、可加载的内核模块的方式来设计、开发。
+
+> **ps：内核调试和用户程序调试有着明显不同。**
+>
+> 举个例子，比如我们打印一个内存变量，不巧这个内存页面被操作系统换出到交换区了，如果我们在用户级调试器里面通过系统调用的形式ptrace(PTRACE_PEEKDATA...)操作系统会自动把这个换出的页面加回来，然后帮把数据读回来，很简单，我们甚至都没有感觉到这背后一连串的缺页处理发生过。
+>
+> 但是如果是内核级调试的话，内核级调试器需要调试内核的代码，一步步地，这样缺页处理这些问题也要一步步过，如果我们直接打印变量地址很可能是看不到值的，可能这只会触发一个缺页异常。
+>
+> 这两种调试器适合的问题场景、对开发人员对底层技术细节的掌握程度都是不同的。
+>
+> 实现内核级调试，内核肯定是要提供必要的调试能力支持，这个肯定少不了的，至于内置的调试器工具还是外部调试器工具，这个就简单了。
+>
+> 关于内核级调试器，感兴趣可以参考：
+>
+> - [kernel space debuggers in Linux]( https://sysplay.github.io/books/LinuxDrivers/book/Content/Part10.html)
+> - [user mode debugging vs kernel mode debugging]( https://stackoverflow.com/questions/32998218/is-there-ever-an-advantage-to-user-mode-debug-over-kernel-mode-debug#:~:text=in%20kernel%20mode.-,User%20mode%20debugging,you%20need%20to%20have%20really%20professional%20comprehension%20of%20all%20those%20topics.,-Conclusion)
+> - [kernel debugger internals](https://www.kernel.org/doc/html/v4.18/dev-tools/kgdb.html#kernel-debugger-internals)
 
 #### 4.2.2.5 调试器界面
 
