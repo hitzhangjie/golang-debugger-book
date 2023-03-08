@@ -24,6 +24,14 @@ chinese:
 	docker run --name gitbook --rm -v ${PWD}/book.zh:/root/gitbook hitzhangjie/gitbook-cli:latest gitbook install .
 	docker run --name gitbook --rm -v ${PWD}/book.zh:/root/gitbook -p 4000:4000 -p 35729:35729 hitzhangjie/gitbook-cli:latest gitbook serve .
 
+pdfchinese:
+	@echo "Warn: must do it mannually so far for lack of proper docker image,"
+	@echo "- install 'calibre' first (see https://calibre-ebook.com/download),"
+	@echo "- make sure 'ebook-convert' could be found in envvar 'PATH',"
+	@echo "  take macOS for example:"
+	@echo "  run 'sudo ln -s /Applications/calibre.app/Contents/MacOS/ebook-convert /usr/bin'."
+	@echo "- run 'gitbook pdf <book> <book.pdf>'"
+	@echo ""
 
 stat:
 	@echo "Chinese version, words: ${chineseWordsCnt}"
