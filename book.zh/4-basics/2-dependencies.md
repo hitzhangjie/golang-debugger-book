@@ -32,6 +32,8 @@
     >[19] .zdebug_loc       PROGBITS         00000000005dcfe2  001befe2
     >[20] .zdebug_ranges    PROGBITS         00000000005e982d  001cb82d
     >```
+    >
+    >go1.13中确实是这样的，zlib压缩后写入.zdebug_ sections，但是go1.19不是，它是zlib压缩后还是写入.zdebug_ sections。
 
 - 存储在独立的文件中
 
