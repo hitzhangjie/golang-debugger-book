@@ -37,8 +37,16 @@ Hi，我是张杰，目前就职于腾讯（深圳）科技有限公司，后台
 本书对应的示例代码，您可以通过以下两种方式获得：
 
 1. [**golang-debugger-lessons**](https://github.com/hitzhangjie/golang-debugger-lessons)，读者可以按照章节对应关系来查看示例代码，目录 [**/0-godbg**](https://github.com/hitzhangjie/golang-debugger-lessons) 中提供了一个相对完整的go语言符号级调试器实现。
+
 2. [**godbg**](https://github.com/hitzhangjie/godbg)，迁移自上述配套示例代码中的/0-godbg，读者如果希望快速体验完整功能，也可以直接体验该项目或查看源码；
-2. [**hitzhangjie/delve**](https://github.com/hitzhangjie/delve)，该项目由go-delve/delve裁剪而来，为了方便讲述与符号级调试器最核心的部分，项目中剔除了与linux/amd64无关的一些扩展实现。本书有关符号级调试器实现部分会借鉴此项目中的代码。
+
+   > ps: 项目中提供了vscode的devcontainer配置，采用的是centos+go1.13。如果您升级go版本则可能导致程序出现问题，比如go1.14引入抢占问题，意味着调试器必须解决抢占问题，这可能导致调试器工作不符合预期。
+   >
+   > 另外，如果您使用其他版本，书中内容描述可能与真实情况有差异，比如go1.13编译后会将DWARF信息写入.zdebug_ sections，但是go1.19则会将不会写入.zdebug_ sections（写入的事.debug_ sections）。
+   >
+   > 强烈建议您先试用提供的开发容器进行测试、学习，当您掌握了一些基础之后，再按需升级go版本不迟。
+
+3. [**hitzhangjie/delve**](https://github.com/hitzhangjie/delve)，该项目由go-delve/delve裁剪而来，为了方便讲述与符号级调试器最核心的部分，项目中剔除了与linux/amd64无关的一些扩展实现。本书有关符号级调试器实现部分会借鉴此项目中的代码。
 
 ## 1.5 联系方式
 
