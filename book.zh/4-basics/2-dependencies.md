@@ -32,8 +32,13 @@
     >[19] .zdebug_loc       PROGBITS         00000000005dcfe2  001befe2
     >[20] .zdebug_ranges    PROGBITS         00000000005e982d  001cb82d
     >```
+
+    > ps: go1.13中确实是这样的，zlib压缩后写入.zdebug_ sections，但是go1.19不是，它写入的是.debug_ sections。
     >
-    >go1.13中确实是这样的，zlib压缩后写入.zdebug_ sections，但是go1.19不是，它是zlib压缩后还是写入.zdebug_ sections。
+    > TODO
+    >
+    > - 求证下go1.19开启DWARF压缩的条件
+    > - 是否仍然保持这样的惯例，压缩就写入.zdebug，反之写入.debug
 
 - 存储在独立的文件中
 
