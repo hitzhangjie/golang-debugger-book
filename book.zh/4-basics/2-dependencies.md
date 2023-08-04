@@ -69,10 +69,10 @@
     >├── Info.plist
     >└── Resources
     >      └── DWARF
-    >            └── main
+    >            └── main|
     >```
     >
-    >可以看到，macOS 10.15上，gcc将调试信息也存储到了独立的main.dSYM/目录。可以借助`dwarfdump or splitdwarf`工具进行分析，可以参考这篇文章：https://blog.golang.org/debug-opt。
+	可以看到，macOS 10.15上，gcc将调试信息也存储到了独立的main.dSYM/目录。可以借助`dwarfdump or splitdwarf`工具进行分析，可以参考这篇文章：https://blog.golang.org/debug-opt。
 
 调试信息有什么用呢？调试器利用调试信息能够将源码中的函数、变量映射为内存中的地址，也就意味着开发者可以直接对源码中函数、变量进行操作而不用关心具体的内存地址，这也是符号级调试器相比于指令级调试器的优势。
 
@@ -98,9 +98,9 @@
 
 与DOS相反，Windows、Linux以及BSD都实现了内存保护模式，这意味着如果你想在这些平台上开发一个调试器，就需要通过平台提供的系统调用来实现。
 
-以Linux系统调用为例，调试器进程（tracer）可以通过`ptrace(PTRACE_ATTACH…)` attach到一个被调试进程（tracee），然后操作系统内核会给tracee进程发送一个信号SIGSTOP，tracee进程就会停下来，tracer进程就可以通过`waitpid(pid)`来等待tracee停止事件。当tracer进程感知到tracee进程停止执行之后，tracer进程就可以进一步通过`ptrace`系统调用、配合其他ptrace参数`PTRACE_GETREGS、PTRACE_SETREGS、PTRACE_PEEKDATA、PTRACE_POKEDATA等`来读写tracee进程寄存器、内存数据、控制代码的执行路径等。
+以Linux系统调用为例，调试器进程（tracer）可以通过`ptrace(PTRACE_ATTACH…)` attach到一个被调试进程（tracee），然后操作系统内核会给tracee进程发送一个信号SIGSTOP，tracee进程就会停下来，tracer进程就可以通过`waitpid(pid)`来等待tracee停止事件。当tracer进程感知到tracee进程停止执行之后，tracer进程就可以进一步通过`ptrace`系统调用、配合其他ptrace参数`PTRACE_GETREGS、PTRACE_SETREGS、PTRACE_PEEKDATA、PTRACE_POKEDATA等`来读写寄存器、内存数据、控制代码的执行路径等。
 
-ps: what，进程还有寄存器、内存数据？如果想不明白，可以了解下操作系统进程控制块PCB的概念以及Linux下taskstruct、GDT、LDT相关的知识。
+ps: 对与进程、线程的表示，建议了解下操作系统进程控制块PCB的概念以及Linux下taskstruct、GDT、LDT相关的知识。
 
 > Linux平台对SIGSTOP信号的处理，可以参考：[How does SIGSTOP work in Linux kernel?](https://stackoverflow.com/questions/31946854/how-does-sigstop-work-in-linux-kernel)
 
@@ -144,9 +144,9 @@ ps: what，进程还有寄存器、内存数据？如果想不明白，可以了
 >
 > 这两种调试器适合的问题场景、对开发人员对底层技术细节的掌握程度都是不同的。
 >
-> 实现内核级调试，内核肯定是要提供必要的调试能力支持，这个肯定少不了的，至于内置的调试器工具还是外部调试器工具，这个就简单了。
+> 实现内核级调试，内核肯定是要提供必要的调试能力支持，至于使用内置的调试器工具还是使用外部调试器工具，这个选择就简单了。
 >
-> 关于内核级调试器，感兴趣可以参考：
+> 其他，关于内核级调试器，感兴趣可以参考：
 >
 > - [kernel space debuggers in Linux]( https://sysplay.github.io/books/LinuxDrivers/book/Content/Part10.html)
 > - [user mode debugging vs kernel mode debugging]( https://stackoverflow.com/questions/32998218/is-there-ever-an-advantage-to-user-mode-debug-over-kernel-mode-debug#:~:text=in%20kernel%20mode.-,User%20mode%20debugging,you%20need%20to%20have%20really%20professional%20comprehension%20of%20all%20those%20topics.,-Conclusion)
