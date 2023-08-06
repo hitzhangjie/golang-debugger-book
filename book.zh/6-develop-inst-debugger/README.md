@@ -140,6 +140,8 @@ Prefix with number to repeat command N times (f.ex: 3x)
 
 如果读者进一步了解下rafare2的详细功能，它功能之强大一定会让你感到惊叹。
 
+ps: 如果读者想了解radare2的使用，可以先看下我之前写过的一偏实践文章：[monkey patching in golang](hitzhangjie.pro/blog/2020-08-23-monkey_patching_in_go/)，描述了指令patch技术在golang mock测试中 的应用，以及如何借助radare2来演示指令patching的过程。
+
 #### 有限的指令级调试支持
 
 本书中，我们仅介绍如何支持有限的指令级调试能力，我们的初衷是学习分享，而非工程上的取代、大而全。如果篇幅允许，也会适当的和其他指令级调试做对比，探讨下某些特性的实现方式。
