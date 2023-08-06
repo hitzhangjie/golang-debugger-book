@@ -39,20 +39,22 @@ tracer，指的是向tracee发送调试控制命令的调试进程，准确地�
 当我们调用了attach之后，attach返回时，tracee有可能还没有停下来，这个时候需要通过wait方法来等待tracee停下来，并获取tracee的状态信息。当结束调试时，可以通过detach操作，让tracee恢复执行。
 
 >下面是man手册关于ptrace操作attach、detach的说明，下面要用到：
-    
+
     **PTRACE_ATTACH**  
     *Attach to the process specified in pid, making it a tracee of*
     *the calling process.  The tracee is sent a SIGSTOP, but will*
     *not necessarily have stopped by the completion of this call;*
 >*use waitpid(2) to wait for the tracee to stop.  See the "At‐*
 >*taching and detaching" subsection for additional information.*
-    
+
     **PTRACE_DETACH**  
     *Restart the stopped tracee as for PTRACE_CONT, but first de‐*
     *tach from it.  Under Linux, a tracee can be detached in this*
     *way regardless of which method was used to initiate tracing.*
 
 ### 代码实现
+
+**src详见：golang-debugger-lessons/1.1_cmd_attach**
 
 file: main.go
 

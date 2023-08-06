@@ -194,6 +194,8 @@ static inline void ptrace_event(int event, unsigned long message)
 
 ### 代码实现
 
+**src详见：golang-debugger-lessons/1.2_cmd_exec+attach**
+
 类似c语言fork+exec的方式，go标准库提供了一个ForkExec函数实现，以此可以用go重写上述c语言示例。但是，go标准库提供了另一种更简洁的方式。
 
 我们首先通过`cmd := exec.Command(prog, args...)`获取一个cmd对象，在`cmd.Start()`启动进程前打开进程标记位`cmd.SysProcAttr.Ptrace=true`，然后再`cmd.Start()`启动进程，最后调用`Wait`函数来等待子进程（因为SIGTRAP）停下来并获取子进程的状态。
@@ -203,33 +205,43 @@ static inline void ptrace_event(int event, unsigned long message)
 这里的示例代码，是在以前示例代码基础上修改得来，修改后代码如下：
 
 ```go
-package cmd
+package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
-
-	"godbg/cmd/debug"
-
-	"github.com/spf13/cobra"
+	"time"
 )
 
-var pid int
+const (
+	usage = "Usage: go run main.go exec <path/to/prog>"
 
-// execCmd represents the exec command
-var execCmd = &cobra.Command{
-	Use:   "exec <prog>",
-	Short: "调试可执行程序",
-	Long:  `调试可执行程序`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	cmdExec   = "exec"
+	cmdAttach = "attach"
+)
+
+func main() {
+	runtime.LockOSThread()
+
+	if len(os.Args) < 3 {
+		fmt.Fprintf(os.Stderr, "%s\n\n", usage)
+		os.Exit(1)
+	}
+	cmd := os.Args[1]
+
+	switch cmd {
+	case cmdExec:
+		args := os.Args[2:]
 		fmt.Printf("exec %s\n", strings.Join(args, ""))
 
 		if len(args) != 1 {
-			return errors.New("参数错误")
+			fmt.Println("参数错误")
+			os.Exit(1)
 		}
 
 		// start process but don't wait it finished
@@ -241,35 +253,29 @@ var execCmd = &cobra.Command{
 			Ptrace: true,
 		}
 
-		err := progCmd.Start()
-		if err != nil {
-			return err
+		if err := progCmd.Start(); err != nil {
+			fmt.Println(err)
+			os.Exit(1)
 		}
 
 		// wait target process stopped
-		pid = progCmd.Process.Pid
-
 		var (
 			status syscall.WaitStatus
 			rusage syscall.Rusage
 		)
-		_, err = syscall.Wait4(pid, &status, syscall.WALL, &rusage)
-		if err != nil {
-			return err
+		pid := progCmd.Process.Pid
+		if _, err := syscall.Wait4(pid, &status, syscall.WALL, &rusage); err != nil {
+			fmt.Println(err)
+			os.Exit(1)
 		}
 		fmt.Printf("process %d stopped:%v\n", pid, status.Stopped())
+	case cmdAttach:
+		// ...
 
-		return nil
-	},
-	PostRunE: func(cmd *cobra.Command, args []string) error {
-		debug.NewDebugShell().Run()
-		// let target process continue
-		return syscall.PtraceCont(pid, 0) 
-	},
-}
-
-func init() {
-	rootCmd.AddCommand(execCmd)
+	default:
+		fmt.Fprintf(os.Stderr, "%s unknown cmd\n\n", cmd)
+		os.Exit(1)
+	}
 }
 ```
 
@@ -297,7 +303,7 @@ godbg将启动ls进程，并通过PTRACE_TRACEME让内核把ls进程停下（通
 >
 > 这里的调试会话，不过是个允许用户输入调试命令的黑窗口，用户所有的输入都会转交给cobra生成的debugRootCmd处理，debugRootCmd下包含了很多的subcmd，比如breakpoint、list、continue、step等调试命令。
 >
-> 在写这篇文档时，我们还是基于cobraprompt来管理调试会话命令及输入补全的，将上述debugRootCmd交给cobraprompt管理后，当我们输入一些信息后，prompt就会处理我们的输入并交给debugRootCmd注册的同名命令进行处理。
+> 在写这篇文档时，我们还是基于cobra-prompt来管理调试会话命令及输入补全的，将上述debugRootCmd交给cobra-prompt管理后，当我们输入一些信息后，prompt就会处理我们的输入并交给debugRootCmd注册的同名命令进行处理。
 >
 > 如我们输入了exit，则会调用debugRootCmd中注册的exitCmd进行处理。exitCmd只是执行os.Exit(0)让进程退出，在退出之前内核会自动做些清理操作，如正在被其跟踪的tracee会被内核执行ptrace(PTRACE_COND,...)解除跟踪，让tracee恢复执行。
 
@@ -305,11 +311,9 @@ godbg将启动ls进程，并通过PTRACE_TRACEME让内核把ls进程停下（通
 
 `godbg exec <prog>`命令现在一切正常了！
 
-> NOTE: 示例中在execCmd.PostRunE中显示调用了`ptrace(PTRACE_COND,...)`，其实是没有必要的，原因在介绍调试会话时以提及，内核会代为处理接触tracee的跟踪状态。
+> NOTE: 示例中程序退出时，没有显示调用 `ptrace(PTRACE_COND,...)`来恢复tracee的执行。其实tracer退出时，如果其trace的tracee还在，内核会自动解除tracee的跟踪状态。
 >
-> 其实，如果tracee如果是我们显示启动的，那么在调试器退出时应该kill掉该进程（或者允许选择kill进程或让其继续执行），而不应该默认让其继续执行。
-
-> FIXME：本文第一版撰写时间偏早，示例代码与调试器示例最新代码已不一致，但对读者朋友们学习影响并不大，不要因此而受影响，有时间我会尽快更新。
+> 如果tracee如果是我们显示启动的（不是attach的），那么在调试器退出时应该kill掉该进程（或者允许选择kill进程或让其继续执行），而不应该默认让其继续执行。
 
 再次思考下，如果我们exec执行的是一个go程序，应该如何处理呢？因为go程序天然是多线程程序，从其主线程启动到陆续创建出其他的gc、sysmon、执行众多goroutines的线程是有一个过程的，那么这个过程中我们是很难人为去感知的，调试器如何对这个过程中创建的诸多线程自动发起ptrace attach呢？
 
@@ -319,7 +323,11 @@ godbg将启动ls进程，并通过PTRACE_TRACEME让内核把ls进程停下（通
 >
 > Stop the tracee at the next clone(2) and automatically start tracing the newly cloned process, which will start with a SIGSTOP, or PTRACE_EVENT_STOP if PTRACE_SEIZE was used.
 
+### 本节小结
 
+本节实现了一个完整的“启动、跟踪”的实现原理、代码解释、示例演示。本节用到了start+attach或exec+attach的表述，这样做只是为了让章节内容组织上突出层层递进的关系。
+
+严格来说，我们应该用trace代替attach的表述。因为attach会让读者误以为技术上时通过tracer 主动 `ptrace(PTRACE_ATTACH,)`实现的。其实是 tracee 主动`ptrace(PTRACE_TRACEME,)`实现的。另外对于多线程调试，如果希望新创建出来的线程自动被trace，也不是tracer主动发起的，而是提前给tracee设置TRACECLONE选项实现的。
 
 ### 参考内容
 
