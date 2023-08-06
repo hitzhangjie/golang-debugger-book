@@ -2,13 +2,13 @@
 
 ### 实现目标：`godbg attach -p <pid>`
 
-有时待进程已经在运行了，如果要对其进行调试需要将进程挂住(attach)，让其停下来等待调试器对其进行控制。
+如果进程已经在运行了，如果要对其进行调试需要将进程挂住(attach)，让其停下来等待调试器对其进行控制。
 
 常见的调试器如dlv、gdb等都支持通过参数 `-p pid` 的形式来传递目标进程号来对运行中的进程进行调试。
 
-我们将实现程序godbg，它支持exec子命令，支持接收参数 `-p pid`，如果目标进程存在，godb将attach到目标进程，此时目标进程会暂停执行。然后我们让godbg休眠几秒钟，再detach目标进程，目标进程会恢复执行。
+我们将实现程序godbg，它支持子命令``attach -p <pid>``，如果目标进程存在，godbg将attach到目标进程，此时目标进程会暂停执行。然后我们让godbg休眠几秒钟，再detach目标进程，目标进程会恢复执行。
 
-> ps: 这里休眠的几秒钟，用户可以先将其假想成一系列的调试操作过程，如设置断点、检查进程寄存器、检查内存等等，后面小节中我们将支持这些能力。
+> ps: 这里休眠的几秒钟，用户可以先将其假想成一系列的调试操作，如设置断点、检查进程寄存器、检查内存等等，后面小节中我们将支持这些能力。
 
 ### 基础知识
 
@@ -16,7 +16,7 @@
 
 首先要进一步明确tracee的概念，虽然我们看上去是对进程进行调试，实际上调试器内部工作时，是对一个一个的线程进行调试。
 
-tracee，指的是被调试的线程，而不是进程，对于一个多线程程序而言，可能要trace（跟踪）部分或者全部的线程以方便调试，没有被traced的线程将会继续执行，而被traced的线程则受调试器控制。甚至同一个被调试进程中的不同线程，可以由不同的tracer来控制。
+tracee，指的是被调试的线程，而不是进程。对于一个多线程程序而言，可能要跟踪（trace）部分或者全部的线程以方便调试，没有被跟踪的线程将会继续执行，而被跟踪的线程则受调试器控制。甚至同一个被调试进程中的不同线程，可以由不同的tracer来控制。
 
 #### tracer
 
@@ -32,21 +32,25 @@ tracer，指的是向tracee发送调试控制命令的调试进程，准确地�
 
 所以，在我们参考dlv等调试器的实现时会发现，发送调试命令的goroutine通常会调用`runtime.LockOSThread()`来绑定一个线程，专门用来向attached tracee发送调试指令（也就是各种ptrace操作）。
 
->runtime.LockOSThread()，将调用该函数的goroutine绑定到该操作系统线程上，意味着该操作系统线程只会用来执行该goroutine上的操作，除非该goroutine调用了runtime.UnLockOSThread()解除这种绑定关系，否则该线程不会用来调度其他goroutine。调用了该函数之后就可以满足tracee对tracer的要求。
+>runtime.LockOSThread()，将调用该函数的goroutine绑定到该操作系统线程上，意味着该操作系统线程只会用来执行该goroutine上的操作，除非该goroutine调用了runtime.UnLockOSThread()解除这种绑定关系，否则该线程不会用来调度其他goroutine。调用这个函数的goroutine也只能在当前线程上执行，不会被调度器迁移到其他线程。
+>
+>调用了该函数之后，就可以满足tracee对tracer的要求：一旦tracer通过ptrace_attach了某个tracee，后续发送到该tracee的ptrace请求必须来自同一个tracer，tracee、tracer具体指的都是线程。
 
 当我们调用了attach之后，attach返回时，tracee有可能还没有停下来，这个时候需要通过wait方法来等待tracee停下来，并获取tracee的状态信息。当结束调试时，可以通过detach操作，让tracee恢复执行。
 
->PTRACE_ATTACH  
-    Attach to the process specified in pid, making it a tracee of
-    the calling process.  The tracee is sent a SIGSTOP, but will
-    not necessarily have stopped by the completion of this call;
-    use waitpid(2) to wait for the tracee to stop.  See the "At‐
-    taching and detaching" subsection for additional information.
->
->PTRACE_DETACH  
-    Restart the stopped tracee as for PTRACE_CONT, but first de‐
-    tach from it.  Under Linux, a tracee can be detached in this
-    way regardless of which method was used to initiate tracing.
+>下面是man手册关于ptrace操作attach、detach的说明，下面要用到：
+    
+    **PTRACE_ATTACH**  
+    *Attach to the process specified in pid, making it a tracee of*
+    *the calling process.  The tracee is sent a SIGSTOP, but will*
+    *not necessarily have stopped by the completion of this call;*
+>*use waitpid(2) to wait for the tracee to stop.  See the "At‐*
+>*taching and detaching" subsection for additional information.*
+    
+    **PTRACE_DETACH**  
+    *Restart the stopped tracee as for PTRACE_CONT, but first de‐*
+    *tach from it.  Under Linux, a tracee can be detached in this*
+    *way regardless of which method was used to initiate tracing.*
 
 ### 代码实现
 
@@ -178,16 +182,16 @@ func checkPid(pid int) bool {
 这里的程序逻辑也比较简单：
 - 程序运行时，首先检查命令行参数，
     - `godbg attach <pid>`，至少有3个参数，如果参数数量不对，直接报错退出；
-    - 接下来校验第2个参数，如果是不支持的subcmd，也直接报错退出；
-    - 如果是attach，那么pid参数应该是这个整数，如果不是也直接退出；
+    - 接下来校验第2个参数，如果是无效的subcmd，也直接报错退出；
+    - 如果是attach，那么pid参数应该是个整数，如果不是也直接退出；
 - 参数正常情况下，开始尝试attach到tracee；
 - attach之后，tracee并不一定立即就会停下来，需要wait来获取其状态变化情况；
 - 等tracee停下来之后，我们休眠10s钟，仿佛自己正在干些调试操作一样；
 - 10s钟之后，tracer尝试detach tracee，让tracee继续恢复执行。
 
 我们在Linux平台上实现时，需要考虑Linux平台本身的问题，具体包括：
-- 通过pid是否对应着一个有效的进程，通常会通过`exec.FindProcess(pid)`来检查，但是在Unix平台下，这个函数总是返回OK，所以是行不通的。因此我们借助了`kill -s 0 pid`这一比较经典的做法来检查pid合法性。
-- tracer、tracee进行detach操作的时候，我们是用了ptrace系统调用，这个也和平台有关系，如Linux平台下的man手册就直接点出了在设计上可能存在一点问题，因此开发人员在进行处理时，就需要注意一下，如确保一个tracee的所有的ptrace requests来自相同的tracer线程。
+- 检查pid是否对应着一个有效的进程，通常会通过`exec.FindProcess(pid)`来检查，但是在Unix平台下，这个函数总是返回OK，所以是行不通的。因此我们借助了`kill -s 0 pid`这一比较经典的做法来检查pid合法性。
+- tracer、tracee进行detach操作的时候，我们是用了ptrace系统调用，这个也和平台有关系，如Linux平台下的man手册有说明，必须确保一个tracee的所有的ptrace requests来自相同的tracer线程，实现时就需要注意这点。
 
 ### 代码测试
 
@@ -296,7 +300,7 @@ func main() {
 
 **在调试场景中，tracee指的是一个线程，而非一个进程包含的所有线程**，尽管我们有时候为了描述方便，在术语上会选择倾向于使用进程。
 
-> 一个多线程的进程，其实是可以理解成一个包含了多个线程的线程组，线程组中的线程在创建的时候都通过clone+CLONE_THREAD选项来创建，来保证所有新创建的线程拥有相同的pid，类似clone+CLONE_PARENT使得克隆出的所有子进程都有相同的父进程id一样。
+> 一个多线程的进程，其实是可以理解成一个包含了多个线程的线程组，线程组中的线程在创建的时候都通过系统调用clone+参数CLONE_THREAD来创建，来保证所有新创建的线程拥有相同的pid，类似clone+CLONE_PARENT使得克隆出的所有子进程都有相同的父进程id一样。
 >
 > golang里面通过clone系统调用以及如下选项来创建线程：
 >
