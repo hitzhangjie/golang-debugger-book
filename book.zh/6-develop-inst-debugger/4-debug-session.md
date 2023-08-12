@@ -16,13 +16,70 @@
 
 我们其实还可以想出更多的点子，而这些点子背后，其实是希望调试器能提供一个灵活的用户界面，它不仅为调试过程提供各种调试命令及使用帮助，也能维护当前调试过程的状态以提供更多更丰富的能力。
 
-既然提及了“状态”，这其实就是一个类似“会话”的概念，我们就叫它“调试会话”。我们要为用户构建一个调试会话，以记录跟踪、协助用户完成调试过程。
+这其实就是一个调试会话，会话记录跟踪用户的调试设置、状态，更方便地协助用户完成调试，我们需要为用户构建一个调试会话。
 
 ### 代码实现
 
-当我们的调试器成功trace了tracee线程时，我们就可以创建一个调试会话了。
+当我们的调试器（tracer）成功跟踪了被调试进程（tracee）时，就可以创建调试会话了。
 
-前一小节中，我们曾介绍了`godbg exec <prog>`的方式启动并跟踪一个进程，并且我们提及了在`execCmd.PostRunE(...)`方法中通过`debug.NewDebugShell().Run()`来创建并启动一个调试会话，并粗略介绍了调试会话的工作过程。本小节我们继续详细介绍下调试会话的实现细节，读者了解后将能够熟悉cobraprompt的使用，或者使用liner能代替cobraprompt来实现不同风格的调试会话。
+`godbg exec <prog>`，当通过这种方式启动并跟踪了一个进程后，我们可以实现`debug.NewDebugShell().Run()`来创建并启动一个调试会话。本小节我们介绍下调试会话的实现细节，读者了解后将能够熟悉cobraprompt的使用，或者使用liner能代替cobraprompt来实现不同风格的调试会话。
+
+#### 基于cobra进行命令管理
+
+在前面1、2、3小节中，我们演示的示例程序中是通过os.Args[1]来判断godbg的子命令并通过switch-case转入对应的处理逻辑的。当我们实现了调试回话之后，我们也需要频繁读取用户输入的其他命令，如break、continue、next等等，其实每一个命令就对应着一个不同的处理逻辑，如果我们都像前面几个小节这样写，我们的代码很快就将变得冗长且难以招架。
+
+前面我们曾经提到过通过cobra这个命令行框架来管理调试命令exec, attach, help 等，还有调试会话中的诸多调试命令。
+
+首先，不妨看一个使用cobra构建命令行工具的简单示例:
+
+```go
+package main
+
+import (
+  "fmt"
+
+  "github.com/spf13/cobra"
+)
+
+func main() {
+
+  // 创建根命令
+  var rootCmd = &cobra.Command{
+    Use:   "demo", 
+    Short: "一个示例的Cobra应用",
+    Long: `一个展示Cobra用法的简单命令行程序`,  
+  }
+
+  // 创建一个版本命令
+  var versionCmd = &cobra.Command{
+    Use:   "version",
+    Short: "打印版本信息",
+    Long: `version子命令将打印应用的版本信息`,
+    Run: func(cmd *cobra.Command, args []string) {
+      fmt.Println("Demo App v1.0")  
+    },
+  }
+
+  // 将版本命令添加为根命令的子命令
+  rootCmd.AddCommand(versionCmd)
+
+  // 执行根命令
+  rootCmd.Execute()
+}
+```
+
+在上述示例中,我们:
+
+1. 创建一个根命令"demo"
+2. 创建一个"version"子命令用于打印版本信息
+3. 将"version"命令添加为"demo"的子命令
+4. 执行根"demo"命令
+
+这将构建一个简单的命令行工具,它有一个"version"子命令用于打印版本字符串。Cobra使构建命令行接口变得简单。我们可以继续在根命令上添加更多子命令来构建功能。
+
+在实际开发中，为了快速添加命令、子命令，可以使用 [spf13/cobra-cli](https://github.com/spf13/cobra-cli) 来完成，如 `cobra-cli add xxxCmd --parent rootCmd`，这将为rootCmd添加一个子命令xxxCmd，当然也可以为xxxCmd添加子命令。
+
+实际上读到这里时，我们已经基于 spf13/cobra 命令行管理框架对godbg进行了重构，使其更易于管理命令及实现。在后续的调试会话的示例中就可以看到。
 
 #### 基于cobraprompt实现
 
@@ -391,7 +448,7 @@ func helpMessageByGroups(cmd *cobra.Command) string {
 
 ```
 
-> FIXME hitzhangjie/golang-debugger-lessons/0_godbg其实是个submodule，其真实指向的项目是hitzhangjie/godbg。
+
 
 ### 代码测试
 
