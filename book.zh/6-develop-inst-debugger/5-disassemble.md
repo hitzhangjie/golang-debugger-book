@@ -38,7 +38,7 @@ func GetExecutable(pid int) (string, error) {
 	exeLink := fmt.Sprintf("/proc/%d/exe", pid)
 	exePath, err := os.Readlink(exeLink)
 	if err != nil {
-    return "", fmt.Errorf("find executable by pid err: %w", err)
+    	return "", fmt.Errorf("find executable by pid err: %w", err)
 	}
 	return exePath, nil
 }
@@ -46,9 +46,7 @@ func GetExecutable(pid int) (string, error) {
 
 #### 实现对完整程序反汇编
 
-根据pid找到可执行程序文件路径之后，可以尝试读取文件内容，为接下来反汇编做准备。但要注意的是，Linux二进制可执行程序是有结构的，`ioutil.ReadFile(fname)`虽然可以读取内容但是却不能解析`ELF (Executable and Linkable Format)`的结构。
-
-对于ELF文件格式而言，其大致的结构如下所示：
+根据pid找到可执行程序文件路径之后，可以尝试读取文件内容，为接下来反汇编做准备。但要注意的是，Linux二进制可执行程序文件内容是按照`ELF (Executable and Linkable Format)`格式进行组织的，其大致的结构如下所示。要读取、解析ELF文件数据，可以借助标准库 `debug/elf` 来完成。
 
 ![elf](assets/elf_layout.png)
 
@@ -65,7 +63,7 @@ Program Header Table和Section Header Table，是为构建两种不同视图特�
 >
 > **Two views of the world**
 >
-> There are two views of an ELF file. The *section view* sees the file as a bunch of sections, which are to be linked or loaded in some manner. The *program view* sees the file as a bunch of *ELF segments* (not to be confused with Intel segments) which are to be loaded into memory in order to execute the program.
+> There are two views of an ELF file. 1) The *section view* sees the file as a bunch of sections, which are to be linked or loaded in some manner. 2) The *program view* sees the file as a bunch of *ELF segments* (not to be confused with Intel segments) which are to be loaded into memory in order to execute the program.
 >
 > This split is designed to allow someone writing a linker to easily get the information they need (using the section view) and someone writing a loader (that's you) easily get the information they need without worrying about a lot of the complications of linking (using the program view).
 >
@@ -123,6 +121,7 @@ func main() {
 	// 逐语句解析机器指令并反汇编，然后打印出来
 	offset := 0
 	for {
+        // 使用64位模式
 		inst, err := x86asm.Decode(buf[offset:], 64)
 		if err != nil {
 			panic(err)
@@ -135,7 +134,7 @@ func main() {
 
 这里的代码逻辑比较完整，它接收一个pid，然后获取对应的可执行文件路径，然后通过标准库提供的elf package来读取文件并按ELF文件进行解析。从中读取.text section的数据。众所周知，.text section内部数据即为程序的指令。
 
-拿到指令之后，我们就可以通过golang.org/x/arch/x86/x86asm`来进行反汇编操作了，因为指令是变长编码，反汇编成功后返回的信息中包含了当前反汇编指令的内存编码数据长度，方便我们调整偏移量继续进行后续的反汇编。
+拿到指令之后，我们就可以通过`golang.org/x/arch/x86/x86asm`来进行反汇编操作了，因为指令是变长编码，反汇编成功后返回的信息中包含了当前反汇编指令的内存编码数据长度，方便我们调整偏移量继续进行后续的反汇编。
 
 #### 对断点位置进行反汇编
 
@@ -159,13 +158,13 @@ offset: 0xcc 0x1 0x2 0x3 0x4   | orig: <offset,0x0>
 
 - 首先，要知道0xCC执行后会暂停执行，执行后，意味着此时PC=offset+1
 - 再次，要知道offset处的指令不是完整整理，第一字节指令被patch了，需要还原；
-- 最后，要知道PC值是特殊寄存器值，要将其PC值减去1，让指令执行位置往后退1字节，然后重新读取接下来的指令；
+- 最后，要知道PC值是特殊寄存器值，要将其PC值减去1，让指令执行位置往前退1字节，然后从这个内存位置开始读取指令、反汇编；
 
-这大概就是断点位置的相关操作，如果对应位置处不是断点就不需要执行`pc=pc-1`。
+这大概就是断点位置处执行反汇编所需要的操作，如果对应位置处不是断点就不需要执行`pc=pc-1`。
 
 #### Put It Together
 
-经过上面一番讨论之后，得到了下面的反汇编实现：
+经过上面一番讨论之后，反汇编命令disassCmd实现如下：
 
 ```go
 package debug
@@ -218,7 +217,8 @@ var disassCmd = &cobra.Command{
 
 		// 反汇编这里的指令数据
 		offset := 0
-		for {
+		for offset < n {
+            // 使用64位模式
 			inst, err := x86asm.Decode(dat[offset:], 64)
 			if err != nil {
 				return fmt.Errorf("x86asm decode error: %v", err)
@@ -233,12 +233,12 @@ func init() {
 	debugRootCmd.AddCommand(disassCmd)
 }
 
-// GetExecutable 根据pid获取可执行程序路径
+// GetExecutable 根据pid获取可执行pa程序路径
 func GetExecutable(pid int) (string, error) {
 	exeLink := fmt.Sprintf("/proc/%d/exe", pid)
 	exePath, err := os.Readlink(exeLink)
 	if err != nil {
-    return "", fmt.Errorf("find executable by pid err: %w", err)
+    	return "", fmt.Errorf("find executable by pid err: %w", err)
 	}
 	return exePath, nil
 }
@@ -297,11 +297,13 @@ size of text: 1024
 
 现在我们已经实现了反汇编的功能，下一节，我们将通过指令patch来实现动态断点的添加、移除。
 
+> ps: 在我们的示例程序``golang-debugger-lessons/1.3_disassemble`中提供了一个可以独立运行的程序，运行 `path-to/1.3_disassemble <pid>` 可以反汇编程序中包含的所有指令，程序也对可能遇到的错误进行了处理，包括不认识的指令、越界问题。
+
 ### 更多相关内容
 
 汇编指令有go、intel、gnu 3种常见风格，gnu风格的俗称at&t风格。
 
-为了方便不同习惯的开发者能顺畅地阅读相关反汇编出来的指令，我们后续又为disass命令添加了选项`disass -s <syntax>`来指定汇编指指令的风格，如过您倾向于阅读at&t格式汇编，则可以通过`disass -s gnu`来查看对应风格的汇编指令。
+为了方便不同习惯的开发者能顺畅地阅读相关反汇编出来的指令，我们后续又为disass命令添加了选项`disass -s <syntax>`来指定汇编指指令的风格，如果您倾向于阅读at&t格式汇编，则可以通过`disass -s gnu`来查看对应风格的汇编指令。
 
 函数`instSyntax(inst x86asm.Inst, syntax string) (string, error)`实现了对不同汇编风格的转换支持：
 
@@ -324,8 +326,10 @@ func instSyntax(inst x86asm.Inst, syntax string) (string, error) {
 
 另外我们也添加了选项`disass -n <num>`来指定一次反汇编操作要decode的指令条数，因为调试会话中往往更关心当前待执行的指令，所以没必要一次反汇编成千上万行指令，那仅会分散调试人员的注意力而已。
 
-您可以在源文件`cmd/debug/disass.go`中查看完整反汇编实现。
+您可以在项目 `hitzhangjie/godbg` 源文件`godbg/cmd/debug/disass.go`中查看完整反汇编实现。
 
 ### 参考文献
 
 1. What You Need To Know About ELF, https://student.cs.uwaterloo.ca/~cs452/W18/elf/elf.html
+1. dissecting go binaries, https://www.grant.pizza/blog/dissecting-go-binaries/
+1. how many x86-64 instructions are there anyway, https://stefanheule.com/blog/how-many-x86-64-instructions-are-there-anyway/
