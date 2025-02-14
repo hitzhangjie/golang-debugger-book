@@ -16,63 +16,67 @@
 
 例如，[ELF](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format) 文件格式包含了DWARF调试信息对应的section，一般以".debug”或”.zdebug”开头。.debug前缀开头的section表示数据未压缩，.zdebug前缀开头的section表示数据经过了压缩。
 
->这里给个实例，__debug_bin是一个由`dlv debug`生成的可执行程序，包含了调试符号信息，`readelf`可以用来读取ELF文件中的section header，下面我们看一下ELF文件中包含的调试信息相关的 section。
+> 这里给个实例，__debug_bin是一个由 `dlv debug`生成的可执行程序，包含了调试符号信息，`readelf`可以用来读取ELF文件中的section header，下面我们看一下ELF文件中包含的调试信息相关的 section。
 >
->go build可以通过指定连接器选项“**-ldflags=-compressdwarf=false**”来禁用压缩，提前了解这点，方便以后通过dwarfdump等工具分析理解dwarf调试信息如何组织非常有用。
+> go build可以通过指定连接器选项“**-ldflags=-compressdwarf=false**”来禁用压缩，提前了解这点，方便以后通过dwarfdump等工具分析理解dwarf调试信息如何组织非常有用。
 >
->```bash
->[root@centos ~]# readelf -a __debug_bin | grep debug
->[12] .zdebug_abbrev    PROGBITS         0000000000599000  0017b000
->[13] .zdebug_line      PROGBITS         0000000000599114  0017b114
->[14] .zdebug_frame     PROGBITS         00000000005a9f37  0018bf37
->[15] .zdebug_pubnames  PROGBITS         00000000005b11a8  001931a8
->[16] .zdebug_pubtypes  PROGBITS         00000000005b2fa0  00194fa0
->[17] .debug_gdb_script PROGBITS         00000000005b624b  0019824b
->[18] .zdebug_info      PROGBITS         00000000005b6273  00198273
->[19] .zdebug_loc       PROGBITS         00000000005dcfe2  001befe2
->[20] .zdebug_ranges    PROGBITS         00000000005e982d  001cb82d
->```
+> ```bash
+> [root@centos ~]# readelf -a __debug_bin | grep debug
+> [12] .zdebug_abbrev    PROGBITS         0000000000599000  0017b000
+> [13] .zdebug_line      PROGBITS         0000000000599114  0017b114
+> [14] .zdebug_frame     PROGBITS         00000000005a9f37  0018bf37
+> [15] .zdebug_pubnames  PROGBITS         00000000005b11a8  001931a8
+> [16] .zdebug_pubtypes  PROGBITS         00000000005b2fa0  00194fa0
+> [17] .debug_gdb_script PROGBITS         00000000005b624b  0019824b
+> [18] .zdebug_info      PROGBITS         00000000005b6273  00198273
+> [19] .zdebug_loc       PROGBITS         00000000005dcfe2  001befe2
+> [20] .zdebug_ranges    PROGBITS         00000000005e982d  001cb82d
+> ```
+>
 
-> ps: go1.13中确实是这样的，zlib压缩后写入.zdebug_ sections，但是go1.19不是，它写入的是.debug_ sections。
+> ps: 作者开始写这本电子书的时候非常早，当时2018年还是用的1.13，现在这么多年过去，发生了很多变化。
 >
-> TODO
+> - 首先，go1.13中确实是这样的，zlib压缩后写入.zdebug_ sections (see: https://github.com/golang/go/issues/11799#issuecomment-399564050)；
+> - 由于没有一次性完成该电子书，后续go1.19中作者再次尝试运行已有代码、校对内容时，发现已经不会写入.zdebug_ sections了 （上述linker flag失效了）；
+> - 截止到今天2025.2.14再次续写本书内容，继续求证后发现，go1.22中已经明确废弃了 `.zdebug_` sections，而是以 `.debug_` section中内容是否带有 SHM_COMPRESSED flag来确定是否开启了压缩。
+>   see: https://github.com/golang/go/issues/58254#issuecomment-1421624004
+>   see: https://sourcegraph.com/github.com/golang/go/-/commit/75136fc14c0d3ec64a2f6728e96fc86066d853c9
 >
-> - 求证下go1.19开启DWARF压缩的条件
-> - 是否仍然保持这样的惯例，压缩就写入.zdebug，反之写入.debug
+> 所以，还是要尽快完成，很有可能go后续会从DWARF v4升级到v5，到时候又会引入更多变化。
 
 ##### 存储在独立的文件中
 
 例如，Microsoft Visual C++ 2.0生成的调试信息存储在独立的**.PDB（Program Database）**文件中，macOS平台上构建的调试符号信息一般存储在独立的**.dSYM/Resources/DWARF/**目录中。
 
->这里给个示例，在macOS 10.15上，通过“**gcc -g**”构建一个包含调试符号的可执行程序，我们看下它生成的调试信息是如何存储的：
+> 这里给个示例，在macOS 10.15上，通过“**gcc -g**”构建一个包含调试符号的可执行程序，我们看下它生成的调试信息是如何存储的：
 >
->**file: main.c**
+> **file: main.c**
 >
->```cpp
->#include <stdio.h>
->#include <stdlib.h>
+> ```cpp
+> #include <stdio.h>
+> #include <stdlib.h>
 >
->int main(int argc, char *argv[])
->{
->	return 0;
->}
+> int main(int argc, char *argv[])
+> {
+>   return 0;
+> }
 >
->```
+> ```
 >
->```bash
->$ gcc -g -o main main.c
->$ ls
->main main.c main.dSYM/
->$ tree main.dSYM
->main.dSYM/
->└── Contents
->├── Info.plist
->└── Resources
+> ```bash
+> $ gcc -g -o main main.c
+> $ ls
+> main main.c main.dSYM/
+> $ tree main.dSYM
+> main.dSYM/
+> └── Contents
+> ├── Info.plist
+> └── Resources
 >      └── DWARF
 >            └── main|
->```
->
-可以看到，macOS 10.15上，gcc将调试信息也存储到了独立的main.dSYM/目录。可以借助`dwarfdump or splitdwarf`工具进行分析，可以参考这篇文章：https://blog.golang.org/debug-opt。
+> ```
+
+可以看到，macOS 10.15上，gcc将调试信息也存储到了独立的main.dSYM/目录。可以借助 `dwarfdump or splitdwarf`工具进行分析，可以参考这篇文章：https://blog.golang.org/debug-opt。
 
 ##### 调试信息有什么用呢
 
@@ -100,7 +104,7 @@
 
 与DOS相反，Windows、Linux以及BSD都实现了内存保护模式，这意味着如果你想在这些平台上开发一个调试器，就需要通过平台提供的系统调用来实现。
 
-以Linux系统调用为例，调试器进程（tracer）可以通过`ptrace(PTRACE_ATTACH…)` attach到一个被调试进程（tracee），然后操作系统内核会给tracee进程发送一个信号SIGSTOP，tracee进程就会停下来，tracer进程就可以通过`waitpid(pid)`来等待tracee停止事件。当tracer进程感知到tracee进程停止执行之后，tracer进程就可以进一步通过`ptrace`系统调用、配合其他ptrace参数`PTRACE_GETREGS、PTRACE_SETREGS、PTRACE_PEEKDATA、PTRACE_POKEDATA等`来读写寄存器、内存数据、控制代码的执行路径等。
+以Linux系统调用为例，调试器进程（tracer）可以通过 `ptrace(PTRACE_ATTACH…)` attach到一个被调试进程（tracee），然后操作系统内核会给tracee进程发送一个信号SIGSTOP，tracee进程就会停下来，tracer进程就可以通过 `waitpid(pid)`来等待tracee停止事件。当tracer进程感知到tracee进程停止执行之后，tracer进程就可以进一步通过 `ptrace`系统调用、配合其他ptrace参数 `PTRACE_GETREGS、PTRACE_SETREGS、PTRACE_PEEKDATA、PTRACE_POKEDATA等`来读写寄存器、内存数据、控制代码的执行路径等。
 
 ps: 对与进程、线程的表示，建议了解下操作系统进程控制块PCB的概念以及Linux下taskstruct、GDT、LDT相关的知识。
 
@@ -150,8 +154,8 @@ ps: 对与进程、线程的表示，建议了解下操作系统进程控制块P
 >
 > 其他，关于内核级调试器，感兴趣可以参考：
 >
-> - [kernel space debuggers in Linux]( https://sysplay.github.io/books/LinuxDrivers/book/Content/Part10.html)
-> - [user mode debugging vs kernel mode debugging]( https://stackoverflow.com/questions/32998218/is-there-ever-an-advantage-to-user-mode-debug-over-kernel-mode-debug#:~:text=in%20kernel%20mode.-,User%20mode%20debugging,you%20need%20to%20have%20really%20professional%20comprehension%20of%20all%20those%20topics.,-Conclusion)
+> - [kernel space debuggers in Linux](https://sysplay.github.io/books/LinuxDrivers/book/Content/Part10.html)
+> - [user mode debugging vs kernel mode debugging](https://stackoverflow.com/questions/32998218/is-there-ever-an-advantage-to-user-mode-debug-over-kernel-mode-debug#:~:text=in%20kernel%20mode.-,User%20mode%20debugging,you%20need%20to%20have%20really%20professional%20comprehension%20of%20all%20those%20topics.,-Conclusion)
 > - [kernel debugger internals](https://www.kernel.org/doc/html/v4.18/dev-tools/kgdb.html#kernel-debugger-internals)
 
 #### 4.2.2.5 调试器界面
@@ -170,7 +174,7 @@ GUI调试器能够同时呈现和访问更多的机器状态信息，使用GUI�
 
 > ps：从实现手段而言，调试断点可以分为“软件断点”和“硬件断点”，前者是通过机器指令来实现，后者是借助处理器提供的调试寄存器来实现。本书先讨论软件断点，有需要再介绍硬件断点。
 
-X86平台上创建软件断点可以通过指令`int 3`来生成**0xCC**这个一字节机器指令来创建，处理器执行完0xCC之后会暂停当前正在执行的进程。
+X86平台上创建软件断点可以通过指令 `int 3`来生成**0xCC**这个一字节机器指令来创建，处理器执行完0xCC之后会暂停当前正在执行的进程。
 
 具体是如何执行的呢？int 3表示会触发3号中断，对应机器指令是0xCC，处理器执行完该指令后就会触发3号中断，对应的中断服务程序就在IDT[3]中（IDT，Interrupt Descriptor Table，中断描述表或中断向量表）。BIOS中提供的中断服务程序是16位的，了解过Linux如何构建32位、64位内存保护模式的话，就会明白Linux启动后，IDT[3]指向的其实是Linux内核提供的中断处理程序（Linux初始化会覆盖BIOS提供的16位中断服务程序的中断向量表），这里就是暂停执行当前tracee进程，并通知tracer进程tracee已暂停执行。
 
@@ -180,7 +184,7 @@ X86平台上创建软件断点可以通过指令`int 3`来生成**0xCC**这个�
 
 ##### 静态断点
 
-静态断点指的是这样的断点，它是在程序中的某些位置通过硬编码的方式来创建的，如在程序中通过`int 0x3`汇编指令创建断点。静态断点的生命周期与进程的生命周期是相同的。我们可以在程序中插入一些分支判断逻辑，来决定是否创建特定的静态断点。
+静态断点指的是这样的断点，它是在程序中的某些位置通过硬编码的方式来创建的，如在程序中通过 `int 0x3`汇编指令创建断点。静态断点的生命周期与进程的生命周期是相同的。我们可以在程序中插入一些分支判断逻辑，来决定是否创建特定的静态断点。
 
 一些获取、设置内存、寄存器的汇编指令也可以按需在代码中硬编码。
 
@@ -200,11 +204,11 @@ X86平台上创建软件断点可以通过指令`int 3`来生成**0xCC**这个�
 - 调试进程tracer将tracee的PC-1位置处的1字节数据由0xCC替换为原来的操作码数据，并将PC值减1；
 - 调试器通知内核恢复tracee运行，并继续执行到下一个断点位置处；
 
-我们通过下面的C语言语句进行下简单的说明：  
+我们通过下面的C语言语句进行下简单的说明：
 
->```c
->total = total +value;
->```
+> ```c
+> total = total +value;
+> ```
 
 假定上述语句对应的汇编指令为：
 
@@ -239,4 +243,3 @@ X86平台上创建软件断点可以通过指令`int 3`来生成**0xCC**这个�
 ### 4.2.4 本节小结
 
 本节简单介绍了下调试信息的生成、存储、解析操作，介绍了各种类型调试器的各自特点，介绍了断点的工作原理，并以单步步进一条语句为例，介绍了单步执行进入、单步执行跳出、单步执行跳过时的一些断点设置过程。
-
