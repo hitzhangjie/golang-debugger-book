@@ -15,14 +15,14 @@ trap 'sudo rm -rf "$builddir"' EXIT
 # build the book and publish to github
 printf "\033[0;32mDeploying updates to GitHub...\033[0m\n"
 
-git clone $deploy $tmpdir
+git clone --depth 1 $deploy $tmpdir
 
 # deploy by `gitbook-cli` image
 docker run --name gitbook --rm      \
     -v ${PWD}:/root/gitbook         \
     -v $builddir:$builddir          \
     hitzhangjie/gitbook-cli:latest  \
-    gitbook build $book $builddir
+    bash -c "cd $book && gitbook install && cd - && gitbook build $book $builddir"
 
 # deploy by installed `gitbook-cli`
 #gitbook build $book $builddir
