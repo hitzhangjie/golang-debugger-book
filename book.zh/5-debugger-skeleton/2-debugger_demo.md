@@ -41,7 +41,7 @@ Use "godbg [command] --help" for more information about a command.
 
 ![godbg prompt showAtStart](assets/godbg_prompt1.png)
 
-以清除断点操作为例，clear是清除单个断点，clearall是清除所有的断点，当我们输入`cl`时，可以匹配到`clear`、`clearall`两个命令，开发人员可以通过`tab`按键或者`arrow-down`来在候选列表中移动，`enter`选中列表项。
+以清除断点操作为例，clear是清除单个断点，clearall是清除所有的断点，当我们输入 `cl`时，可以匹配到 `clear`、`clearall`两个命令，开发人员可以通过 `tab`按键或者 `arrow-down`来在候选列表中移动，`enter`选中列表项。
 
 ![godbg prompt commands](assets/godbg_prompt2.png)
 
@@ -92,9 +92,7 @@ exit            :	结束调试会话
 help [command]  :	Help about any command
 ```
 
-如果想详细了解某一个调试命令如何使用，可以运行“**godbg> help <cmd>**”，如想查看break命令的使用运行“**godbg> help break**”。
-
-
+如果想详细了解某一个调试命令如何使用，可以运行“**godbg> help `cmd`**”，如想查看break命令的使用运行“**godbg> help break**”。
 
 #### 会话中执行调试命令
 
@@ -105,7 +103,7 @@ godbg> list main.go
 list codes in file
 ```
 
-我们试运行命令`list main.go`发现输出了一行语句，并没有实际打印源代码出来。
+我们试运行命令 `list main.go`发现输出了一行语句，并没有实际打印源代码出来。
 
 别急，这就是我们提到过的，目前这还只是一个调试器的雏形，我们确实已经把该搭的架子搭起来了，接下来的章节，我们将一步步实现这里的各个命令，实现指令级调试器，再实现符号级调试器。
 
@@ -150,7 +148,7 @@ godbg                         : 项目根目录
 
 ```
 
-可见我们已经将大部分调试需要的命令给纳入进来了，只不过还没有实现，后续我们将一步步实现各个调试命令。命令实现的功能逻辑，可能会涉及到对应的`${命令}.go`文件，以及符号层syms package、target层target package下的相关代码。
+可见我们已经将大部分调试需要的命令给纳入进来了，只不过还没有实现，后续我们将一步步实现各个调试命令。命令实现的功能逻辑，可能会涉及到对应的 `${命令}.go`文件，以及符号层syms package、target层target package下的相关代码。
 
 介绍完代码组织，后面讲解一个调试命令或者功能的实现时，读者应该可以方便快速地找到对应的实现代码。
 
@@ -186,7 +184,7 @@ godbg是一个go程序符号级调试器，它是以学习为目的驱动开发�
 }
 ```
 
-当我们执行godbg的时候，执行的`rootCmd.Run()`逻辑，当我们执行`godbg exec`的时候执行的则是`execCmd.Run()`逻辑，这个很好理解，也很容易上手。
+当我们执行godbg的时候，执行的 `rootCmd.Run()`逻辑，当我们执行 `godbg exec`的时候执行的则是 `execCmd.Run()`逻辑，这个很好理解，也很容易上手。
 
 ```go
 var execCmd = &cobra.Command{
@@ -196,7 +194,7 @@ var execCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
         // TODO start process and attach
 		fmt.Printf("exec %s\n", strings.Join(args, ""))
-        
+      
 		debug.NewDebugShell().Run()
 	},
 }
@@ -206,13 +204,13 @@ func init() {
 }
 ```
 
-以上是`godbg exec <prog>`时要执行的exec命令，它首先启动进程并attach到进程，准备就绪后，再启动一个调试会话，我们在调试会话中继续输入调试命令来进行调试。
+以上是 `godbg exec <prog>`时要执行的exec命令，它首先启动进程并attach到进程，准备就绪后，再启动一个调试会话，我们在调试会话中继续输入调试命令来进行调试。
 
 #### 源码解析：调试会话调试命令管理
 
 godbg/cmd/debug/root_debug.go中是使用cobra-prompt构建的一个命令管理器，它结合了cobra命令管理以及go-prompt的自动提示补全能力，非常适合管理命令多、命令选项多、命令候选参数多、命令使用频繁的场景，比如调试器会话中。
 
-只需要执行`debug.NewDebugShell().Run()`即可快速模拟一个调试会话的用户输入、执行处理、完成调试信息展示的逻辑。
+只需要执行 `debug.NewDebugShell().Run()`即可快速模拟一个调试会话的用户输入、执行处理、完成调试信息展示的逻辑。
 
 ```go
 // NewDebugShell 创建一个debug专用的交互管理器
@@ -249,8 +247,7 @@ func NewDebugShell() *cobraprompt.CobraPrompt {
 }
 ```
 
-关于自定义自动提示信息的实现，可以参考函数实现`dynamicSuggestions(string, prompt.Document)`。
-
+关于自定义自动提示信息的实现，可以参考函数实现 `dynamicSuggestions(string, prompt.Document)`。
 
 ```go
 func dynamicSuggestions(annotation string, _ prompt.Document) []prompt.Suggest {
@@ -271,8 +268,7 @@ func GetSourceFiles() []prompt.Suggest {
 }
 ```
 
-需要注意的是cobra-prompt规定了cobra command只有添加了`<cobraprompt.CALLBACK_ANNOTATION,"value">`的annotation项之后才会激发命令参数的自动补全逻辑。以list命令将源文件列表作为补全信息为例，list命令在Annotations这个map字段中添加了CALLBACK_ANNOTATION的kvpair。
-
+需要注意的是cobra-prompt规定了cobra command只有添加了 `<cobraprompt.CALLBACK_ANNOTATION,"value">`的annotation项之后才会激发命令参数的自动补全逻辑。以list命令将源文件列表作为补全信息为例，list命令在Annotations这个map字段中添加了CALLBACK_ANNOTATION的kvpair。
 
 ```go
 var listCmd = &cobra.Command{
@@ -289,16 +285,15 @@ var listCmd = &cobra.Command{
 }
 ```
 
-调试会话中运行`list main.go`
+调试会话中运行 `list main.go`
 
 ```bash
 godbg> list main.go
 list codes in file
 ```
 
-我们试运行命令`list main.go`发现输出了一行语句，代表命令已经顺利执行了，我们后面会实现真实的展示源代码的功能。
+我们试运行命令 `list main.go`发现输出了一行语句，代表命令已经顺利执行了，我们后面会实现真实的展示源代码的功能。
 
 现在，我们大致介绍了godbg的一个相对完整的骨架，相信读者朋友们已经跃跃欲试想进入下一步的开发了 :) 。
 
 > Note：在该调试器demo的完整版实现中，详见 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 中，我们已经彻底移除了cobraprompt，动态提示对调试会话干扰性有点大，在其他的非高频输入的命令行程序中使用更合适。
-
