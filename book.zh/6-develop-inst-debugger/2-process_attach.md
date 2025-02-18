@@ -1,4 +1,4 @@
-## Attach进程 
+## Attach进程
 
 ### 实现目标：`godbg attach -p <pid>`
 
@@ -6,7 +6,7 @@
 
 常见的调试器如dlv、gdb等都支持通过参数 `-p pid` 的形式来传递目标进程号来对运行中的进程进行调试。
 
-我们将实现程序godbg，它支持子命令``attach -p <pid>``，如果目标进程存在，godbg将attach到目标进程，此时目标进程会暂停执行。然后我们让godbg休眠几秒钟，再detach目标进程，目标进程会恢复执行。
+我们将实现程序godbg，它支持子命令 ``attach -p <pid>``，如果目标进程存在，godbg将attach到目标进程，此时目标进程会暂停执行。然后我们让godbg休眠几秒钟，再detach目标进程，目标进程会恢复执行。
 
 > ps: 这里休眠的几秒钟，用户可以先将其假想成一系列的调试操作，如设置断点、检查进程寄存器、检查内存等等，后面小节中我们将支持这些能力。
 
@@ -20,7 +20,7 @@ tracee，指的是被调试的线程，而不是进程。对于一个多线程�
 
 #### tracer
 
-tracer，指的是向tracee发送调试控制命令的调试进程，准确地说，也是线程。
+tracer，指的是向tracee发送调试控制命令的调试器进程，准确地说，也是线程。
 
 一旦tracer和tracee建立了联系之后，tracer就可以给tracee发送各种调试命令。
 
@@ -28,26 +28,44 @@ tracer，指的是向tracee发送调试控制命令的调试进程，准确地�
 
 我们的调试器示例是基于Linux平台编写的，调试能力依赖于Linux ptrace。
 
-通常，如果调试器也是多线程程序，就要考虑将发送调试命令给特定tracee的task（如goroutine）绑定到特定线程上，因为从tracee角度而言，它认为调试命令应该来自同一个tracer（同一个线程）。
+通常，如果调试器也是多线程程序，就要注意ptrace的约束，当tracer、tracee建立了跟踪关系后，tracee（被跟踪线程）后续接收到的多个调试命令应该来自同一个tracer（跟踪线程），意味着调试器实现时要将发送调试命令给tracee的task绑定到特定线程上。更具体地讲，这里的task可以是goroutine。
 
-所以，在我们参考dlv等调试器的实现时会发现，发送调试命令的goroutine通常会调用`runtime.LockOSThread()`来绑定一个线程，专门用来向attached tracee发送调试指令（也就是各种ptrace操作）。
+所以，在我们参考dlv等调试器的实现时会发现，发送调试命令的goroutine通常会调用 `runtime.LockOSThread()`来绑定一个线程，专门用来向attached tracee发送调试指令（也就是各种ptrace操作）。
 
->runtime.LockOSThread()，将调用该函数的goroutine绑定到该操作系统线程上，意味着该操作系统线程只会用来执行该goroutine上的操作，除非该goroutine调用了runtime.UnLockOSThread()解除这种绑定关系，否则该线程不会用来调度其他goroutine。调用这个函数的goroutine也只能在当前线程上执行，不会被调度器迁移到其他线程。
+> runtime.LockOSThread()，该函数的作用是将调用该函数的goroutine绑定到该操作系统线程上，意味着该操作系统线程只会用来执行该goroutine上的操作，除非该goroutine调用了runtime.UnLockOSThread()解除这种绑定关系，否则该线程不会用来调度其他goroutine。调用这个函数的goroutine也只能在当前线程上执行，不会被调度器迁移到其他线程。see: 
 >
->调用了该函数之后，就可以满足tracee对tracer的要求：一旦tracer通过ptrace_attach了某个tracee，后续发送到该tracee的ptrace请求必须来自同一个tracer，tracee、tracer具体指的都是线程。
+> ```
+> package runtime // import "runtime"
+>
+> func LockOSThread()
+>     LockOSThread wires the calling goroutine to its current operating system
+>     thread. The calling goroutine will always execute in that thread, and no
+>     other goroutine will execute in it, until the calling goroutine has made as
+>     many calls to UnlockOSThread as to LockOSThread. If the calling goroutine
+>     exits without unlocking the thread, the thread will be terminated.
+>
+>     All init functions are run on the startup thread. Calling LockOSThread from
+>     an init function will cause the main function to be invoked on that thread.
+>
+>     A goroutine should call LockOSThread before calling OS services or non-Go
+>     library functions that depend on per-thread state.
+> ```
+>
+> 调用了该函数之后，就可以满足tracee对tracer的要求：一旦tracer通过ptrace_attach了某个tracee，后续发送到该tracee的ptrace请求必须来自同一个tracer，tracee、tracer具体指的都是线程。
 
 当我们调用了attach之后，attach返回时，tracee有可能还没有停下来，这个时候需要通过wait方法来等待tracee停下来，并获取tracee的状态信息。当结束调试时，可以通过detach操作，让tracee恢复执行。
 
->下面是man手册关于ptrace操作attach、detach的说明，下面要用到：
+> 下面是man手册关于ptrace操作attach、detach的说明，下面要用到：
 
-    **PTRACE_ATTACH**  
+    **PTRACE_ATTACH**
     *Attach to the process specified in pid, making it a tracee of*
     *the calling process.  The tracee is sent a SIGSTOP, but will*
     *not necessarily have stopped by the completion of this call;*
->*use waitpid(2) to wait for the tracee to stop.  See the "At‐*
->*taching and detaching" subsection for additional information.*
 
-    **PTRACE_DETACH**  
+> *use waitpid(2) to wait for the tracee to stop.  See the "At‐*
+> *taching and detaching" subsection for additional information.*
+
+    **PTRACE_DETACH**
     *Restart the stopped tracee as for PTRACE_CONT, but first de‐*
     *tach from it.  Under Linux, a tracee can be detached in this*
     *way regardless of which method was used to initiate tracing.*
@@ -182,17 +200,19 @@ func checkPid(pid int) bool {
 ```
 
 这里的程序逻辑也比较简单：
+
 - 程序运行时，首先检查命令行参数，
-    - `godbg attach <pid>`，至少有3个参数，如果参数数量不对，直接报错退出；
-    - 接下来校验第2个参数，如果是无效的subcmd，也直接报错退出；
-    - 如果是attach，那么pid参数应该是个整数，如果不是也直接退出；
+  - `godbg attach <pid>`，至少有3个参数，如果参数数量不对，直接报错退出；
+  - 接下来校验第2个参数，如果是无效的subcmd，也直接报错退出；
+  - 如果是attach，那么pid参数应该是个整数，如果不是也直接退出；
 - 参数正常情况下，开始尝试attach到tracee；
 - attach之后，tracee并不一定立即就会停下来，需要wait来获取其状态变化情况；
 - 等tracee停下来之后，我们休眠10s钟，仿佛自己正在干些调试操作一样；
 - 10s钟之后，tracer尝试detach tracee，让tracee继续恢复执行。
 
 我们在Linux平台上实现时，需要考虑Linux平台本身的问题，具体包括：
-- 检查pid是否对应着一个有效的进程，通常会通过`exec.FindProcess(pid)`来检查，但是在Unix平台下，这个函数总是返回OK，所以是行不通的。因此我们借助了`kill -s 0 pid`这一比较经典的做法来检查pid合法性。
+
+- 检查pid是否对应着一个有效的进程，通常会通过 `exec.FindProcess(pid)`来检查，但是在Unix平台下，这个函数总是返回OK，所以是行不通的。因此我们借助了 `kill -s 0 pid`这一比较经典的做法来检查pid合法性。
 - tracer、tracee进行detach操作的时候，我们是用了ptrace系统调用，这个也和平台有关系，如Linux平台下的man手册有说明，必须确保一个tracee的所有的ptrace requests来自相同的tracer线程，实现时就需要注意这点。
 
 ### 代码测试
@@ -220,6 +240,7 @@ Sat Nov 14 14:29:14 UTC 2020 pid: 1311  ==> 14s
 ```
 
 然后我们执行命令：
+
 ```bash
 $ go run main.go attach 1311
 
@@ -288,7 +309,7 @@ func main() {
 }
 ```
 
-结果发现执行了`godbg attach <pid>`之后程序还在执行，这是为什么呢？
+结果发现执行了 `godbg attach <pid>`之后程序还在执行，这是为什么呢？
 
 因为go程序天然是多线程程序，sysmon、gc等等都可能会用到独立线程，我们attach时只是简单的attach了pid对应进程的某一个线程，其他的线程仍然是没有被调试跟踪的，是可以正常执行的。
 
@@ -307,7 +328,7 @@ func main() {
 > golang里面通过clone系统调用以及如下选项来创建线程：
 >
 > ```go
-> 
+>
 > cloneFlags = _CLONE_VM | /* share memory */
 > 	_CLONE_FS | /* share cwd, etc */
 > 	_CLONE_FILES | /* share fd table */
@@ -316,7 +337,7 @@ func main() {
 > 	_CLONE_THREAD /* revisit - okay for now */
 > ```
 >
-> 关于clone选项的更多作用，您可以通过查看man手册`man 2 clone`来了解。
+> 关于clone选项的更多作用，您可以通过查看man手册 `man 2 clone`来了解。
 
 pid标识的线程（或LWP）与发送ptrace请求的线程（或LWP）二者之间建立ptrace link，它们的角色分别为tracee、tracer，后续tracee期望收到的所有ptrace请求都来自这个tracer。因为这个原因，天然就是多线程的go程序就需要保证实际发送ptrace请求的goroutine必须执行在同一个线程上。
 
@@ -324,7 +345,7 @@ pid标识的线程（或LWP）与发送ptrace请求的线程（或LWP）二者�
 
 #### 问题：想让执行main.main的线程停下来？
 
-如果想让被调试进程停止执行，调试器需要枚举进程中包含的线程并对它们逐一进行ptrace attach操作。具体到Linux，可以列出`/proc/<pid>/task`下的线程对应的LWP pid，逐个执行ptrace attach。
+如果想让被调试进程停止执行，调试器需要枚举进程中包含的线程并对它们逐一进行ptrace attach操作。具体到Linux，可以列出 `/proc/<pid>/task`下的线程对应的LWP pid，逐个执行ptrace attach。
 
 我们将在后续过程中进一步完善attach命令，使其也能胜任多线程环境下的调试工作。
 
@@ -339,13 +360,12 @@ pid标识的线程（或LWP）与发送ptrace请求的线程（或LWP）二者�
   ```bash
   $ top -H -p 5293
   ........
-  PID USER      PR  NI    VIRT    RES    SHR S %CPU %MEM     TIME+ COMMAND                                                             
-   5293 root      20   0  702968   1268    968 S  0.0  0.0   0:00.04 loop                                                                
-   5294 root      20   0  702968   1268    968 S  0.0  0.0   0:00.08 loop                                                                
-   5295 root      20   0  702968   1268    968 S  0.0  0.0   0:00.03 loop                                                                
+  PID USER      PR  NI    VIRT    RES    SHR S %CPU %MEM     TIME+ COMMAND                                                           
+   5293 root      20   0  702968   1268    968 S  0.0  0.0   0:00.04 loop                                                              
+   5294 root      20   0  702968   1268    968 S  0.0  0.0   0:00.08 loop                                                              
+   5295 root      20   0  702968   1268    968 S  0.0  0.0   0:00.03 loop                                                              
    5296 root      20   0  702968   1268    968 S  0.0  0.0   0:00.03 loop
   ```
-
   top展示信息中列S表示进程状态，常见的取值及含义如下：
 
   ```bash
@@ -355,15 +375,12 @@ pid标识的线程（或LWP）与发送ptrace请求的线程（或LWP）二者�
   'T' = traced or stopped
   'Z' = zombie
   ```
-
   通过状态 **'T'** 可以识别多线程程序中哪些线程正在被调试跟踪。
-
 - `ls /proc/<pid>/task`
 
   ```bash
   $ ls /proc/5293/task/
-  
+
   5293/ 5294/ 5295/ 5296/
   ```
-
   Linux下/proc是一个虚拟文件系统，它里面包含了系统运行时的各种状态信息，以下命令可以查看到进程5293下的线程。和top展示的结果是一样的。
