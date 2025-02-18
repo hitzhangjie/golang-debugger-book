@@ -12,8 +12,8 @@
 -   允许对golang代码自动编译构建、调试完成后清理临时构建产物；
 -   允许查看源码信息 **list**；
 -   允许对二进制文件进行反汇编 **disass**；
--   允许在源码中添加断点 **breakpoint**；
--   允许在源码中添加条件断点 **breakpoint <file:lineno> if <expr>**；
+-   允许在源码中添加断点 **breakpoint `file:lineno`**；
+-   允许在源码中添加条件断点 **breakpoint `file:lineno` if `expr`**；
 -   允许逐语句执行 **next**；
 -   允许逐指令执行（也能允许进入函数）**step**；
 -   允许从function退出 **finish**；
