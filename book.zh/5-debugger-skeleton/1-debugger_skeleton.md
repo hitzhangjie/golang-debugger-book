@@ -79,7 +79,7 @@
 我们将调试器架构进一步划分，分为frontend、backend。
 
 -   frontend聚焦于与用户的交互逻辑，完成调试动作的触发、结果的展示；
--   backend聚焦于目标进程、平台特性相关的底层实现，接受frontend的调试命令，并返回对应的结果，以在frontend进行展示；
+-   backend聚焦于目标进程、平台特性相关的底层实现，接收frontend的调试命令，并返回对应的结果，以在frontend进行展示；
 -   frontend和backend之间的桥梁就是新引入的服务层，frontend、backend之间可以通过RPC进行通信。
 
 #### 调试命令管理
@@ -101,7 +101,7 @@
 
 凡事总有例外，调试器除了上述“启动调试”相关的命令以外，也有很多调试会话中使用的调试命令，如断点相关的，调用栈相关的，查看源码、变量、寄存器等相关的。为了方便开发人员查看感兴趣的调试命令及其帮助信息，我们不能将所有调试命令简单排序后予以展示，必要的分组是非常有帮助的。
 
-比如我们将break、clear这两个增删断点相关的操作全部归类到分组“**[breakpoint]**”，将print、display、list等查看相关的全部归类到分组“**[show]**”分组，将backtrack、frame等栈帧相关的全部归类到“**[frames]**”分组，等等。
+比如我们将break、clear这两个增删断点相关的操作全部归类到分组“**[breakpoint]**”，将print、display、list等查看相关的全部归类到分组“**[show]**”分组，将backtrace、frame等栈帧相关的全部归类到“**[frames]**”分组，等等。
 
 cobra为每个命令提供了一个属性cobra.Command.Annotations，它是一个map类型，可以为每个命令添加一些kv属性信息，然后基于此可以对其进行一些分组等自定义的操作：
 
