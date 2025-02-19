@@ -32,7 +32,7 @@ tracer，指的是向tracee发送调试控制命令的调试器进程，准确�
 
 所以，在我们参考dlv等调试器的实现时会发现，发送调试命令的goroutine通常会调用 `runtime.LockOSThread()`来绑定一个线程，专门用来向attached tracee发送调试指令（也就是各种ptrace操作）。
 
-> runtime.LockOSThread()，该函数的作用是将调用该函数的goroutine绑定到该操作系统线程上，意味着该操作系统线程只会用来执行该goroutine上的操作，除非该goroutine调用了runtime.UnLockOSThread()解除这种绑定关系，否则该线程不会用来调度其他goroutine。调用这个函数的goroutine也只能在当前线程上执行，不会被调度器迁移到其他线程。see: 
+> runtime.LockOSThread()，该函数的作用是将调用该函数的goroutine绑定到该操作系统线程上，意味着该操作系统线程只会用来执行该goroutine上的操作，除非该goroutine调用了runtime.UnLockOSThread()解除这种绑定关系，否则该线程不会用来调度其他goroutine。调用这个函数的goroutine也只能在当前线程上执行，不会被调度器迁移到其他线程。see:
 >
 > ```
 > package runtime // import "runtime"
@@ -287,7 +287,9 @@ we're doing some debugging...
 process 1311 detach succ
 ```
 
-### 更多相关内容
+### 问题探讨
+
+为了让读者能快速掌握核心调试原理，示例里我们有意简化了示例，如被调试进程是一个单线程程序，如果是一个多线程程序结果会不会不一样呢？会，而且我们要做一些特殊的处理。我们在这里进一步讨论下。
 
 #### 问题：多线程程序attach后仍在运行？
 
@@ -345,7 +347,7 @@ pid标识的线程（或LWP）与发送ptrace请求的线程（或LWP）二者�
 
 #### 问题：想让执行main.main的线程停下来？
 
-如果想让被调试进程停止执行，调试器需要枚举进程中包含的线程并对它们逐一进行ptrace attach操作。具体到Linux，可以列出 `/proc/<pid>/task`下的线程对应的LWP pid，逐个执行ptrace attach。
+如果想让被调试进程停止执行，调试器需要枚举进程中包含的线程并对它们逐一进行ptrace attach操作。具体到Linux，可以列出 `/proc/<pid>/task`下的所有线程（或LWP）的pid，逐个执行ptrace attach。
 
 我们将在后续过程中进一步完善attach命令，使其也能胜任多线程环境下的调试工作。
 
@@ -360,12 +362,13 @@ pid标识的线程（或LWP）与发送ptrace请求的线程（或LWP）二者�
   ```bash
   $ top -H -p 5293
   ........
-  PID USER      PR  NI    VIRT    RES    SHR S %CPU %MEM     TIME+ COMMAND                                                           
-   5293 root      20   0  702968   1268    968 S  0.0  0.0   0:00.04 loop                                                              
-   5294 root      20   0  702968   1268    968 S  0.0  0.0   0:00.08 loop                                                              
-   5295 root      20   0  702968   1268    968 S  0.0  0.0   0:00.03 loop                                                              
+  PID USER      PR  NI    VIRT    RES    SHR S %CPU %MEM     TIME+ COMMAND                                                       
+   5293 root      20   0  702968   1268    968 S  0.0  0.0   0:00.04 loop                                                          
+   5294 root      20   0  702968   1268    968 S  0.0  0.0   0:00.08 loop                                                          
+   5295 root      20   0  702968   1268    968 S  0.0  0.0   0:00.03 loop                                                          
    5296 root      20   0  702968   1268    968 S  0.0  0.0   0:00.03 loop
   ```
+
   top展示信息中列S表示进程状态，常见的取值及含义如下：
 
   ```bash
@@ -375,6 +378,7 @@ pid标识的线程（或LWP）与发送ptrace请求的线程（或LWP）二者�
   'T' = traced or stopped
   'Z' = zombie
   ```
+
   通过状态 **'T'** 可以识别多线程程序中哪些线程正在被调试跟踪。
 - `ls /proc/<pid>/task`
 
@@ -383,4 +387,82 @@ pid标识的线程（或LWP）与发送ptrace请求的线程（或LWP）二者�
 
   5293/ 5294/ 5295/ 5296/
   ```
+
   Linux下/proc是一个虚拟文件系统，它里面包含了系统运行时的各种状态信息，以下命令可以查看到进程5293下的线程。和top展示的结果是一样的。
+
+#### 问题：syscall.Wait4的参数说明
+
+Linux系统有多个等待进程状态改变的系统调用，它们有一些使用、功能上的细微差别，我们这里使用syscall.Wait4刚好对应着Linux系统调用wait4，详细的使用说明可以参考man手册。
+
+man手册说明中强相关的部分，如下所示：
+
+man 2 wait4
+
+> **Name**
+>
+> *wait3, wait4 - wait for process to change state, BSD style*
+>
+> **SYNOPSIS**
+>
+> pid_t wait3(int *wstatus, int options,
+>                    struct rusage *rusage);
+>
+> pid_t wait4(pid_t pid, int *wstatus, int options,
+>                    struct rusage *rusage);
+>
+> **Description**
+>
+> **These functions are obsolete; use waitpid(2) or waitid(2) in new programs.**
+>
+> The wait3() and wait4() system calls are similar to waitpid(2), but additionally return resource usage information about the child in the structure pointed to by rusage.
+
+man 2 waitpid
+
+> **Name**
+>
+> wait, waitpid, waitid - wait for process to change state
+>
+> **SYNOPSIS**
+>
+> pid_t wait(int *wstatus);
+>
+> pid_t waitpid(pid_t pid, int *wstatus, int options);
+>
+> int waitid(idtype_t idtype, id_t id, siginfo_t*infop, int options);
+> /* This is the glibc and POSIX interface; see
+> NOTES for information on the raw system call. */
+>
+> **SYNOPSIS**
+>
+> All  of  these  system calls are used to wait for state changes in a child of the calling process, and obtain information about the child whose state has changed.  A state change is considered to be: the child terminated;
+> the child was stopped by a signal; or the child was resumed by a signal.  In the case of a terminated child, performing a wait allows the system to release the resources associated with the child; if a wait  is  not  per‐
+> formed, then the terminated child remains in a "zombie" state (see NOTES below).
+>
+> If  a  child  has already changed state, then these calls return immediately.  Otherwise, they block until either a child changes state or a signal handler interrupts the call (assuming that system calls are not automati‐
+> cally restarted using the SA_RESTART flag of sigaction(2)).  In the remainder of this page, a child whose state has changed and which has not yet been waited upon by one of these system calls is termed waitable.
+>
+> wait() and waitpid()
+> The wait() system call suspends execution of the calling process until one of its children terminates.  The call wait(&wstatus) is equivalent to:
+>
+> waitpid(-1, &wstatus, 0);
+>
+> The waitpid() system call suspends execution of the calling process until a child specified by pid argument has changed state.  By default, waitpid() waits only for terminated children, but this behavior is modifiable via
+> the options argument, as described below.
+>
+> The value of pid can be:
+>
+> - \<-1: meaning wait for any child process whose process group ID is equal to the absolute value of pid.
+> - -1: meaning wait for any child process.
+> - 0: meaning wait for any child process whose process group ID is equal to that of the calling process.
+> - \>0: meaning wait for the child whose process ID is equal to the value of pid.
+>
+> The value of options is an OR of zero or more of the following constants:
+>
+> - WNOHANG: ... blabla
+> - WUNTRACED: ... blabla
+> - WCONTINUED: ... blabla
+>
+> (For Linux-only options, see below.)
+>
+> - WIFSTOPPED: returns true if the child process was stopped by delivery of a signal; this is possible only if the call was done using WUNTRACED or when the child is being traced (see ptrace(2)).
+> - ... blabla
