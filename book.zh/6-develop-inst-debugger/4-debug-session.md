@@ -22,7 +22,7 @@
 
 当我们的调试器（tracer）成功跟踪了被调试进程（tracee）时，就可以创建调试会话了。
 
-`godbg exec <prog>`，当通过这种方式启动并跟踪了一个进程后，我们可以实现`debug.NewDebugShell().Run()`来创建并启动一个调试会话。本小节我们介绍下调试会话的实现细节，读者了解后将能够熟悉cobraprompt的使用，或者使用liner能代替cobraprompt来实现不同风格的调试会话。
+`godbg exec <prog>`，当通过这种方式启动并跟踪了一个进程后，我们可以实现 `debug.NewDebugShell().Run()`来创建并启动一个调试会话。本小节我们介绍下调试会话的实现细节，读者了解后将能够熟悉cobraprompt的使用，或者使用liner能代替cobraprompt来实现不同风格的调试会话。
 
 #### 基于cobra进行命令管理
 
@@ -46,8 +46,8 @@ func main() {
   // 创建根命令
   var rootCmd = &cobra.Command{
     Use:   "demo", 
-    Short: "一个示例的Cobra应用",
-    Long: `一个展示Cobra用法的简单命令行程序`,  
+    Short: "一个基于cobra开发的命令行应用",
+    Long: `spf13/cobra是一个非常容易上手的go命令行工具开发框架，这是一个展示spf13/cobra用法的demo程序。`,  
   }
 
   // 创建一个版本命令
@@ -83,11 +83,11 @@ func main() {
 
 #### 基于cobraprompt实现
 
-基于cobraprompt实现调试会话的代码位于`0_godbg/cmd/debug.go`中，其实现思路相对来说也比较简单：
+基于cobraprompt实现调试会话，看中的是其自动补全这个便利性，实现思路相对来说也比较简单：
 
 - 利用cobra的命令管理能力，我们创建一个debugRootCmd，在其上注册其他的调试命令，如breakpoint、list、step、continue、exit等等，每一个子命令都对应着一个cobra.Command实现；
 - prompt具备提示用户输入、获取并校验用户输入、动态补全输入的能力，cobraprompt是cobra和prompt的结合体，它的作用便是利用prompt来获取用户输入的命令，输入过程中支持自动补全，在用户输入正确的调试命令及参数时，将参数信息转交给debugRootCmd上注册的相应子命令来执行，如用户键入了exit，则执行exitCmd的逻辑；
-- 为了方便用户快速查看调试命令的帮助信息，需对诸多的调试命令进行分组，因此对于调试命令的帮助信息需要进行定制化改造，我们用各个子命令的annotation来对其所属的命令分组（如断点类命令1-breaks、源码类命令2-source），然后通过自定义的帮助函数`helpMessageByGroups(rootCmd *cobra.Command)`来提取rootCmd下注册所有子命令的帮助信息并按分组进行汇总展示；
+- 为了方便用户快速查看调试命令的帮助信息，需对诸多的调试命令进行分组，因此对于调试命令的帮助信息需要进行定制化改造，我们用各个子命令的annotation来对其所属的命令分组（如断点类命令1-breaks、源码类命令2-source），然后通过自定义的帮助函数 `helpMessageByGroups(rootCmd *cobra.Command)`来提取rootCmd下注册所有子命令的帮助信息并按分组进行汇总展示；
 - 对具体一个子命令的详细帮助信息，则还是交由cobra debugRootCmd自身来管理；
 
 ```go
@@ -246,13 +246,20 @@ func GetSourceFiles() []prompt.Suggest {
 
 #### 基于liner实现
 
-基于liner实现的调试会话的代码位于repo [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg)工程目录下的cmd/debug/shell.go，其实现逻辑和基于cobraprompt的版本并无明显区别。
-
-那我们为什么又提供一个基于liner实现的版本呢？
-
-在作者初次尝试实现调试会话时，是基于cobraprompt，当时作者认为cobraprompt的这种自动输入补全能力非常方便和酷炫，所以对其称赞有加。但是随着后续调试活动的增加，作者逐渐意识到：**调试过程中保持用户对问题探求的专注、减少对用户的干扰，比单纯地追求酷炫、方便本身更重要**。
+已经有了基于cobraprompt的自动补全实现了，那我们为什么又提供一个基于liner实现的版本呢？在作者初次尝试实现调试会话时，是基于cobraprompt，当时作者认为cobraprompt的这种自动输入补全能力非常方便和酷炫，所以对其称赞有加。但是随着后续调试活动的增加，作者逐渐意识到：**调试过程中保持用户对问题探求的专注、减少对用户的干扰，比单纯地追求酷炫、方便本身更重要**。
 
 所以作者对原来的调试会话进行了重写，即基于liner实现的这个版本，读者阅读代码即可发现，其实现思路和cobraprompt其实差别不大，换了种调试会话风格，同时帮我们解决了一个输入“回车”时方便判断用户输入并激活上次调试命令的问题，在cobraprompt中用户是无法只键入“回车”按键的。
+
+> 注：基于cobraprompt、liner的自动补全实现方案，在项目代码 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 中可以找到，最终实现方案是基于liner的，前期是基于cobraprompt的，读者可以根据需要自行查阅。
+>
+> ```bash
+> zhangjie@vbox 0_godbg(eda43a2) $ git logxx --grep 'cobra-prompt'
+>
+> * cbccb23 2021-01-14 00:56:59 +0800 >>> refactor: use cobra+liner instead of cobra-prompt
+> * 8c07fbd 2020-11-16 03:32:32 +0800 >>> feature: 初步实现了一个基于cobra+cobra-prompt实现的调试器大致框架
+> ```
+
+下面看下基于liner的具体实现。
 
 ```go
 package debug
@@ -448,19 +455,25 @@ func helpMessageByGroups(cmd *cobra.Command) string {
 
 ```
 
-
-
 ### 代码测试
 
 #### 基于cobraprompt实现
 
-这部分代码位于repo [hitzhangjie/golang-debugger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons)下的0_godbg目录下，目录下执行`go install -v`即可进行体验。
+尽管基于cobraprompt的实现已经被作者废弃，但是为了这个前后内容的一致性，既然讲了实现了，那运行效果也得介绍下。再者，可能读者对这种风格的自动补全感兴趣，所以还是演示下运行效果。
 
 调试器启动成功后，会通过“**godbg>**”来表示当前创建好的调试会话，我们在此调试会话中输入调试命令来完成对应的调试动作。
 
+> 如果你想亲自测试这部分代码，需要检出 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 的版本 8c07fbd，然后项目目录下执行 `go install -v` 完成安装，再进行测试。
+>
+> ```bash
+> $ git logxx --grep 'cobra-prompt'
+>
+> 8c07fbd 2020-11-16 03:32:32 +0800 >>> feature: 初步实现了一个基于cobra+cobra-prompt实现的调试器大致框架 
+> ```
+
 ![godbg prompt showAtStart](assets/godbg_prompt1.png)
 
-以清除断点操作为例，clear是清除单个断点，clearall是清除所有的断点，当我们输入`cl`时，可以匹配到`clear`、`clearall`两个命令，开发人员可以通过`tab`按键或者`arrow-down`来在候选列表中移动，`enter`选中列表项。
+以清除断点操作为例，clear是清除单个断点，clearall是清除所有的断点，当我们输入 `cl`时，可以匹配到 `clear`、`clearall`两个命令，开发人员可以通过 `tab`按键或者 `arrow-down`来在候选列表中移动，`enter`选中列表项。
 
 ![godbg prompt commands](assets/godbg_prompt2.png)
 
@@ -472,13 +485,13 @@ func helpMessageByGroups(cmd *cobra.Command) string {
 
 #### 基于liner实现
 
-这部分代码位于repo [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg)下，执行`go install -v`即可进行体验。
+这部分代码位于repo [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg)下，执行 `go install -v`即可进行体验。
 
 调试器启动后创建一个调试会话，调试会话仍然以“**godbg>** ”作为输入提示符，当我们输入了help命令时，它显示分组后的各个调试命令的帮助信息，非常直观。
 
 ![godbg prompt](assets/godbg_prompt4.png)
 
-当我们想查看具体某个调试命令的详细使用信息时，可以执行`help <subcmd>`的方式来查看，如以查看反汇编命令的帮助信息为例，图中显示了disass命令的使用格式、参数列表及各自说明。
+当我们想查看具体某个调试命令的详细使用信息时，可以执行 `help <subcmd>`的方式来查看，如以查看反汇编命令的帮助信息为例，图中显示了disass命令的使用格式、参数列表及各自说明。
 
 ![godbg prompt5](assets/godbg-prompt5.png)
 
@@ -498,8 +511,6 @@ func helpMessageByGroups(cmd *cobra.Command) string {
 ### 参考内容
 
 - cobra, https://github.com/spf13/cobra
-
 - go-prompt, https://github.com/c-bata/go-prompt
-
 - cobra-prompt, https://github.com/stromland/cobra-prompt
 - liner, https://github.com/peterh/liner
