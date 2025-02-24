@@ -2,11 +2,11 @@
 
 ### 实现目标：清空断点
 
-`clearall`命令的功能是为了快速移除所有断点，而不用通过`clear -n <breakNo>`逐个删除断点，适合添加了很多断点想快速清理的场景。
+`clearall`命令的功能是为了快速移除所有断点，而不用通过 `clear -n <breakNo>`逐个删除断点，适合添加了很多断点想快速清理的场景。
 
 ### 代码实现
 
-`clearall`的实现逻辑，和`clear`逻辑差不多，相比较之下处理逻辑更简单点。
+`clearall`的实现逻辑，和 `clear`逻辑差不多，相比较之下处理逻辑更简单点。
 
 **file: cmd/debug/clearall.go**
 
@@ -52,7 +52,7 @@ func init() {
 
 ### 代码测试
 
-首先运行一个待调试程序，获取其pid，然后通过`godbg attach <pid>`调试目标进程，首先通过命令`disass`显示汇编指令列表，然后执行`b <locspec>`命令添加几个断点。
+首先运行一个待调试程序，获取其pid，然后通过 `godbg attach <pid>`调试目标进程，首先通过命令 `disass`显示汇编指令列表，然后执行 `b <locspec>`命令添加几个断点。
 
 ```bash
 godbg> b 0x4653af
@@ -75,7 +75,7 @@ breakpoint[2] 0x4653b6
 breakpoint[3] 0x4653c2 
 ```
 
-然后我们执行`clearall`清空所有断点：
+然后我们执行 `clearall`清空所有断点：
 
 ```bash
 godbg> clearall
@@ -83,7 +83,7 @@ clearall
 清空断点成功
 ```
 
-接下来再次执行`breakpoints`查看剩余的断点：
+接下来再次执行 `breakpoints`查看剩余的断点：
 
 ```bash
 godbg> bs
@@ -91,3 +91,5 @@ godbg>
 ```
 
 现在已经没有剩余断点了，我们的添加、清空断点的功能是正常的。
+
+OK ，截止到现在，我们已经实现了添加断点、列出断点、删除指定断点、清空断点的功能，但是我们还没有演示过断点的效果（执行到断点处停下来）。接下来我们就将实现step（执行1条指令）、continue（运行到断点处）操作。

@@ -6,13 +6,13 @@
 
 移除断点与新增断点，都是需要借助ptrace来实现。回想下新增断点首先通过PTRACEPEEKDATA/PTRACEPOKEDATA来实现对指令数据的备份、覆写，移除断点的逻辑有点相反，先将原来备份的指令数据覆写回断点对应的指令地址处，然后，从已添加断点集合中移除即可。
 
->   ps: 在Linux下PTRACE_PEEKTEXT/PTRACE_PEEKDATA，以及PTRACE_POKETEXT/PTRACE_POKEDATA并没有什么不同，所以执行ptrace操作的时候，ptrace request可以任选一个。
+> ps: 在Linux下PTRACE_PEEKTEXT/PTRACE_PEEKDATA，以及PTRACE_POKETEXT/PTRACE_POKEDATA并没有什么不同，所以执行ptrace操作的时候，ptrace request可以任选一个。
 >
->   为了可读性，读写指令时倾向于PTRACE_PEEKTEXT/PTRACE_POKETEXT，读写数据时则倾向于PTRACE_PEEKDATA/PTRACE_POKEDATA。
+> 为了可读性，读写指令时倾向于PTRACE_PEEKTEXT/PTRACE_POKETEXT，读写数据时则倾向于PTRACE_PEEKDATA/PTRACE_POKEDATA。
 
 ### 代码实现
 
-首先解析断点编号参数`-n <breakNo>`，并从已添加断点集合中查询，是否有编号为n的断点存在，如果没有则`<breakNo>`为无效参数。
+首先解析断点编号参数 `-n <breakNo>`，并从已添加断点集合中查询，是否有编号为n的断点存在，如果没有则 `<breakNo>`为无效参数。
 
 如果断点确实存在，则执行ptrace(PTRACE_POKEDATA,...)将原来备份的1字节指令数据覆写回原指令地址，即消除了断点。然后，再从已添加断点集合中删除这个断点。
 
@@ -80,7 +80,7 @@ func init() {
 
 ### 代码测试
 
-首先运行一个待调试程序，获取其pid，然后通过`godbg attach <pid>`调试目标进程，首先通过命令`disass`显示汇编指令列表，然后执行`b <locspec>`命令添加几个断点。
+首先运行一个待调试程序，获取其pid，然后通过 `godbg attach <pid>`调试目标进程，首先通过命令 `disass`显示汇编指令列表，然后执行 `b <locspec>`命令添加几个断点。
 
 ```bash
 godbg> b 0x4653af
@@ -103,7 +103,7 @@ breakpoint[2] 0x4653b6
 breakpoint[3] 0x4653c2 
 ```
 
-然后我们执行`clear -n 2`移除第2个断点：
+然后我们执行 `clear -n 2`移除第2个断点：
 
 ```bash
 godbg> clear -n 2
@@ -111,7 +111,7 @@ clear
 移除断点成功
 ```
 
-接下来再次执行`breakpoints`查看剩余的断点：
+接下来再次执行 `breakpoints`查看剩余的断点：
 
 ```bash
 godbg> bs
