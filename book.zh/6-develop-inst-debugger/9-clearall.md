@@ -8,6 +8,10 @@
 
 `clearall`的实现逻辑，和 `clear`逻辑差不多，相比较之下处理逻辑更简单点。
 
+> clearall  操作实现比较简单，我们没有在 [hitzhangjie/golang-debug-lessons](https://github.com/hitzhangjie/golang-debug-lessons) 中单独提供示例目录，而是在 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 中进行了实现，读者可以查看 godbg 的源码。
+>
+> TODO 代码示例可以优化一下, see: https://github.com/hitzhangjie/golang-debugger-book/issues/15
+
 **file: cmd/debug/clearall.go**
 
 ```go

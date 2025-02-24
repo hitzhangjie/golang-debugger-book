@@ -63,6 +63,9 @@ func NewBreakpoint(addr uintptr, orig byte, location string) (Breakpoint, error)
 
 我们新增一个调试命令breakpoints，用名词复数形式来隐含表示查询所有断点的意思。实现逻辑就比较简单，我们遍历所有已添加的断点，逐个输出断点信息即可。
 
+> `breakpoints` 操作实现比较简单，我们没有在 [hitzhangjie/golang-debug-lessons](https://github.com/hitzhangjie/golang-debug-lessons) 中单独提供示例目录，而是在 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 中进行了实现，读者可以查看 godbg 的源码。
+> TODO 代码示例可以优化一下, see: https://github.com/hitzhangjie/golang-debugger-book/issues/15
+
 **file: cmd/debug/breakpoints.go**
 
 ```go
