@@ -2,17 +2,17 @@
 
 ### 实现目标：step逐指令执行
 
-在实现了反汇编以及添加移除断点操作后，我们将开始进一步探索如何控制调试进程的执行，如逐指令执行、添加断点运行到断点等。
+在实现了反汇编以及添加移除断点功能后，我们将开始进一步探索如何控制调试进程的执行，如step逐指令执行、continue运行到断点位置，在后面符号级调试器开发章节，我们还会实现next逐语句执行。
 
 本节我们先实现 `step`命令来支持逐指令执行。
 
 ### 代码实现
 
-逐指令执行，通过执行 `ptrace(PTRACE_SINGLESTEP,...)`操作即可由内核代为完成。但是在上述操作执行之前，step命令还有些特殊因素要考虑方能正常执行。
+逐指令执行，通过执行 `ptrace(PTRACE_SINGLESTEP,...)` 操作即可由内核代为完成。但是在上述操作执行之前，step命令还有些特殊因素要考虑方能正常执行。
 
-此时的PC值有可能是越过了一个断点之后的值，比如一条经过指令patch后的多字节指令，首字节处修改为了断点需要的0xCC，当前寄存器PC值实际上是该指令的第二个字节的地址，而非首字节的地址，如果对PC值不做修改，处理器执行的时候会将剩余的指令解码失败，无法执行指令。
+此时的PC值有可能是越过了一个断点之后的值，比如一条经过指令patch后的多字节指令，首字节处修改为了0xCC，当前寄存器PC值实际上是该多字节指令的第二个字节的地址，而非首字节的地址。如果对PC值不做修改，处理器执行的时候从第二字节开始解码会解码失败，无法执行指令。
 
-为了保证step正常执行，在 `ptrace(PTRACE_SINGLESTEP,...)`之前，需要首先通过 `ptrace(PTRACE_PEEKTEXT,...)`去读取 `PC-1`地址处的数据，如果是0xCC，则表明此处为一个端点，需要将之前添加断点时存下来的原始数据覆盖这里的0xCC，然后才能继续执行。
+为了保证step正常执行，在 `ptrace(PTRACE_SINGLESTEP,...) ` 之前，需要首先通过 `ptrace(PTRACE_PEEKTEXT,...)` 去读取 `PC-1` 地址处的数据，如果是0xCC，则表明此处为一个断点，需要将添加断点前的原始数据还原、PC=PC-1，然后再继续执行。
 
 **file：cmd/debug/step.go**
 
@@ -125,7 +125,7 @@ godbg> disass
 0x40ab6d movl $0x0,0x8(%rsp)
 ```
 
-然后尝试执行 `step`命令，观察输出情况。
+然后尝试执行 `step` 命令，观察输出情况。
 
 ```bash
 godbg> step
@@ -142,7 +142,7 @@ godbg>
 
 我们执行了step指令3次，step每次执行一条指令之后，会输出执行指令后的PC值，依次是0x40ab4e、0x40ab53、0x40ab58，依次是下条指令的首地址。
 
-有意思的是，我们想知道 `ptrace(PTRACE_SINGLESTEP,...)`情况下内核是如何实现逐指令执行的，显然它没有采用指令patch的方式（如果也是指令patch的方式，上述step命令输出的PC值应该是在当前显示的值基础上分别+1）。
+不禁要问，执行系统调用 `ptrace(PTRACE_SINGLESTEP,...)` 时，内核是如何实现逐指令执行的？显然它没有采用指令patch的方式（如果也是指令patch的方式，上述step命令输出的PC值应该是在当前显示的值基础上分别+1）。
 
 ### 更多相关内容：SINGLESTEP
 
@@ -153,16 +153,25 @@ godbg>
        [Details of these kinds of stops are yet to be documented.]
 ```
 
-man(2)手册里面没有任何信息，要么细节不值一提，要么可能跟不同硬件平台的特性有关系，难以几句话概括。查看内核源码以及Intel开发手册之后，可以了解到相关的原因。
+man(2)手册里面没有太多有价值的相关信息，查看内核源码以及Intel开发手册之后，可以了解到这方面的细节。
 
-SINGLESTEP调试在Intel平台上是借助硬件特性来实现的，参考《Intel® 64 and IA-32 Architectures Software Developer's Manual Volume 1: Basic Architecture》中提供的信息，我们了解到Intel架构处理器是有一个标识寄存器EFLAGS，当通过内核将标志寄存器的TF标志置为1时，处理器会自动进入单步执行模式。
+1. SINGLESTEP调试在Intel平台上部分借助了处理器自身硬件特性来实现的，参考《Intel® 64 and IA-32 Architectures Software Developer's Manual Volume 1: Basic Architecture》，Intel架构处理器是有一个标识寄存器EFLAGS，当通过内核将标志寄存器的TF标志置为1时，处理器会自动进入单步执行模式，清0退出单步执行模式。
 
-> **3.4.3.3 System Flags and IOPL Field**
+> **System Flags and IOPL Field**
 >
 > The system flags and IOPL field in the **EFLAGS** register control operating-system or executive operations. **They should not be modified by application programs.** The functions of the system flags are as follows:
 >
 > **TF (bit 8) Trap flag** — Set to enable single-step mode for debugging; clear to disable single-step mode.
 
-处理器发现EFLAGS.TF标志位被置1了，执行指令的时候会先清空该标志位，然后执行指令，指令执行完成之后会触发TRAP，即通过SIGTRAP发送给被调试进程，也会通知调试器，让调试器继续执行某些操作。
+2. 我们执行系统调用 `syscall.PtraceSingleStep(...)` 时，实际上是 `ptrace(PTRACE_SINGLESTEP, pid...)` ，此时内核会将被跟踪的tracee的task_struct中的寄存器部分的flags设置为flags |= TRAP，然后调度tracee执行。
+3. 调度器执行tracee时会先将其进程控制块task_struct中的硬件上下文信息还原到处理器寄存器中，然后再执行对应tracee的指令。此时处理器发现EFLAGS.TF=1，执行指令的时候就会先清空该标志位，然后执行单条指令，执行完成后处理器会自动生成一个陷阱中断，不需要软件层面模拟。
+
+> **Single-step interrupt**
+> When a system is instructed to single-step, it will execute one instruction and then stop.
+> ...
+> The Intel 8086 trap flag and type-1 interrupt response make it quite easy to implement a single-step feature in an 8086-based system. If the trap flag is set, the 8086 will automatically do a type-1 interrupt after each instruction executes. When the 8086 does a type-1 interrupt, ...
+> The trap flag is reset when the 8086 does a type-1 interrupt, so the single-step mode will be disabled during the interrupt-service procedure.
+
+4. 内核中断服务程序负责处理这个TRAP，其实就是继续暂停tracee调度（此时也会保存下硬件上下文信息），然后内核会给tracer发送SIGTRAP信号，以这种方式通知调试器tracer你跟踪的tracee已经单步执行了一条指令后停下来等待接收后续调试命令了。
 
 这就是Intel平台下单步执行的一些细节信息，读者如果对其他硬件平台感兴趣，也可以自行了解下它们是如何设计实现来解决单步调试问题的。
