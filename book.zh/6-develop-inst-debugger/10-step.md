@@ -157,20 +157,20 @@ man(2)手册里面没有太多有价值的相关信息，查看内核源码以�
 
 1. SINGLESTEP调试在Intel平台上部分借助了处理器自身硬件特性来实现的，参考《Intel® 64 and IA-32 Architectures Software Developer's Manual Volume 1: Basic Architecture》，Intel架构处理器是有一个标识寄存器EFLAGS，当通过内核将标志寄存器的TF标志置为1时，处理器会自动进入单步执行模式，清0退出单步执行模式。
 
-> **System Flags and IOPL Field**
->
-> The system flags and IOPL field in the **EFLAGS** register control operating-system or executive operations. **They should not be modified by application programs.** The functions of the system flags are as follows:
->
-> **TF (bit 8) Trap flag** — Set to enable single-step mode for debugging; clear to disable single-step mode.
+	> **System Flags and IOPL Field**
+	>
+	> The system flags and IOPL field in the **EFLAGS** register control operating-system or executive operations. **They should not be modified by application programs.** The functions of the system flags are as follows:
+	>
+	> **TF (bit 8) Trap flag** — Set to enable single-step mode for debugging; clear to disable single-step mode.
 
 2. 我们执行系统调用 `syscall.PtraceSingleStep(...)` 时，实际上是 `ptrace(PTRACE_SINGLESTEP, pid...)` ，此时内核会将被跟踪的tracee的task_struct中的寄存器部分的flags设置为flags |= TRAP，然后调度tracee执行。
 3. 调度器执行tracee时会先将其进程控制块task_struct中的硬件上下文信息还原到处理器寄存器中，然后再执行对应tracee的指令。此时处理器发现EFLAGS.TF=1，执行指令的时候就会先清空该标志位，然后执行单条指令，执行完成后处理器会自动生成一个陷阱中断，不需要软件层面模拟。
 
-> **Single-step interrupt**
-> When a system is instructed to single-step, it will execute one instruction and then stop.
-> ...
-> The Intel 8086 trap flag and type-1 interrupt response make it quite easy to implement a single-step feature in an 8086-based system. If the trap flag is set, the 8086 will automatically do a type-1 interrupt after each instruction executes. When the 8086 does a type-1 interrupt, ...
-> The trap flag is reset when the 8086 does a type-1 interrupt, so the single-step mode will be disabled during the interrupt-service procedure.
+	> **Single-step interrupt**
+	> When a system is instructed to single-step, it will execute one instruction and then stop.
+	> ...
+	> The Intel 8086 trap flag and type-1 interrupt response make it quite easy to implement a single-step feature in an 8086-based system. If the trap flag is set, the 8086 will automatically do a type-1 interrupt after each instruction executes. When the 8086 does a type-1 interrupt, ...
+	> The trap flag is reset when the 8086 does a type-1 interrupt, so the single-step mode will be disabled during the interrupt-service procedure.
 
 4. 内核中断服务程序负责处理这个TRAP，其实就是继续暂停tracee调度（此时也会保存下硬件上下文信息），然后内核会给tracer发送SIGTRAP信号，以这种方式通知调试器tracer你跟踪的tracee已经单步执行了一条指令后停下来等待接收后续调试命令了。
 
