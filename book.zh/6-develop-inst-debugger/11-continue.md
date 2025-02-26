@@ -2,17 +2,15 @@
 
 ### 实现目标：continue运行到下个断点
 
-运行到下个断点处，可以理解为一系列的singlestep操作，直到判断PC处对应的指令为0xCC为止，然后再singlestep一次。
+运行到下个断点处，就是让tracee正常执行后续指令，直到命中并执行完下一个被0xCC patch的指令后触发int3中断，然后内核中断服务将tracee暂停执行。
 
-但是不用这么麻烦，操作系统提供了`ptrace(PTRACE_COND,...)`操作，允许我们直接运行到下个断点处。但是在执行上述调用前，同样要检查下当前`PC-1`地址处的数据是否为`0xCC`，如果是则需要将其替换为原始指令数据。
+具体怎么实现呢？操作系统提供了 `ptrace(PTRACE_COND,...)` 操作，允许我们直接运行到下个断点处。但是在执行上述调用前，同样要检查下当前 `PC-1 `地址处的数据是否为 `0xCC`，如果是则需要将其替换为原始指令数据。
 
 ### 代码实现
 
-continue命令执行时，首先检查当前PC-1处数据是否为0xCC，如果是则说明这里之前是个多字节指令，但是被指令patch添加了断点，需要还原回原始数据。
+continue命令执行时，首先检查当前PC-1处数据是否为0xCC，如果是则说明PC-1处是一个被patch的指令（可能是单字节指令，也可能是多字节指令）。需要将断点位置的数据，还原回patched之前的原始数据。然后将 PC=PC-1，再执行 `ptrace(PTRACE_COND, ...)` 操作请求操作系统恢复tracee执行，让tracee运行到断点处停下来。运行到断点处后又会重新触发int3中断停下来，然后tracee状态变化又会通知到tracer。
 
-然后，我们再执行PTRACE_COND操作请求操作系统恢复执行被调试进程，进程运行到断点处停下来。
-
-最后，我们通过wait等待并检查下被调试进程停下来，然后输出当前PC值。注意当前PC值是执行了0xCC指令之后的值，因此PC=断点地址+1。
+最后，我们tracer通过 `syscall.Wait4(...)` 等待tracee停下来，然后再检查下其寄存器信息，这里我们先只获取PC值。注意当前PC值是执行了0xCC指令之后的地址值，因此 PC=断点地址+1。
 
 **file: cmd/debug/continue.go**
 
@@ -91,9 +89,11 @@ func init() {
 
 在cmd/debug/step.go的基础上简单修改下就可以实现continue操作，详见源文件cmd/debug/continue.go。
 
+> ps：上述代码是 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 中的实现，我们重点介绍了step的实现。另外在 [hitzhangjie/golang-debuger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons) /11_continue 下，我们也提供了一个continue执行的示例，只有一个源文件，与其他demo互不影响，您也可以按照你的想法修改测试下，不用担心改坏整个 godbg的问题。
+
 ### 代码测试
 
-首先启动一个进程，获取其pid，然后通过`godbg attach <pid>`对目标进程进行调试，等调试会话就绪后，我们输入`dis`（dis是disass命令的别名）进行反汇编。
+首先启动一个进程，获取其pid，然后通过 `godbg attach <pid>`对目标进程进行调试，等调试会话就绪后，我们输入 `dis`（dis是disass命令的别名）进行反汇编。
 
 要验证continue命令的功能，首先要dis反汇编查看指令地址，然后再break添加断点，然后再continue运行到断点。
 
@@ -131,7 +131,7 @@ continue
 continue ok, current PC: 0x42e2ee
 ```
 
-我们在第4条指令`0x42e2ed test %eax,%eax`处添加断点，断点添加成功后，我们执行`c`(c是continue的别名）来运行到断点处。运行到断点之后，输出当前的PC值，前面有分析过，PC=0x42e2ee=0x42e2ed+1，因为被调试进程是在执行了0x42e2ed处的指令`0xCC`才停下来的，完全符合预期。
+我们在第4条指令 `0x42e2ed test %eax,%eax`处添加断点，断点添加成功后，我们执行 `c`(c是continue的别名）来运行到断点处。运行到断点之后，输出当前的PC值，前面有分析过，PC=0x42e2ee=0x42e2ed+1，因为被调试进程是在执行了0x42e2ed处的指令 `0xCC`才停下来的，完全符合预期。
 
 ### 更多相关内容
 

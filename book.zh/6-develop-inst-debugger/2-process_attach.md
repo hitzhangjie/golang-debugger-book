@@ -72,7 +72,7 @@ tracer，指的是向tracee发送调试控制命令的调试器进程，准确�
 
 ### 代码实现
 
-**src详见：golang-debugger-lessons/1.1_cmd_attach**
+**src详见：golang-debugger-lessons/2_process_attach**
 
 file: main.go
 
@@ -362,10 +362,10 @@ pid标识的线程（或LWP）与发送ptrace请求的线程（或LWP）二者�
   ```bash
   $ top -H -p 5293
   ........
-  PID USER      PR  NI    VIRT    RES    SHR S %CPU %MEM     TIME+ COMMAND                                                       
-   5293 root      20   0  702968   1268    968 S  0.0  0.0   0:00.04 loop                                                          
-   5294 root      20   0  702968   1268    968 S  0.0  0.0   0:00.08 loop                                                          
-   5295 root      20   0  702968   1268    968 S  0.0  0.0   0:00.03 loop                                                          
+  PID USER      PR  NI    VIRT    RES    SHR S %CPU %MEM     TIME+ COMMAND                                                     
+   5293 root      20   0  702968   1268    968 S  0.0  0.0   0:00.04 loop                                                        
+   5294 root      20   0  702968   1268    968 S  0.0  0.0   0:00.08 loop                                                        
+   5295 root      20   0  702968   1268    968 S  0.0  0.0   0:00.03 loop                                                        
    5296 root      20   0  702968   1268    968 S  0.0  0.0   0:00.03 loop
   ```
 
@@ -405,10 +405,10 @@ man 2 wait4
 > **SYNOPSIS**
 >
 > pid_t wait3(int *wstatus, int options,
->                    struct rusage *rusage);
+> struct rusage *rusage);
 >
 > pid_t wait4(pid_t pid, int *wstatus, int options,
->                    struct rusage *rusage);
+> struct rusage *rusage);
 >
 > **Description**
 >

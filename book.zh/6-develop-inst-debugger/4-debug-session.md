@@ -508,6 +508,10 @@ func helpMessageByGroups(cmd *cobra.Command) string {
 - 基于cobraprompt的方式随酷炫但是对调试过程干扰比较大，可能更容易导致用户抓不住重点，不便于用户保持对问题本身的探求和关注；
 - 基于liner的方式则更加精炼，对用户打扰也更少，也具备了我们期望拥有的自动补全能力，能够满足我们最初设计的调试会话的要求，因此将其作为最终实现版本，
 
+也跟读者强调一下，随着我们添加的功能越来越多、功能间依赖越来越多、代码量也越来越多，我们的代码示例简单到一个源文件就可以搞定的情况会越来越少。也就是说，读者后续测试的用例可能会有相当一部分要考虑使用 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 来直接进行测试验证。为了读者阅读学习的便利性，我们会尽量按照这个形式规范：
+- repo1 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 会包含完整示例；
+- 如果本章节的demo可以简化到一个源文件，repo2 [hitzhangjie/golang-debugger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons) 依然会提供示例；
+- 如果示例仅包含在repo1，我们会明确在相关小节的设计实现、代码测试时告知读者。
 ### 参考内容
 
 - cobra, https://github.com/spf13/cobra

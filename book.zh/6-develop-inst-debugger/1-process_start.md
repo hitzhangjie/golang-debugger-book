@@ -66,7 +66,7 @@ func (c *Cmd) Wait() error
 
 ### 代码实现
 
-**src详见：golang-debugger-lessons/1.0_cmd_exec**
+**src详见：golang-debugger-lessons/1_process_start**
 
 下面基于go标准库 `os/exec` package来演示如何启动程序创建进程实例。
 

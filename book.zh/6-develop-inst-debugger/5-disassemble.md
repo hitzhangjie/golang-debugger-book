@@ -299,7 +299,7 @@ size of text: 1024
 
 现在我们已经实现了反汇编的功能，下一节，我们将通过指令patch来实现动态断点的添加、移除。
 
-> ps: 在我们的示例程序``golang-debugger-lessons/1.3_disassemble `中提供了一个可以独立运行的程序，运行 `path-to/1.3_disassemble `<pid>`` 可以反汇编程序中包含的所有指令，程序也对可能遇到的错误进行了处理，包括不认识的指令、越界问题。
+> ps: 在我们的示例程序 ``golang-debugger-lessons/5_disassemble `中提供了一个可以独立运行的程序，运行 `path-to/5_disassemble `<pid>`` 可以反汇编程序中包含的所有指令，程序也对可能遇到的错误进行了处理，包括不认识的指令、越界问题。
 
 ### 更多相关内容
 

@@ -351,7 +351,7 @@ static long do_wait(struct wait_opts *wo)
 
 ### 代码实现
 
-**src详见：golang-debugger-lessons/1.2_cmd_exec+attach**
+**src详见：golang-debugger-lessons/3_process_startattach**
 
 类似c语言fork+exec的方式，go标准库提供了一个ForkExec函数实现，以此可以用go重写上述c语言示例。但是，go标准库提供了另一种更简洁的方式。
 

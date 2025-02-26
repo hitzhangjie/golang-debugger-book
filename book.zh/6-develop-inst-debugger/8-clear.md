@@ -16,9 +16,12 @@
 
 如果断点确实存在，则执行ptrace(PTRACE_POKEDATA,...)将原来备份的1字节指令数据覆写回原指令地址，即消除了断点。然后，再从已添加断点集合中删除这个断点。
 
-> clear `` 操作实现比较简单，我们没有在 [hitzhangjie/golang-debug-lessons](https://github.com/hitzhangjie/golang-debug-lessons) 中单独提供示例目录，而是在 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 中进行了实现，读者可以查看 godbg 的源码。
->
-> TODO 代码示例可以优化一下, see: https://github.com/hitzhangjie/golang-debugger-book/issues/15
+clear 操作实现比较简单，在 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 中进行了实现，读者可以查看 godbg 的源码（实际上就是这里列出的部分）。但是我们也强调过了，上述repo提供的是一个功能相对完备的调试器，代码量会比较大。因此我们也在 [hitzhangjie/golang-debugger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons))/8_clear 提供了示例，将break、breakpoints、continue、clear这几个强相关的调试命令的实现代码，提炼后在一个源文件中进行了演示。
+
+golang-debugger-lessons这个repo中的每个示例都是完全独立的，因此你可以自由修改测试，而不用担心把godbg整个项目修改的跑不起来了、运行不正常了、查问题又没有头绪，可能更适合新手学习测试。您可以在具备一定经验后，再去看 godbg 这个项目。
+
+TODO 代码示例可以优化一下, see: https://github.com/hitzhangjie/golang-debugger-book/issues/15
+
 
 ```go
 package debug
