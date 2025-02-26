@@ -15,10 +15,7 @@
 * [6 开发go指令级调试器](6-develop-inst-debugger/README.md)
 
   * [6.1 进程启动](6-develop-inst-debugger/1-process_start.md)
-  * [6.2 进程attach](6-develop-inst-debugger/2-process_attach.md)| col1 | col2 | col3 |
-    | ---- | ---- | ---- |
-    |      |      |      |
-    |      |      |      |
+  * [6.2 进程attach](6-develop-inst-debugger/2-process_attach.md)
   * [6.3 启动&amp;attach](6-develop-inst-debugger/3-process_start_attach.md)
   * [6.4 调试会话](6-develop-inst-debugger/4-debug-session.md)
   * [6.5 反汇编](6-develop-inst-debugger/5-disassemble.md)
@@ -30,7 +27,7 @@
   * [6.11 运行到断点](6-develop-inst-debugger/11-continue.md)
   * [6.12 打印内存数据](6-develop-inst-debugger/12-pmem.md)
   * [6.13 打印寄存器数据](6-develop-inst-debugger/13-pregs.md)
-  * [6.20 跟踪多线程程序](6-develop-inst-debugger/20-bugfix-threads.md)
+  * [6.20 跟踪多线程程序](6-develop-inst-debugger/20-trace_new_threads.md)
   * [6.21 重构程序](6-develop-inst-debugger/21-refactor.md)
   * [6.x More...](6-develop-inst-debugger/x-more.md)
 * [7 挺进符号级调试器](7-headto-sym-debugger/README.md)
