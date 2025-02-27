@@ -4,10 +4,12 @@
 
 1、tracer：run `ptrace(PTRACE_ATTACH, pid, NULL, PTRACE_O_TRACECLONE)`
    该操作将使得tracee执行clone系统调用时，内核会给tracer发送一个SIGTRAP信号，通知有clone系统调用发生，新线程或者新进程被创建出来了
+
 2、tracer：需要主动去感知这个事件的发生，有两个办法：
     - 通过信号处理函数去感知这个信号的发生；
     - 通过waitpid()去感知到tracee的运行状态发生了改变，并通过waitpid返回的status来判断是否是PTRACE_EVENT_CLONE事件
       see: `man 2 ptrace` 中关于选项 PTRACE_O_TRACECLONE 的说明。
+
 3、tracer如果确定了是clone导致的以后，可以拿到deliver这个信号的其他信息，如新线程的pid
 
 4、拿到线程pid之后就可以去干其他事，比如默认会自动将新线程纳入跟踪，我们可以选择放行新线程，或者观察、控制新线程
