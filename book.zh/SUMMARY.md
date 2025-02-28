@@ -29,8 +29,7 @@
   * [6.13 打印寄存器数据](6-develop-inst-debugger/13-pregs.md)
   * [6.20 跟踪多线程程序1](6-develop-inst-debugger/20-trace_new_threads.md)
   * [6.21 跟踪多线程程序2](6-develop-inst-debugger/21-trace_old_threads.md)
-  * [6.y 重构程序](6-develop-inst-debugger/21-refactor.md)
-  * [6.x More...](6-develop-inst-debugger/x-more.md)
+  * [6.99 More...](6-develop-inst-debugger/99-more.md)
 * [7 挺进符号级调试器](7-headto-sym-debugger/README.md)
 
   * [7.1 理解ELF文件](7-headto-sym-debugger/1-elf.md)
