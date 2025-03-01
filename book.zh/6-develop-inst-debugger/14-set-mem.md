@@ -4,7 +4,7 @@
 
 添加、移除断点过程中其实也是对内存数据做修改，只不过断点操作是修改的指令数据，而我们这里强调的是对数据做修改。指令级调试器对内存数据做修改，其实没有符号级调试器直接通过变量名来修改容易，对调试人员的要求比较高。因为如果不知道什么数据在内存什么位置，是什么类型，占多少字节，所以不好修改。符号级调试器就简单多了，直接通过变量名来修改就可以。
 
-本节我们还是要演示下对内存数据区数据做修改的操作，介绍下大致的交互，以及用到的系统调用 `ptrace(PTRACE_POKEDATA,...)` ，为我们后续符号级调试器里通过变量名来修改值也提前做个技术准备。
+本节我们还是要演示下对内存数据区数据做修改的操作，介绍下大致的交互，以及用到的系统调用 `ptrace(PTRACE_POKEDATA,...)` ，为我们后续符号级调试器里通过变量名来修改值也提前做个技术准备。严格来说我们应该提供一个通用的修改内存的调试命令 `set <addr> <value>` 。OK，我们先还是先介绍如何修改任意指定地址处的内存数据，然后会在 godbg 中实现此功能。
 
 ### 代码实现
 
@@ -160,7 +160,7 @@ func checkPid(pid int) bool {
 
    这个程序通过一个for循环每隔1s打印当前进程的pid，循环控制变量loop默认为true。
 
-   ```go
+```go
    package main
    
    import (
@@ -176,11 +176,11 @@ func checkPid(pid int) bool {
    		time.Sleep(time.Second)
    	}
    }
-   ```
+```
 
 2、我们先构建并运行这个程序，注意为了变量被优化掉我们构建时需要禁用优化：`go build -gcflags 'all=-N -l'`
 
-   ```bash
+```bash
    $ cd../testdata && make
    $./loop
    pid:49701
@@ -189,11 +189,11 @@ func checkPid(pid int) bool {
    pid:49701
    pid:49701
    ...
-   ```
+```
 
 3、然后我们借助dlv来观察变量loop的内存位置
 
-   ```bash
+```bash
    $dlvattach49701
 
    (dlv) b loop.go:11
@@ -222,11 +222,11 @@ func checkPid(pid int) bool {
    ```bash
    (dlv) quit
    Would you like to kill the process? [Y/n] n
-   ```
+```
 
 4、然后我们执行自己的程序
 
-   ```bash
+```bash
    $ ./14_set_mem 49701
     ===step1===: supposing running `dlv attach pid` here
     process 49701 attach succ
@@ -245,16 +245,16 @@ func checkPid(pid int) bool {
 
     ===step2===: supposing running `dlv> set *addr = 0xaf` here     <= do loop=false succ
     change data from 1 to 0 succ
-   ```
-   
+```
+
    此时，由于 `loop=false` 所以 `for loop {...}` 循环结束，程序会执行到结束。
 
-   ```bash
+```bash
     pid:49701
     pid:49701
     pid:49701                       <= tracee exit successfully for `loop=false`
     zhangjie🦀testdata(master) $
-   ```
+```
 
 ### 本文小结
 
