@@ -27,6 +27,8 @@
   * [6.11 运行到断点](6-develop-inst-debugger/11-continue.md)
   * [6.12 打印内存数据](6-develop-inst-debugger/12-pmem.md)
   * [6.13 打印寄存器数据](6-develop-inst-debugger/13-pregs.md)
+  * [6.14 修改内存数据](6-develop-inst-debugger/14-set-mem.md)
+  * [6.15 修改寄存器数据](6-develop-inst-debugger/15-set-regs.md)
   * [6.20 跟踪多线程程序1](6-develop-inst-debugger/20-trace_new_threads.md)
   * [6.21 跟踪多线程程序2](6-develop-inst-debugger/21-trace_old_threads.md)
   * [6.99 More...](6-develop-inst-debugger/99-more.md)
