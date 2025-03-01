@@ -1,4 +1,4 @@
-## 查看进程状态
+## 查看进程状态(寄存器)
 
 ### 实现目标：pregs查看寄存器
 
@@ -72,33 +72,33 @@ $ godbg attach 116
 process 116 attached succ
 process 116 stopped: true
 godbg> pregs
-Register    R15         0x400               
-Register    R14         0x3                 
-Register    R13         0xa                 
-Register    R12         0x4be86f            
-Register    Rbp         0x7ffc5095bd50      
-Register    Rbx         0x555900            
-Register    R11         0x286               
-Register    R10         0x0                 
-Register    R9          0x0                 
-Register    R8          0x0                 
+Register    R15         0x400             
+Register    R14         0x3               
+Register    R13         0xa               
+Register    R12         0x4be86f          
+Register    Rbp         0x7ffc5095bd50    
+Register    Rbx         0x555900          
+Register    R11         0x286             
+Register    R10         0x0               
+Register    R9          0x0               
+Register    R8          0x0               
 Register    Rax         0xfffffffffffffe00  
-Register    Rcx         0x464fc3            
-Register    Rdx         0x0                 
-Register    Rsi         0x80                
-Register    Rdi         0x555a48            
-Register    Orig_rax    0xca                
-Register    Rip         0x464fc3            
-Register    Cs          0x33                
-Register    Eflags      0x286               
-Register    Rsp         0x7ffc5095bd08      
-Register    Ss          0x2b                
-Register    Fs_base     0x555990            
-Register    Gs_base     0x0                 
-Register    Ds          0x0                 
-Register    Es          0x0                 
-Register    Fs          0x0                 
-Register    Gs          0x0                 
+Register    Rcx         0x464fc3          
+Register    Rdx         0x0               
+Register    Rsi         0x80              
+Register    Rdi         0x555a48          
+Register    Orig_rax    0xca              
+Register    Rip         0x464fc3          
+Register    Cs          0x33              
+Register    Eflags      0x286             
+Register    Rsp         0x7ffc5095bd08    
+Register    Ss          0x2b              
+Register    Fs_base     0x555990          
+Register    Gs_base     0x0               
+Register    Ds          0x0               
+Register    Es          0x0               
+Register    Fs          0x0               
+Register    Gs          0x0               
 godbg> 
 ```
 

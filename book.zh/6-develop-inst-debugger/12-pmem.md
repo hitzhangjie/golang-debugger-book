@@ -1,4 +1,4 @@
-## 查看进程状态
+## 查看进程状态(内存)
 
 ### 实现目标：pmem读取内存数据
 
@@ -165,7 +165,7 @@ var pmemCmd = &cobra.Command{
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		...
-    
+  
 		// 该函数以美观的tab+padding对齐方式打印数据
 		s := prettyPrintMem(uintptr(readAt), buf, isLittleEndian(), format[0], int(size))
 		fmt.Println(s)
