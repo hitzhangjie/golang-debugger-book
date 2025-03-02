@@ -36,7 +36,7 @@ $ cat /proc/sys/kernel/randomize_va_space
 - Shared Libraries: The loader uses mmap to load libraries at random addresses.
 - Executable: If compiled with PIE, the code’s base address is also randomized.
 
-### 对调试过程的影响
+### 对调试的影响
 
 我们为什么要介绍ALSR呢？因为它对调试过程还是有影响的。`go build` 构建出来的可执行程序，每次启动后同一个函数的指令地址是固定不变的，但是同一个栈变量的地址在每次启动后却是变化的 …… 我们知道有些读者会对此产生困惑，所以要介绍下。
 
