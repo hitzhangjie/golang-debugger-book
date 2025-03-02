@@ -4,16 +4,13 @@
 * [2 前言](2-preface/README.md)
 * [3 常用术语](3-terms/README.md)
 * [4 调试基础](4-basics/README.md)
-
   * [4.1 调试目的](4-basics/1-purposes.md)
   * [4.2 调试依赖](4-basics/2-dependencies.md)
   * [4.3 反调试技术](4-basics/3-countertactics.md)
 * [5 走进调试器开发](5-debugger-skeleton/README.md)
-
   * [5.1 调试器概貌](5-debugger-skeleton/1-debugger_skeleton.md)
   * [5.2 调试器示例](5-debugger-skeleton/2-debugger_demo.md)
 * [6 开发go指令级调试器](6-develop-inst-debugger/README.md)
-
   * [6.1 进程启动](6-develop-inst-debugger/1-process_start.md)
   * [6.2 进程attach](6-develop-inst-debugger/2-process_attach.md)
   * [6.3 启动&amp;attach](6-develop-inst-debugger/3-process_start_attach.md)
@@ -31,9 +28,9 @@
   * [6.15 修改寄存器数据](6-develop-inst-debugger/15-set-regs.md)
   * [6.20 跟踪多线程程序1](6-develop-inst-debugger/20-trace_new_threads.md)
   * [6.21 跟踪多线程程序2](6-develop-inst-debugger/21-trace_old_threads.md)
+  * [6.80 认识ASLR](6-develop-inst-debugger/80-aslr.md)
   * [6.99 More...](6-develop-inst-debugger/99-more.md)
 * [7 挺进符号级调试器](7-headto-sym-debugger/README.md)
-
   * [7.1 理解ELF文件](7-headto-sym-debugger/1-elf.md)
   * [7.2 符号&amp;符号表](7-headto-sym-debugger/2-syms.md)
   * [7.3 符号的解析](7-headto-sym-debugger/3-syms-resolve.md)
@@ -45,7 +42,6 @@
     * [7.6.3 debug/dwarf](7-headto-sym-debugger/6-gopkg-debug/3-dwarf.md)
   * [7.7 挺进DWARF](7-headto-sym-debugger/7-headto-dwarf/README.md)
 * [8 调试信息标准: DWARF](8-dwarf/README.md)
-
   * [8.1 发展历史](8-dwarf/1-history.md)
   * [8.2 DWARF结构](8-dwarf/2-structure.md)
   * [8.3 调试信息条目：DIE](8-dwarf/3-die-readme.md)
@@ -66,7 +62,6 @@
   * [8.7 使用DWARF](8-dwarf/7-using-dwarf.md)
   * [8.8 本章总结](8-dwarf/8-summary.md)
 * [9 开发go符号级调试器](9-develop-sym-debugger/README.md)
-
   * [9.1. 需求分析](9-develop-sym-debugger/1-需求分析/README.md)
   * [9.2 概要设计](9-develop-sym-debugger/2-概要设计/README.md)
     * [9.2.1 整体架构](9-develop-sym-debugger/2-概要设计/1-整体架构.md)
@@ -74,9 +69,7 @@
     * [9.2.3 Service层设计](9-develop-sym-debugger/2-概要设计/3-Service层设计.md)
     * [9.2.4 后端符号层设计](9-develop-sym-debugger/2-概要设计/4-后端符号层设计.md)
     * [9.2.5 后端目标层设计](9-develop-sym-debugger/2-概要设计/5-后端目标层设计.md)
-
-  - [9.3 详细设计](9-develop-sym-debugger/2-概要设计/README.md)
-
+  * [9.3 详细设计](9-develop-sym-debugger/2-概要设计/README.md)
   * [9.4 编码实现](9-develop-sym-debugger/4-编码实现/README.md)
     * [9.4.1 进程启动](9-develop-sym-debugger/4-编码实现/1-process_start.md)
     * [9.4.2 进程attach](9-develop-sym-debugger/4-编码实现/2-process_attach.md)
@@ -99,5 +92,4 @@
     * [9.4.19 More...](9-develop-sym-debugger/4-编码实现/x-more.md)
 * [10 致谢](10-thanks/README.md)
 * [11 附录](11-appendix/README.md)
-
   * [11.1 go程序启动流程](11-appendix/1-go-programme-start.md)
