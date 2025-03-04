@@ -37,9 +37,9 @@ Linux下进程地址空间的内存布局，大家并不陌生，如data段、te
 > 在看了段头表segments定义之后会更清晰地明确这一点，text segment其实包含了.text section以及其他sections，data其实也包含了.data section意外的其他sections。下面的段头表定义给出了一个这样的示例：
 >
 > ```bash
-> LOAD           0x0000000000000000 0x0000000000400000 0x0000000000400000
+> LOAD        0x0000000000000000 0x0000000000400000 0x0000000000400000
 >                0x0000000000000a70 0x0000000000000a70  R E    0x200000
-> LOAD           0x0000000000000df0 0x0000000000600df0 0x0000000000600df0
+> LOAD        0x0000000000000df0 0x0000000000600df0 0x0000000000600df0
 >                0x000000000000025c 0x0000000000000260  RW     0x200000
 > 
 > 02     .interp .note.ABI-tag .note.gnu.build-id .gnu.hash .dynsym .dynstr .gnu.version .gnu.version_r .rela.dyn .rela.plt .init .plt .text .fini .rodata
