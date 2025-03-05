@@ -22,7 +22,7 @@
 
 如果链接器找到了一个引用符号的多次重复定义（多重定义），是直接抛出错误？还是有办法知道该选择哪一个呢？这就涉及到符号的强弱规则问题。
 
-在编译时，编译器向汇编器输出每个全局符号，或者是强（strong）或者是弱（weak），而汇编器把这个信息隐含地编码在可重定位目标文件的符号表的符号里，准确地说是记录在字段`Elf_symbol.binding`字段中。
+在编译时，编译器向汇编器输出每个全局符号，或者是强（strong）或者是弱（weak），而汇编器把这个信息记录在当前这个可重定位目标文件的符号表里，准确地说是记录在对应符号的字段 `Elf_symbol.binding`字段中。
 
 - 强符号：`(binding & global != 0) && (binding & weak == 0)`
 - 弱符号：`binding & weak == 1`
@@ -39,9 +39,9 @@
 
 ### 与静态库链接
 
-迄今为止，我们都是假设链接器读取一组可重定位的目标文件，并把他们链接起来，成为一个可执行文件。实际上，所有的编译系统都提供一种机制，允许将所有相关的目标模块打包成为一个单独的文件，称为**静态库**（static library），它也可以作为链接器的输入。
+迄今为止，我们都是假设链接器读取一组可重定位的目标文件，并把它们链接起来，成为一个可执行文件。实际上，所有的编译系统都提供一种机制，允许将所有相关的目标模块打包成为一个单独的文件，称为**静态库**（static library），它也可以作为链接器的输入。
 
-静态库，一种称为存档（archive）的特殊文件格式存储在磁盘中。存档文件是一组连接起来的可重定位目标文件的集合，其中每一个模块文件都有一个头部来描述其大小和位置。存档文件名由后缀.a标识。我们可以通过`ar`命令来创建静态库。如果您是用go工具对目标模块创建静态库，可通过`go tool pack`来创建。
+静态库，一种称为存档（archive）的特殊文件格式存储在磁盘中。存档文件是一组连接起来的可重定位目标文件的集合，其中每一个模块文件都有一个头部来描述其大小和位置。存档文件名由后缀.a标识。我们可以通过 `ar`命令来创建静态库。如果您是用go工具对目标模块创建静态库，可通过 `go tool pack`来创建。
 
 当链接器链接输出一个可执行文件时，它只拷贝静态库里被应用程序引用的目标模块。静态库提高了常用代码的复用性，一定程度上节省了每个应用程序因为拷贝待复用模块*.o文件所带来的磁盘存储空间的浪费。
 
@@ -49,7 +49,7 @@
 
 ![Carnegie Mellon 1 Bryant and O'Hallaron, Computer Systems: A Programmer's  Perspective, Third Edition Linking : Introduction to Computer Systems ppt  download](assets/slide_29.jpg)
 
-大致含义是main2.c里面调用了vector.h中的函数，这个函数的实现在静态库文件libvector.a中，addvec实现在addvec.o中，multvec实现在multvec.o中，同时main2.c中还使用了libc的io函数，实现包含在libc.a中。现在通过静态链接`gcc -static -o prog2c main2.o ./libvector.a`构造一个完整链接的可执行程序，程序加载和运行时无需执行动态链接。
+大致含义是main2.c里面调用了vector.h中的函数，这个函数的实现在静态库文件libvector.a中，addvec实现在addvec.o中，multvec实现在multvec.o中，同时main2.c中还使用了libc的io函数，实现包含在libc.a中。现在通过静态链接 `gcc -static -o prog2c main2.o ./libvector.a`构造一个完整链接的可执行程序，程序加载和运行时无需执行动态链接。
 
 链接器会检测到该函数调用addvec是在addvec.o中实现的，所以从libvector.a中只提取addvec.o来进行最后的链接，而不是也将multvec.o也链接过来，这种方式也可以节省存储空间占用。
 
@@ -76,7 +76,7 @@
 - 首先，在文件系统中，对于一个库，只有一个.so文件，所有引用该库的可执行程序都共享这个.so文件中的代码和数据，而不是像静态库的内容那样还要被拷贝和嵌入到引用它们的可执行程序文件中；
 - 其次，在内存中，一个共享库的.text section的同一个副本可以被不同的正在运行的进程共享，联想下通过mmap时可以将指定文件映射到指定内存区，同时还可以限制该内存区的访问权限为“共享访问”还是“排他性访问”；
 
-使用命令`ar`可以创建静态库，创建共享库可使用命令`gcc -shared -fPIC`来完成。
+使用命令 `ar`可以创建静态库，创建共享库可使用命令 `gcc -shared -fPIC`来完成。
 
 下面是一个动态链接过程的示意图：
 
@@ -87,7 +87,6 @@
 这里的思路是，当创建可执行程序时，静态执行一些链接，然后在程序加载时，再进一步动态完成链接。
 
 - 静态执行一些链接，指的是这个阶段如果有需要多个目标文件可以执行静态链接的，则执行静态链接。这个时候并没有拷贝任何共享库的代码或数据到可执行文件中，而只是拷贝了一些重定位和符号表信息，这些信息使得运行时可以解析对libvector.so中代码和数据的引用。
-
 - 当加载器（kernel）加载和运行可执行文件时，加载部分链接的可执行文件之后，接着注意到它包含一个.interp section，这个section包含了动态链接器的路径名，动态链接器本身就是一个共享库（如在Linux上为ld-linux.so）。**和加载静态链接的程序所不同的是，加载器此时不再将控制权直接传递给应用程序了，而是加载并运行这个动态链接器ld-linux.so，来完成动态链接**。
 
   动态链接器会执行下面的重定位操作来完成链接任务：
@@ -102,9 +101,9 @@
 
 **动态链接除了加载时链接，还有运行时链接的情况**，即：
 
-- 通过`dlopen`来加载一个共享库；
-- 通过`dlsym`来解析一个符号；
-- 通过`dlclose`卸载一个共享库。
+- 通过 `dlopen`来加载一个共享库；
+- 通过 `dlsym`来解析一个符号；
+- 通过 `dlclose`卸载一个共享库。
 
 #### 位置无关代码
 
@@ -121,7 +120,7 @@
 
 随着时间发展，假设一个系统中有了成百个库、各种库版本，就很难避免地址空间分列成大量小的、未使用而又不能再使用的空洞。甚至更糟糕的是，对每个系统而言，库在内存中的分配都是不同的，这就引起了更令人头痛的管理问题。
 
-**一种更好的方法是编译库代码，使得不需要链接器修改库代码就可以在任何地址加载和执行这些代码。这样的代码就叫做与位置无关的代码（PIC，Position Independent Code）。**用户可以使用`gcc -fPIC`生成位置无关代码。
+**一种更好的方法是编译库代码，使得不需要链接器修改库代码就可以在任何地址加载和执行这些代码。这样的代码就叫做与位置无关的代码（PIC，Position Independent Code）。**用户可以使用 `gcc -fPIC`生成位置无关代码。
 
 在一个IA32系统中，对**同一个目标模块中过程的调用是不需要特殊处理的，因为引用地址是PC值相对的偏移量，已经是PIC了**。然而**对外部定义的过程调用和对全局变量的引用通常不是PIC，因为它们都要求在链接时重定位**。
 
@@ -191,7 +190,7 @@ L1: 	popl %ebx			; ebx contains the current pc
 80485bb:	e8 a4 fe ff ff		call 8048464 <addvec>
 ```
 
-当addvec第一次调用时，控制传递到PLT[2]的第1条指令处（地址为8048464），该指令通过GOT[4]执行一个间接跳转。开始时，每个GOT条目包含相应的PLT条目中的pushl这条指令的地址，所以开始时GOT[4]条目中的内容为0x804846a，现在执行`jmp *GOT[4]`之后，相当于饶了一圈回到了PLT[2]的第2条指令处，这条指令将addvec符号的ID入栈，第3条指令则跳转到PLT[0]。
+当addvec第一次调用时，控制传递到PLT[2]的第1条指令处（地址为8048464），该指令通过GOT[4]执行一个间接跳转。开始时，每个GOT条目包含相应的PLT条目中的pushl这条指令的地址，所以开始时GOT[4]条目中的内容为0x804846a，现在执行 `jmp *GOT[4]`之后，相当于饶了一圈回到了PLT[2]的第2条指令处，这条指令将addvec符号的ID入栈，第3条指令则跳转到PLT[0]。
 
 好戏开始了，PLT[0]中的代码将GOT[1]中的标识信息的字入栈，然后通过GOT[2]间接跳转到动态链接器（ld-linux.so）中，动态链接器用两个栈顶参数来确定addvec的位置，然后用这个算出的新地址覆盖掉GOT[4]，并跳过去执行把控制传递给了addvec。
 
@@ -205,18 +204,13 @@ L1: 	popl %ebx			; ebx contains the current pc
 >
 > 其实这种思想很常见，如果计算开销大，通常会采用“lazy”的方式延后处理，如果该操作还频繁，则会考虑类似“cache”的方式来避免重复计算。
 
-### 参考内容	
+### 参考内容
 
 1. Go: Package objabi, https://golang.org/pkg/cmd/internal/objabi/
-
 2. Go: Object File & Relocations, Vincent Blanchon, https://medium.com/a-journey-with-go/go-object-file-relocations-804438ec379b
-
 3. Golang Internals, Part 3: The Linker, Object Files, and Relocations, https://www.altoros.com/blog/golang-internals-part-3-the-linker-object-files-and-relocations/
-
 4. Computer System: A Programmer's Perspective, Randal E.Bryant, David R. O'Hallaron, p450-p479
 
    深入理解计算机系统, 龚奕利 雷迎春 译, p450-p479
-
 5. Linker and Libraries Guide, Object File Format, File Format, Symbol Table, https://docs.oracle.com/cd/E19683-01/816-1386/chapter6-79797/index.html
-
 6. Linking, https://slideplayer.com/slide/9505663/
