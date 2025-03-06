@@ -31,6 +31,7 @@
   * [6.80 认识ASLR](6-develop-inst-debugger/80-aslr.md)
   * [6.99 More...](6-develop-inst-debugger/99-more.md)
 * [7 挺进符号级调试器](7-headto-sym-debugger/README.md)
+  * [7.0 Go构建内幕](7-headto-sym-debugger/0-how-go-build-works.md)
   * [7.1 理解ELF文件](7-headto-sym-debugger/1-elf.md)
   * [7.2 符号&amp;符号表](7-headto-sym-debugger/2-syms.md)
   * [7.3 符号的解析](7-headto-sym-debugger/3-syms-resolve.md)
