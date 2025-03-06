@@ -4,101 +4,107 @@
 
 ELF ([Executable and Linkable Format](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format))，可执行可链接格式，是Unix、Linux环境下一种十分常见的文件格式，它可用于可执行程序、目标文件、共享库、core文件等。
 
-ELF文件格式如下，文件开头是ELF Header，剩下的数据部分包括Program Header Table、Section Header Table、Sections，Sections中的数据由Program Header Table、Section Header Table来引用。
+ELF文件，其构成如下图所示，其内容包括文件头 (ELF Header)，剩余数据包括段头表 (Program Header Table)、节头表 (Section Header Table)、Sections，Sections位于段头表和节头表之间，并被它们引用。
 
 ![img](assets/elf.png)
 
-先简单介绍一下ELF中关键结构的含义和作用：
+- ELF文件头 (ELF FIle Header)，其描述了当前ELF文件的类型（可执行程序、可重定位文件、动态链接文件、core文件等）、32位/64位寻址、ABI、ISA、程序入口地址、Program Header Table起始地址及元素大小、Section Header Table起始地址及元素大小，等等；
+- 段头表 (Program Header Table)，定义了程序的执行时视图，描述了如何创建程序的进程映像。每个表项定义了一个“段 (segment)” ，每个段引用了0、1或多个sections，段有类型，如PT_LOAD表示该段引用的sections需要被加载到内存。段头表主要是为了指导加载器进行加载；
 
-- ELF FIle Header，ELF文件头，其描述了当前ELF文件的类型（可执行程序、可重定位文件、动态链接文件、core文件等）、32位/64位寻址、ABI、ISA、程序入口地址、Program Header Table起始地址及元素大小、Section Header Table起始地址及元素大小，等等；
-- Program Header Table，它描述了系统如何创建一个程序的进程映像，每个表项都定义了一个segment（段），其中引用了0个、1个或多个section，它们也有自己的类型，如PT_LOAD，表示loader（如/lib64/ld-linux-x86-64.so）应按照segment定义好的虚拟地址范围、权限将引用的sections以加载到进程地址空间中指定的位置，并设置好读、写、可执行权限（访问权限在GDT、LDT中设置）。
-
-  > 如.text section隶属于一个Type=PT_LOAD的segment，意味着会被加载到内存；并且该segment的权限为RE（Read+Execute），意味着指令部分加载到内存后，进程对这部分区域的访问权限为“读+可执行”。
+  > .text section隶属于一个Type=PT_LOAD的段，意味着会被加载到内存；并且该段的权限为RE（Read+Execute），意味着指令部分加载到内存后，进程对这部分区域的访问权限为“读+可执行”。加载器 (loader /lib64/ld-linux-x86-64.so) 应按照段定义好的虚拟地址范围、权限，将引用的sections加载到进程地址空间中指定位置，并在GDT、LDT中设置好读、写、执行权限。
   >
-- Section Header Table，它描述了文件中包含的每个section的位置、大小、类型、链接顺序，等等，主要目的是为了指导链接器进行链接；
+- 节头表 (Section Header Table)，定义了程序的链接时视图，描述了二进制可执行文件中包含的每个section的位置、大小、类型、链接顺序，等等，主要目的是为了指导链接器进行链接；
 
   > 因为每个编译单元都有一个目标文件(\*.o)，每个目标文件都是一个ELF文件，都包含了这个编译单元拥有的sections。链接器是将所有目标文件以及其他库文件的sections进行合并（如将每个编译单元的.text合并到一起），然后将引用的符号解析成正确的偏移量或者地址。
   >
-- Sections，ELF文件中的sections数据，夹在Program Header Table和Section Header Table中间，由一系列的sections数据构成。
+- Sections，ELF文件中的sections数据，夹在段头表、节头表之间，并且被段头表、节头表引用。
 
-  > 不同程序中包含的sections数量是不固定的：有些编程语言会有特殊的sections来支持对应的语言运行时层面的功能，如go .gopclntab, gosymtab；程序采用静态链接、动态链接生成的sections也会不同，如动态链接往往会生成.got, .plt, .rel.text。
+  > 不同程序中包含的sections数量是不固定的：
+  >
+  > - 有些编程语言会有特殊的sections来支持对应的语言运行时层面的功能，如go .gopclntab, gosymtab；
+  > - 程序采用静态链接、动态链接生成的sections也会不同，如动态链接往往会生成.got, .plt, .rel.text。
   >
 
-### ELF Program Header Table
+### ELF段头表
 
-它定义了segments视图，可以理解为程序执行的视图（executable point of view），主要用来指导loader如何加载。
+段头表 (Program Header Table)，可以理解为程序执行的视图（executable point of view），主要用来指导loader如何加载。
 
 从可执行程序角度来看，进程运行时需要了解如何将程序中不同部分，加载到进程虚拟内存地址空间中的不同区域。
 
-Linux下进程地址空间的内存布局，大家并不陌生，如data段、text段，它们包含的信息其实是由Program Header Table预先定义好的，包括在虚拟内存空间中的位置，以及text段中应该包含哪些sections数据。
+Linux下进程地址空间的内存布局，大家并不陌生，如data段、text段，每个段包含的信息其实是由段头表预先定义好的，包括在虚拟内存空间中的位置，以及段中应该包含哪些sections数据。
 
-> 注意：内存地址空间中的内存布局，代码所在区域我们常称为代码段（code segment, CS寄存器值为其起始地址）or 文本段（text segment），数据段我们也常称为数据段（data segment，DS寄存器值为其起始地址）。内存布局中的术语text segment、data segment，不是ELF文件中的.text section和.data section，注意区分。
+> 注意：
 >
-> 在看了段头表segments定义之后会更清晰地明确这一点，text segment其实包含了.text section以及其他sections，data其实也包含了.data section以外的其他sections。下面的段头表定义给出了一个这样的示例：
+> - 内存地址空间中的内存布局，代码所在区域我们常称为代码段（code segment, CS寄存器来寻址）or 文本段（text segment），数据段我们也常称为数据段（data segment，DS寄存器来寻址）。
+> - 内存布局中的术语text segment、data segment，不是ELF文件中的.text section和.data section，注意区分。
+>
+> 下面的段头表定义给出了一个这样的示例，text segment其实包含了.text section以及其他sections，data segment其实也包含了.data section以外的其他sections。
 >
 > ```bash
+> // text segment，段索引02，可以看到包含了.text等其他sections
 > LOAD        0x0000000000000000 0x0000000000400000 0x0000000000400000
->                0x0000000000000a70 0x0000000000000a70  R E    0x200000
+>             0x0000000000000a70 0x0000000000000a70  R E    0x200000
+>
+> // data segment，段索引03，可以看到包含了.data等其他sections
 > LOAD        0x0000000000000df0 0x0000000000600df0 0x0000000000600df0
->                0x000000000000025c 0x0000000000000260  RW     0x200000
+>             0x000000000000025c 0x0000000000000260  RW     0x200000
 >
 > 02     .interp .note.ABI-tag .note.gnu.build-id .gnu.hash .dynsym .dynstr .gnu.version .gnu.version_r .rela.dyn .rela.plt .init .plt .text .fini .rodata
 > 03     .init_array .fini_array .dynamic .got .got.plt .data .bss
 > ```
 
-以测试程序golang-debugger-lessons/testdata/loop2为例，运行 `readelf -l`查看其program header table，共有7个program headers，每个program header的类型、在虚拟内存中的地址、读写执行权限，以及每个program header包含的sections，都一览无余。
+下面这个示例，则展示了测试程序 golang-debugger-lessons/testdata/loop2 的完整段头表定义，运行 `readelf -l`查看其段头表，共有7个表项，每个段定义包含了类型、在虚拟内存中的地址、读写执行权限，以及引用的sections。通过 `Section to Segment mapping: Segment Sections...`部分可以看到，最终组织好的：
 
-通过 `Section to Segment mapping: Segment Sections...`部分可以看到，最终组织好的 `text segment`（编号02的segment其Flags为R+E，表示可读可执行，因此可判定为text segment），其包含了如下sections `.text .note.go.buildid`。
+- text segment（编号02的segment其Flags为R+E，表示可读可执行，这就是text segment）包含了如下sections `.text .note.go.buildid`;
+- rodata segment (编号03的segment其Flags为R，表示只读，就是rodata segment) 包含了 `.rodata .typelink .itablink .gosymtab .gopclntab` 这些go运行时需要的数据；
+- data segment (编号04的segment其Flags为RW，表示可读可写，就是data segment) 包含了 `.data .bss` 等这些可读写的数据；
 
 ```bash
 $ readelf -l testdata/loop2
 
 Elf file type is EXEC (Executable file)
-Entry point 0x4647a0
-There are 7 program headers, starting at offset 64
+Entry point 0x475a80
+There are 6 program headers, starting at offset 64
 
 Program Headers:
   Type           Offset             VirtAddr           PhysAddr
                  FileSiz            MemSiz              Flags  Align
   PHDR           0x0000000000000040 0x0000000000400040 0x0000000000400040
-                 0x0000000000000188 0x0000000000000188  R      1000
+                 0x0000000000000150 0x0000000000000150  R      0x1000
   NOTE           0x0000000000000f9c 0x0000000000400f9c 0x0000000000400f9c
-                 kk 0x0000000000000064  R      4
+                 0x0000000000000064 0x0000000000000064  R      0x4
   LOAD           0x0000000000000000 0x0000000000400000 0x0000000000400000
-                 0x0000000000099294 0x0000000000099294  R E    1000
-  LOAD           0x000000000009a000 0x000000000049a000 0x000000000049a000
-                 0x00000000000a48c6 0x00000000000a48c6  R      1000
-  LOAD           0x000000000013f000 0x000000000053f000 0x000000000053f000
-                 0x0000000000015900 0x0000000000048088  RW     1000
+                 0x00000000000af317 0x00000000000af317  R E    0x1000
+  LOAD           0x00000000000b0000 0x00000000004b0000 0x00000000004b0000
+                 0x00000000000a6e70 0x00000000000a6e70  R      0x1000
+  LOAD           0x0000000000157000 0x0000000000557000 0x0000000000557000
+                 0x000000000000a520 0x000000000002e0c0  RW     0x1000
   GNU_STACK      0x0000000000000000 0x0000000000000000 0x0000000000000000
-                 0x0000000000000000 0x0000000000000000  RW     8
-  LOOS+5041580   0x0000000000000000 0x0000000000000000 0x0000000000000000
-                 0x0000000000000000 0x0000000000000000         8
+                 0x0000000000000000 0x0000000000000000  RW     0x8
 
  Section to Segment mapping:
   Segment Sections...
-   00   
-   01     .note.go.buildid 
-   02     .text .note.go.buildid 
-   03     .rodata .typelink .itablink .gosymtab .gopclntab 
-   04     .go.buildinfo .noptrdata .data .bss .noptrbss 
-   05   
+   00
+   01     .note.go.buildid
+   02     .text .note.go.buildid
+   03     .rodata .typelink .itablink .gosymtab .gopclntab
+   04     .go.buildinfo .noptrdata .data .bss .noptrbss
+   05
    06 
 ```
 
-> 本章稍后会介绍Program Header Table如何指导loader创建进程映像。
+本章稍后的章节，会继续介绍ELF段头表信息如何指导loader加载程序数据到内存，以构建进程映像。
 
-### ELF Section Header Table
+### ELF节头表
 
-它定义了sections视图，即程序链接的视图（the linkable point of view），主要是用来指导linker如何链接。
+每个编译单元生成的目标文件（ELF格式），将代码和数据划分成不同sections，如指令在.text、只读数据在.rodata、可读写数据在.data、其他vendor自定义sections，等等，实现了对不同数据的合理组织。
 
-> 以C语言为例每个编译单元编译过程中生成的\*.o目标文件也是一个ELF文件，里面包含了当前文件的section信息，最终链接器将所有\*.o文件的相同sections合并在一起，所以说它是用来指导链接器连接的一个视图。
->
-> see：https://stackoverflow.com/a/51165896
+在此基础上，节头表 (Section Header Table)，定义了程序的链接视图（the linkable point of view），用来指导linker如何对多个编译单元中的sections进行链接（合并相同sections、符号解析、重定位）。
 
-从链接器角度来看，程序将代码、数据划分成不同的sections，如指令在.text、只读数据在.rodata等。程序中的每个section属于0个、1个或多个segments，每个section在程序运行时会被按需mmap到进程地址空间。
+> - 以C语言为例：每个编译单元编译过程中生成的*.o目标文件也是一个ELF文件，里面包含了当前文件的section信息，最终链接器将所有*.o文件的相同sections合并在一起，所以说它是用来指导链接器连接的一个视图。see：https://stackoverflow.com/a/51165896
+> - 再以Go语言为例，在 [how &#34;go build&#34; works](./0-how-go-build-works.md) 小节里，我们也提及了go tool compile会将go源码文件对应的目标文件归档到静态库文件_pkg_.a，然后go tool pack将go tool asm汇编源文件生成的目标文件 file.o 最终追加到这个_pkg_.a，最终go tool link将这个_pkg_.a与其他运行时、标准库代码链接到一起，形成一个可执行程序。这个过程中对不同目标文件中的sections的处理也是大同小异的。
 
-以测试程序golang-debugger-lessons/testdata/loop2测试程序为例，我们来看下其链接器角度的视图，可以看到其包含了25个sections，每个section都有类型、偏移量、大小、链接顺序、对齐等信息，用以指导链接器完成链接操作。
+OK，以测试程序golang-debugger-lessons/testdata/loop2测试程序为例，我们来看下其链接器角度的视图，可以看到其包含了25个sections，每个section都有类型、偏移量、大小、链接顺序、对齐等信息，用以指导链接器完成链接操作。
 
 ```bash
 $ readelf -S testdata/loop2 
@@ -144,6 +150,8 @@ Key to Flags:
   l (large), p (processor specific)
 ```
 
+
+
 现在我们来尝试回答几个读者朋友可能的疑问：
 
 **section与segments隶属关系？**
@@ -156,7 +164,13 @@ Key to Flags:
 
 仍以前面示例做参考，我们发现.gosymtab、.gopclntab所属的段（段索引值 03）是LOAD类型，表示其数据会被加载到内存，这是因为go runtime依赖这些信息来计算stacktrace。
 
-而.note.go.buildid所属的段（段索引 01）为NOTE类型，不会被加载到内存，这种就是给一些外部工具读取使用的。比如方便 `go tool buildid <prog>`提取buildid信息，这个其实就是存储在.note.go.buildid section中的。
+而.note.go.buildid所属的段（段索引 01）为NOTE类型，只看这个段的话，section .note.go.buildid不会被加载到内存，但是注意到.note.go.buildid还被下面这个段索引为02、PT_TYPE=LOAD的段引用，那这个section最终就会被加载到内存中。
+
+一般情况下，.note.* 这种sections就是给一些外部工具读取使用的，一般不会被加载到内存中，除非go设计者希望能从进程内存中直接读取到这部分信息。
+
+**vendor自定义sections举例？**
+
+以go语言为例，方便 `go tool buildid <prog>`提取buildid信息，这个其实就是存储在.note.go.buildid section中的。
 
 来验证下，首先通过 `go tool buildid`来提取buildid信息：
 
@@ -177,9 +191,9 @@ String dump of section '.note.go.buildid':
 
 结果发现buildid数据是一致的，证实了我们上述判断。
 
-> 本章稍后会介绍Section Header Table如何指导链接器执行链接操作。
+本章稍后的章节，会介绍ELF节头表信息如何指导链接器执行链接操作。
 
-### ELF 常见 Sections
+### ELF Sections
 
 ELF文件会包含很多的sections，前面给出的测试实例中就包含了25个sections。
 
@@ -246,6 +260,158 @@ ELF文件会包含很多的sections，前面给出的测试实例中就包含了
 - 其他，如 `readelf [--relocated-dump | --debug-dump]`，可以按需选用。
 
 本节ELF内容就先介绍到，在此基础上，接下来的几个小节，我们将依次介绍linker、loader、debugger的工作原理。
+
+### 遗留问题
+
+.note.go.build为何会被加载呢？
+
+在阅读了go源码以后，初步判断是pprof需要。pprof生成profile信息中，希望能够包含被分析的进程的buildid信息，但是这里是GNU buildid，而非go builid，详见：
+
+```
+// newProfileBuilder returns a new profileBuilder.
+// CPU profiling data obtained from the runtime can be added
+// by calling b.addCPUData, and then the eventual profile
+// can be obtained by calling b.finish.
+func newProfileBuilder(w io.Writer) *profileBuilder {
+	zw, _ := gzip.NewWriterLevel(w, gzip.BestSpeed)
+	b := &profileBuilder{
+		w:         w,
+		zw:        zw,
+		start:     time.Now(),
+		strings:   []string{""},
+		stringMap: map[string]int{"": 0},
+		locs:      map[uintptr]locInfo{},
+		funcs:     map[string]int{},
+	}
+	b.readMapping()
+	return b
+}
+
+// readMapping reads /proc/self/maps and writes mappings to b.pb.
+// It saves the address ranges of the mappings in b.mem for use
+// when emitting locations.
+func (b *profileBuilder) readMapping() {
+	data, _ := os.ReadFile("/proc/self/maps")
+	parseProcSelfMaps(data, b.addMapping)
+	...
+}
+
+func parseProcSelfMaps(data []byte, addMapping func(lo, hi, offset uint64, file, buildID string)) {
+	// $ cat /proc/self/maps
+	// 00400000-0040b000 r-xp 00000000 fc:01 787766                             /bin/cat
+	// 0060a000-0060b000 r--p 0000a000 fc:01 787766                             /bin/cat
+	// 0060b000-0060c000 rw-p 0000b000 fc:01 787766                             /bin/cat
+	// 014ab000-014cc000 rw-p 00000000 00:00 0                                  [heap]
+	// 7f7d76af8000-7f7d7797c000 r--p 00000000 fc:01 1318064                    /usr/lib/locale/locale-archive
+	// 7f7d7797c000-7f7d77b36000 r-xp 00000000 fc:01 1180226                    /lib/x86_64-linux-gnu/libc-2.19.so
+	// 7f7d77b36000-7f7d77d36000 ---p 001ba000 fc:01 1180226                    /lib/x86_64-linux-gnu/libc-2.19.so
+	// 7f7d77d36000-7f7d77d3a000 r--p 001ba000 fc:01 1180226                    /lib/x86_64-linux-gnu/libc-2.19.so
+	// 7f7d77d3a000-7f7d77d3c000 rw-p 001be000 fc:01 1180226                    /lib/x86_64-linux-gnu/libc-2.19.so
+	// 7f7d77d3c000-7f7d77d41000 rw-p 00000000 00:00 0
+	// 7f7d77d41000-7f7d77d64000 r-xp 00000000 fc:01 1180217                    /lib/x86_64-linux-gnu/ld-2.19.so
+	// 7f7d77f3f000-7f7d77f42000 rw-p 00000000 00:00 0
+	// 7f7d77f61000-7f7d77f63000 rw-p 00000000 00:00 0
+	// 7f7d77f63000-7f7d77f64000 r--p 00022000 fc:01 1180217                    /lib/x86_64-linux-gnu/ld-2.19.so
+	// 7f7d77f64000-7f7d77f65000 rw-p 00023000 fc:01 1180217                    /lib/x86_64-linux-gnu/ld-2.19.so
+	// 7f7d77f65000-7f7d77f66000 rw-p 00000000 00:00 0
+	// 7ffc342a2000-7ffc342c3000 rw-p 00000000 00:00 0                          [stack]
+	// 7ffc34343000-7ffc34345000 r-xp 00000000 00:00 0                          [vdso]
+	// ffffffffff600000-ffffffffff601000 r-xp 00000000 00:00 0                  [vsyscall]
+
+	...
+
+	for len(data) > 0 {
+		...
+		buildID, _ := elfBuildID(file)
+		addMapping(lo, hi, offset, file, buildID)
+	}
+}
+
+// elfBuildID returns the GNU build ID of the named ELF binary,
+// without introducing a dependency on debug/elf and its dependencies.
+func elfBuildID(file string) (string, error) {
+    ...
+}
+```
+
+在这个基础上：
+
+```
+$ cat main.go
+package main
+
+import (
+	"log"
+	"os"
+	"runtime/pprof"
+)
+
+func main() {
+	f, err := os.Create("profile.pb.gz")
+	if err != nil {
+		log.Fatal(err)
+	}
+	pprof.StartCPUProfile(f)
+	defer pprof.StopCPUProfile()
+	var i int64
+	for i = 0; i < (1 << 33); i++ {
+	}
+}
+```
+
+```bash
+$ go build -ldflags "-B gobuildid" main.go
+
+$ file main
+main: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, BuildID[sha1]=f4b5d514bc46fad9417898216b23910ae874a85d, with debug_info, not stripped
+
+$ readelf -n main
+
+Displaying notes found in: .note.gnu.build-id
+  Owner                Data size 	Description
+  GNU                  0x00000014	NT_GNU_BUILD_ID (unique build ID bitstring)
+    Build ID: f4b5d514bc46fad9417898216b23910ae874a85d
+
+Displaying notes found in: .note.go.buildid
+  Owner                Data size 	Description
+  Go                   0x00000053	GO BUILDID
+   description data: 45 72 5a 36 6f 30 30 37 79 53 35 48 4c 67 41 7a 51 66 6e 52 2f 42 5a 53 51 58 54 4b 49 35 53 61 61 4f 4d 6e 65 49 36 63 56 2f 52 37 41 42 44 38 68 6c 34 6c 6b 65 79 44 66 7a 35 35 69 4d 2f 73 58 6a 56 4b 38 6d 52 58 79 35 4d 79 41 73 46 46 52 6d 74
+
+$ ./main
+
+$ pprof -raw profile.pb.gz | grep -A10 Mappings
+Mappings
+1: 0x400000/0x4ac000/0x0 /tmp/main f4b5d514bc46fad9417898216b23910ae874a85d [FN]
+```
+
+很可能是这里的工具写的不完善，只有显示加了 `-ldflags "-B gobuildid"` 后，才生成了GNU buildID，profile信息里才包含了这个buildid信息。如果不加这个选项，最后生成的profile信息里也是没有的。
+我推测是，go设计者希望我们未指定打开GNU buildID时，就默认填充go buildid，所以才会将.text和.note.go.builid一同加载到text segment，但是可能是开发者写的解析buildID的函数只支持GNU buildID、不支持go buildID，所以最终没有生成到profile信息中。
+
+```
+$ go build main.go
+
+$ file main
+main: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=llrn1go725_F2vCvvETz/OITeRu6kDScHG6FVjdK8/R7ABD8hl4lkeyDfz55iM/uoTostDrfB5kdwhy6UpG, with debug_info, not stripped
+
+$ readelf -n main
+
+Displaying notes found in: .note.go.buildid
+  Owner                Data size 	Description
+  Go                   0x00000053	GO BUILDID
+   description data: 6c 6c 72 6e 31 67 6f 37 32 35 5f 46 32 76 43 76 76 45 54 7a 2f 4f 49 54 65 52 75 36 6b 44 53 63 48 47 36 46 56 6a 64 4b 38 2f 52 37 41 42 44 38 68 6c 34 6c 6b 65 79 44 66 7a 35 35 69 4d 2f 75 6f 54 6f 73 74 44 72 66 42 35 6b 64 77 68 79 36 55 70 47
+
+$ ./main
+
+$ pprof -raw profile.pb.gz | grep -A10 Mappings
+Mappings
+1: 0x400000/0x4ac000/0x0 /tmp/main  [FN]
+```
+
+我推测就是一个go开发者pprof工具实现上的BUG，see also: 
+- https://github.com/golang/go/issues/68652.
+- 指定了-B gobuildid后，会从go buildid生成一个GNU buildid，https://go-review.googlesource.com/c/go/+/511475
+
+TODO Weired, https://github.com/golang/go/issues/68186.
 
 ### 参考文献
 
