@@ -150,8 +150,6 @@ Key to Flags:
   l (large), p (processor specific)
 ```
 
-
-
 现在我们来尝试回答几个读者朋友可能的疑问：
 
 **section与segments隶属关系？**
@@ -166,7 +164,7 @@ Key to Flags:
 
 而.note.go.buildid所属的段（段索引 01）为NOTE类型，只看这个段的话，section .note.go.buildid不会被加载到内存，但是注意到.note.go.buildid还被下面这个段索引为02、PT_TYPE=LOAD的段引用，那这个section最终就会被加载到内存中。
 
-一般情况下，.note.* 这种sections就是给一些外部工具读取使用的，一般不会被加载到内存中，除非go设计者希望能从进程内存中直接读取到这部分信息。
+>ps: 一般情况下，.note.* 这种sections就是给一些外部工具读取使用的，一般不会被加载到内存中，除非go设计者希望能从进程内存中直接读取到这部分信息，或者希望core转储时能包含这些信息以供后续提取使用。
 
 **vendor自定义sections举例？**
 
@@ -261,157 +259,7 @@ ELF文件会包含很多的sections，前面给出的测试实例中就包含了
 
 本节ELF内容就先介绍到，在此基础上，接下来的几个小节，我们将依次介绍linker、loader、debugger的工作原理。
 
-### 遗留问题
 
-.note.go.build为何会被加载呢？
-
-在阅读了go源码以后，初步判断是pprof需要。pprof生成profile信息中，希望能够包含被分析的进程的buildid信息，但是这里是GNU buildid，而非go builid，详见：
-
-```
-// newProfileBuilder returns a new profileBuilder.
-// CPU profiling data obtained from the runtime can be added
-// by calling b.addCPUData, and then the eventual profile
-// can be obtained by calling b.finish.
-func newProfileBuilder(w io.Writer) *profileBuilder {
-	zw, _ := gzip.NewWriterLevel(w, gzip.BestSpeed)
-	b := &profileBuilder{
-		w:         w,
-		zw:        zw,
-		start:     time.Now(),
-		strings:   []string{""},
-		stringMap: map[string]int{"": 0},
-		locs:      map[uintptr]locInfo{},
-		funcs:     map[string]int{},
-	}
-	b.readMapping()
-	return b
-}
-
-// readMapping reads /proc/self/maps and writes mappings to b.pb.
-// It saves the address ranges of the mappings in b.mem for use
-// when emitting locations.
-func (b *profileBuilder) readMapping() {
-	data, _ := os.ReadFile("/proc/self/maps")
-	parseProcSelfMaps(data, b.addMapping)
-	...
-}
-
-func parseProcSelfMaps(data []byte, addMapping func(lo, hi, offset uint64, file, buildID string)) {
-	// $ cat /proc/self/maps
-	// 00400000-0040b000 r-xp 00000000 fc:01 787766                             /bin/cat
-	// 0060a000-0060b000 r--p 0000a000 fc:01 787766                             /bin/cat
-	// 0060b000-0060c000 rw-p 0000b000 fc:01 787766                             /bin/cat
-	// 014ab000-014cc000 rw-p 00000000 00:00 0                                  [heap]
-	// 7f7d76af8000-7f7d7797c000 r--p 00000000 fc:01 1318064                    /usr/lib/locale/locale-archive
-	// 7f7d7797c000-7f7d77b36000 r-xp 00000000 fc:01 1180226                    /lib/x86_64-linux-gnu/libc-2.19.so
-	// 7f7d77b36000-7f7d77d36000 ---p 001ba000 fc:01 1180226                    /lib/x86_64-linux-gnu/libc-2.19.so
-	// 7f7d77d36000-7f7d77d3a000 r--p 001ba000 fc:01 1180226                    /lib/x86_64-linux-gnu/libc-2.19.so
-	// 7f7d77d3a000-7f7d77d3c000 rw-p 001be000 fc:01 1180226                    /lib/x86_64-linux-gnu/libc-2.19.so
-	// 7f7d77d3c000-7f7d77d41000 rw-p 00000000 00:00 0
-	// 7f7d77d41000-7f7d77d64000 r-xp 00000000 fc:01 1180217                    /lib/x86_64-linux-gnu/ld-2.19.so
-	// 7f7d77f3f000-7f7d77f42000 rw-p 00000000 00:00 0
-	// 7f7d77f61000-7f7d77f63000 rw-p 00000000 00:00 0
-	// 7f7d77f63000-7f7d77f64000 r--p 00022000 fc:01 1180217                    /lib/x86_64-linux-gnu/ld-2.19.so
-	// 7f7d77f64000-7f7d77f65000 rw-p 00023000 fc:01 1180217                    /lib/x86_64-linux-gnu/ld-2.19.so
-	// 7f7d77f65000-7f7d77f66000 rw-p 00000000 00:00 0
-	// 7ffc342a2000-7ffc342c3000 rw-p 00000000 00:00 0                          [stack]
-	// 7ffc34343000-7ffc34345000 r-xp 00000000 00:00 0                          [vdso]
-	// ffffffffff600000-ffffffffff601000 r-xp 00000000 00:00 0                  [vsyscall]
-
-	...
-
-	for len(data) > 0 {
-		...
-		buildID, _ := elfBuildID(file)
-		addMapping(lo, hi, offset, file, buildID)
-	}
-}
-
-// elfBuildID returns the GNU build ID of the named ELF binary,
-// without introducing a dependency on debug/elf and its dependencies.
-func elfBuildID(file string) (string, error) {
-    ...
-}
-```
-
-在这个基础上：
-
-```
-$ cat main.go
-package main
-
-import (
-	"log"
-	"os"
-	"runtime/pprof"
-)
-
-func main() {
-	f, err := os.Create("profile.pb.gz")
-	if err != nil {
-		log.Fatal(err)
-	}
-	pprof.StartCPUProfile(f)
-	defer pprof.StopCPUProfile()
-	var i int64
-	for i = 0; i < (1 << 33); i++ {
-	}
-}
-```
-
-```bash
-$ go build -ldflags "-B gobuildid" main.go
-
-$ file main
-main: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, BuildID[sha1]=f4b5d514bc46fad9417898216b23910ae874a85d, with debug_info, not stripped
-
-$ readelf -n main
-
-Displaying notes found in: .note.gnu.build-id
-  Owner                Data size 	Description
-  GNU                  0x00000014	NT_GNU_BUILD_ID (unique build ID bitstring)
-    Build ID: f4b5d514bc46fad9417898216b23910ae874a85d
-
-Displaying notes found in: .note.go.buildid
-  Owner                Data size 	Description
-  Go                   0x00000053	GO BUILDID
-   description data: 45 72 5a 36 6f 30 30 37 79 53 35 48 4c 67 41 7a 51 66 6e 52 2f 42 5a 53 51 58 54 4b 49 35 53 61 61 4f 4d 6e 65 49 36 63 56 2f 52 37 41 42 44 38 68 6c 34 6c 6b 65 79 44 66 7a 35 35 69 4d 2f 73 58 6a 56 4b 38 6d 52 58 79 35 4d 79 41 73 46 46 52 6d 74
-
-$ ./main
-
-$ pprof -raw profile.pb.gz | grep -A10 Mappings
-Mappings
-1: 0x400000/0x4ac000/0x0 /tmp/main f4b5d514bc46fad9417898216b23910ae874a85d [FN]
-```
-
-很可能是这里的工具写的不完善，只有显示加了 `-ldflags "-B gobuildid"` 后，才生成了GNU buildID，profile信息里才包含了这个buildid信息。如果不加这个选项，最后生成的profile信息里也是没有的。
-我推测是，go设计者希望我们未指定打开GNU buildID时，就默认填充go buildid，所以才会将.text和.note.go.builid一同加载到text segment，但是可能是开发者写的解析buildID的函数只支持GNU buildID、不支持go buildID，所以最终没有生成到profile信息中。
-
-```
-$ go build main.go
-
-$ file main
-main: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=llrn1go725_F2vCvvETz/OITeRu6kDScHG6FVjdK8/R7ABD8hl4lkeyDfz55iM/uoTostDrfB5kdwhy6UpG, with debug_info, not stripped
-
-$ readelf -n main
-
-Displaying notes found in: .note.go.buildid
-  Owner                Data size 	Description
-  Go                   0x00000053	GO BUILDID
-   description data: 6c 6c 72 6e 31 67 6f 37 32 35 5f 46 32 76 43 76 76 45 54 7a 2f 4f 49 54 65 52 75 36 6b 44 53 63 48 47 36 46 56 6a 64 4b 38 2f 52 37 41 42 44 38 68 6c 34 6c 6b 65 79 44 66 7a 35 35 69 4d 2f 75 6f 54 6f 73 74 44 72 66 42 35 6b 64 77 68 79 36 55 70 47
-
-$ ./main
-
-$ pprof -raw profile.pb.gz | grep -A10 Mappings
-Mappings
-1: 0x400000/0x4ac000/0x0 /tmp/main  [FN]
-```
-
-我推测就是一个go开发者pprof工具实现上的BUG，see also: 
-- https://github.com/golang/go/issues/68652.
-- 指定了-B gobuildid后，会从go buildid生成一个GNU buildid，https://go-review.googlesource.com/c/go/+/511475
-
-TODO Weired, https://github.com/golang/go/issues/68186.
 
 ### 参考文献
 
