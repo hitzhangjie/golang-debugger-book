@@ -2,10 +2,10 @@
 
 ### 符号相关sections
 
-在ELF文件一节中，我们有介绍过ELF文件中常见的一些sections及其作用，包括：
+在ELF文件一节中，我们有介绍过ELF文件中常见的一些sections及其作用，本节我们重点讲述符号相关的sections，包括：
 
 - 符号相关的符号表（.symtab）、字符串表（.strtab）；
-- 考虑动态链接库的话，还有动态符号表（.dynsym）、动态字符串标（.dynstr）。
+- 考虑动态链接库的话，还有动态符号表（.dynsym）、动态字符串表（.dynstr）。
 
 .symtab、.strtab与.dynsym、.dynstr的作用是近似的，都是为了解决链接的问题。前者是解决静态链接问题，后者是解决动态链接问题。
 
@@ -44,12 +44,12 @@ func main() {
 
 > “vim-go”算不算符号？其本身是一个只读数据，存储在.rodata section中，其本身算不上符号，但可以被符号引用，比如 `var s = "vim-go"`则变量s有对应的符号，其符号名称为s，变量值引用自.rodata中的vim-go。
 >
-> ps：可以通过 `readelf -p .rodata | grep vim-go`来验证。
+> ps：可以通过 `readelf --hex-dump .rodata | grep vim-go`来验证。
 >
-> 上述示例中其实会生成一个临时变量，该临时变量的值为"vim_go"，可以通过 `go tool link --dumpdep main.o | grep main.main`验证：
+> 上述示例中其实会生成一个临时变量，该临时变量的值为"vim_go"，要想查看符号依赖图，可以通过 `go tool link --dumpdep main.o | grep main.main`验证，或者 `go build -ldflags "--dumpdep" main.go | grep main.main` 也可以。
 >
 > ```bash
-> $ go tool link --dumpdep main.o | grep main.main
+> $ go build -ldflags "--dumpdep" main.go 2>&1 | grep main.main
 >
 > runtime.main_main·f -> main.main
 > main.main -> main..stmp_0
@@ -250,14 +250,14 @@ $ go tool nm main.o
 $ go tool objdump -S main.o
 TEXT %22%22.main(SB) gofile../root/debugger101/testdata/xxxx/main.go
 func main() {
-  0x13ed		64488b0c2500000000	MOVQ FS:0, CX		[5:9]R_TLS_LE	
+  0x13ed		64488b0c2500000000	MOVQ FS:0, CX		[5:9]R_TLS_LE
   0x13f6		483b6110		CMPQ 0x10(CX), SP
-  0x13fa		7671			JBE 0x146d	
-  0x13fc		4883ec58		SUBQ $0x58, SP	
+  0x13fa		7671			JBE 0x146d
+  0x13fc		4883ec58		SUBQ $0x58, SP
   0x1400		48896c2450		MOVQ BP, 0x50(SP)
   0x1405		488d6c2450		LEAQ 0x50(SP), BP
 	fmt.Println("vim-go")
-  0x140a		0f57c0			XORPS X0, X0	
+  0x140a		0f57c0			XORPS X0, X0
   0x140d		0f11442440		MOVUPS X0, 0x40(SP)
   0x1412		488d0500000000		LEAQ 0(IP), AX		[3:7]R_PCREL:type.string
   ......
@@ -269,10 +269,10 @@ func main() {
 
 ```bash
 $ go tool objdump main.o | grep R_
-  main.go:5     0x13ed  64488b0c2500000000  MOVQ FS:0, CX  [5:9]R_TLS_LE	
+  main.go:5     0x13ed  64488b0c2500000000  MOVQ FS:0, CX  [5:9]R_TLS_LE
   main.go:6     0x1412  488d0500000000      LEAQ 0(IP), AX  [3:7]R_PCREL:type.string
   main.go:6     0x141e  488d0500000000      LEAQ 0(IP), AX  [3:7]R_PCREL:""..stmp_0
-  print.go:274  0x142a  488b0500000000      MOVQ 0(IP), AX  [3:7]R_PCREL:os.Stdout		
+  print.go:274  0x142a  488b0500000000      MOVQ 0(IP), AX  [3:7]R_PCREL:os.Stdout
   print.go:274  0x1431  488d0d00000000      LEAQ 0(IP), CX  [3:7]R_PCREL:go.itab.*os.File,io.Writer
   print.go:274  0x145d  e800000000          CALL 0x1462  [1:5]R_CALL:fmt.Fprintln
   main.go:5     0x146d  e800000000          CALL 0x1472  [1:5]R_CALL:runtime.morestack_noctxt
