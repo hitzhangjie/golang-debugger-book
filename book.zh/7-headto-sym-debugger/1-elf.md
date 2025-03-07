@@ -164,7 +164,7 @@ Key to Flags:
 
 而.note.go.buildid所属的段（段索引 01）为NOTE类型，只看这个段的话，section .note.go.buildid不会被加载到内存，但是注意到.note.go.buildid还被下面这个段索引为02、PT_TYPE=LOAD的段引用，那这个section最终就会被加载到内存中。
 
->ps: 一般情况下，.note.* 这种sections就是给一些外部工具读取使用的，一般不会被加载到内存中，除非go设计者希望能从进程内存中直接读取到这部分信息，或者希望core转储时能包含这些信息以供后续提取使用。
+> ps: 一般情况下，.note.* 这种sections就是给一些外部工具读取使用的，一般不会被加载到内存中，除非go设计者希望能从进程内存中直接读取到这部分信息，或者希望core转储时能包含这些信息以供后续提取使用。
 
 **vendor自定义sections举例？**
 
@@ -195,26 +195,45 @@ String dump of section '.note.go.buildid':
 
 ELF文件会包含很多的sections，前面给出的测试实例中就包含了25个sections。
 
-我们先来了解一些常见的sections的作用，为后续加深对linkers、loaders、debgguers工作原理的认识提前做点准备。
+我们先来了解一些常见的sections的作用，为后续加深对linker、loader、debgguer工作原理的认识提前做点准备。
 
 - .text: 编译好的程序指令；
 - .rodata: 只读数据，如程序中的常量字符串；
 - .data：已经初始化的全局变量；
 - .bss：未经初始化的全局变量，在ELF文件中只是个占位符，不占用实际空间；
-- .symtab：符号表，每个可重定位文件都有一个符号表，存放程序中定义的全局函数和全局变量的信息，注意它不包含局部变量信息，局部非静态变量由栈来管理，它们对链接器符号解析、重定位没有帮助。**也要注意，.symtab和DWARF调试符号无关**；
+- .symtab：符号表，每个可重定位文件都有一个符号表，存放程序中定义的全局函数和全局变量的信息，注意它不包含局部变量信息，局部非静态变量由栈来管理，它们对链接器符号解析、重定位没有帮助。
 
-  > ps: .symtab、DWARF都提供了“符号”一类的信息，使用.symtab可以更快速进行符号信息查询，但是DWARF提供了更详细的符号信息。调试器（比如gdb）会同时使用二者，一方面可以兼顾效率，另一方面也可以对不包含DWARF调试信息的程序调试进行兼容。
+  > ps: .symtab、DWARF都提供了“符号”一类的信息，但它们是独立的。使用.symtab可以更快速查询符号信息，但是DWARF描述更详细。调试器（比如gdb）可同时使用二者，兼顾效率的同时还能提高兼容性。
   >
-- .debug_*: 调试信息，调试器读取该信息以支持符号级调试（如gcc -g生成）；
-- .strtab：字符串表，包括.symtab和.[z]debug_*节符号的字符串值，以及section名；
-- .rel.text：一个.text section中位置的列表，当链接器尝试把这个目标文件和其他文件链接时，需要修改这些位置的值，调用外部函数或者引用外部全局变量的，这部分的链接是通过符号进行的，需要对这些符号进行解析、重定位成正确的访问地址。
-- .rel.data：引用的一些全局变量的重定位信息，和.rel.text有些类似；
+- .debug_*: 调试信息，调试器读取该信息以支持符号级调试（如gcc -g生成，go build默认生成）；
+- .strtab：字符串表，包括.symtab和.[z]debug_*节引用的字符串值、section名；
+- .rel.text：一个.text section中位置及符号列表，当链接器尝试把这个目标文件和其他文件链接时，需要对符号进行解析、重定位成正确的地址；
+- .rel.data：引用的一些全局变量的位置及符号列表，和.rel.text有些类似，也需要符号解析、重定位成正确的地址；
 
 当然除了列出的这些，还有很多其他sections，ELF也允许vendor自定义sections，以支持一些期望的功能，如go语言就添加了.gosymtab、.gopclntab、.note.build.id来支持go运行时、go工具链的一些操作。
 
+### 常用查看命令
+
 我们来简单介绍下如何查看sections中的内容：
 
-- 查看sections列表 `readelf -S <prog>`
+- 查看段头表 `readelf -l <prog>`
+
+```bash
+  $ readelf -l testdata/loop2 
+  ...
+  Program Headers:
+    Type           Offset             VirtAddr           PhysAddr
+                   FileSiz            MemSiz              Flags  Align
+    PHDR           0x0000000000000040 0x0000000000400040 0x0000000000400040
+                   0x0000000000000150 0x0000000000000150  R      0x1000
+    NOTE           0x0000000000000f9c 0x0000000000400f9c 0x0000000000400f9c
+                   0x0000000000000064 0x0000000000000064  R      0x4
+    LOAD           0x0000000000000000 0x0000000000400000 0x0000000000400000
+                   0x00000000000af317 0x00000000000af317  R E    0x1000
+    ...
+```
+
+- 查看节头表 `readelf -S <prog>`
 
   ```bash
   $ readelf -S testdata/loop2 
@@ -231,7 +250,7 @@ ELF文件会包含很多的sections，前面给出的测试实例中就包含了
          00000000000440c7  0000000000000000   A       0     0     32
     ...
   ```
-- 查看指定section数据 `readelf --string-dump`
+- 查看指定section数据 `readelf --string-dump=<section> <prog>`
 
   ```bash
   $ readelf --string-dump=.note.go.buildid loop
@@ -241,7 +260,7 @@ ELF文件会包含很多的sections，前面给出的测试实例中就包含了
     [     c]  Go
     [    10]  z3BnMb0ZcNprbNCHGFUE/tKoFiTkxKf0367OgPv1m/xoZJRttC9Gcwqc67tiDf/1NjCWH3otcISEg7g8lG7
   ```
-- 查看指定section数据 `readelf --hex-dump`
+- 查看指定section数据 `readelf --hex-dump=<section> <prog>`
 
   ```bash
   $ readelf --hex-dump=.note.go.buildid loop
@@ -255,11 +274,9 @@ ELF文件会包含很多的sections，前面给出的测试实例中就包含了
     0x00400fec 4e6a4357 48336f74 63495345 67376738 NjCWH3otcISEg7g8
     0x00400ffc 6c473700                            lG7.
   ```
-- 其他，如 `readelf [--relocated-dump | --debug-dump]`，可以按需选用。
+- 其他，如 `readelf [--relocated-dump=|--debug-dump=] <prog>`，可以按需选用。
 
-本节ELF内容就先介绍到，在此基础上，接下来的几个小节，我们将依次介绍linker、loader、debugger的工作原理。
-
-
+本节ELF内容就先介绍到这里，在此基础上，接下来的几个小节，我们将循序渐进地介绍linker、loader、debugger的工作原理。
 
 ### 参考文献
 
