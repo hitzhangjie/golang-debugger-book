@@ -11,7 +11,7 @@
 
 我们提到，符号表记录了程序中全局函数、全局变量、局部非静态变量与链接器符号解析、重定位相关的信息。我们还提到，这里提及的符号与我们常提起的调试符号（如gcc -g生成）并非同一个东西。
 
-> 当然了，符号表中可能也会包含一些调试用的符号，下面介绍符号类型时会提及Type N表示调试符号。符号表中符号，也会引用字符串表中定义的字符串。调试相关的.[z]debu》g_* sections也会引用字符串表中定义的字符串。
+> 当然了，符号表中可能也会包含一些调试用的符号，下面介绍符号类型时会提及Type N表示调试符号。符号表中符号，也会引用字符串表中定义的字符串。调试相关的.[z]debug_* sections也会引用字符串表中定义的字符串。
 
 虽然多次提及理解ELF中的符号&符号表与开发符号级调试并无直接关系，但让读者明确ELF中符号和符号表的用途、符号解析、重定位、加载的过程，有助于进一步加深大家的认识。而符号级调试相关的.[z]debug_* sections中也确实和符号&符号表有一定关系。
 
@@ -23,8 +23,6 @@
 - 其他问题；
 
 所以，为了尽可能扫清大家后续可能会有的这些疑虑，以及实现最初的初衷“让大家认识到那些高屋建瓴的标准、设计是如何协调compiler、linker、loader、debugger工作的”，后续还是要介绍下这部分内容。
-
-> ps：如感觉这部分内容非常晦涩难懂，可选择先跳过，等遇到相关的困惑时再来阅读。
 
 ### 什么是符号&符号表
 
@@ -100,8 +98,8 @@ type Sym32 struct {
 	Name  uint32
 	Value uint32
 	Size  uint32
-    Info  uint8		// type:4+binding:4
-	Other uint8		// reserved
+    	Info  uint8	// type:4+binding:4
+	Other uint8	// reserved
 	Shndx uint16	// section
 }
 ```
@@ -291,7 +289,22 @@ $ ./a.out
 vim-go
 ```
 
-最后需要注意的是，go程序是静态链接的，所以最终构建出的可执行程序中是不存在需要动态符号解析的symbol或section的。
+最后需要注意的是，纯go程序是静态链接的，所以最终构建出的可执行程序中是不存在需要动态符号解析的symbol或section的。但如果是cgo编译的，还是会的。
+
+```
+$ ldd -r test1 // 这是一个简单的纯go程序
+        not a dynamic executable
+
+$ ldd -r test2 // 这是一个引用了共享库的cgo构建的go程序
+ldd -r seasonsvr
+        linux-vdso.so.1 (0x00007fff35dec000)
+        /$LIB/libonion.so => /lib64/libonion.so (0x00007f7c6f744000)
+        libresolv.so.2 => /lib64/libresolv.so.2 (0x00007f7c6f308000)
+        libpthread.so.0 => /lib64/libpthread.so.0 (0x00007f7c6f0e8000)
+        libc.so.6 => /lib64/libc.so.6 (0x00007f7c6ed12000)
+        libdl.so.2 => /lib64/libdl.so.2 (0x00007f7c6eb0e000)
+        /lib64/ld-linux-x86-64.so.2 (0x00007f7c6f520000)
+```
 
 而对c程序且使用了共享库的，构建出的可执行程序中存在一些这样的符号或section，在后续loader加载程序时会调用动态链接器（如ld-linux）来完成动态符号解析。
 
