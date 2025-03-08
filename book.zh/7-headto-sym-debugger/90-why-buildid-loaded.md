@@ -2,9 +2,10 @@
 
 ### 先说点结论性的
 
-及到build id这个概念的sections主要有两个，.note.go.buildid，以及.note.gnu.build-id，前者就是大家熟知的go tool buildid <binary> 显示的buildid，后者是更多的Linux生态中的工具使用的。
+涉及到build id这个概念的sections主要有两个，.note.go.buildid，以及.note.gnu.build-id，前者就是大家熟知的go tool buildid `<binary>` 显示的buildid，后者是更多的Linux生态中的工具使用的。
 
 前面讲解ELF文件段头表的时候发现个问题，.note.go.build, .note.gnu.build-id 为何会被加载到内存中呢？有几个猜测：
+
 - 程序运行时希望不读取ELF文件直接获取这些buildid信息；
 - 程序生成内存转储后，希望将这些信息包含在core文件中，方便其他工具从core文件中提取buildid信息与符号
 
@@ -161,46 +162,47 @@ Mappings
 
 1. gdb main.core main
 2. gdb> maintenance info sections
-    ```bash
-    Exec file:
-        `/home/zhangjie/test/main', file type elf64-x86-64.
-     [0]     0x00401000->0x00480c75 at 0x00001000: .text ALLOC LOAD READONLY CODE HAS_CONTENTS
-     [1]     0x00481000->0x004be35d at 0x00081000: .rodata ALLOC LOAD READONLY DATA HAS_CONTENTS
-     [2]     0x004be360->0x004be8f0 at 0x000be360: .typelink ALLOC LOAD READONLY DATA HAS_CONTENTS
-     [3]     0x004be900->0x004be958 at 0x000be900: .itablink ALLOC LOAD READONLY DATA HAS_CONTENTS
-     [4]     0x004be958->0x004be958 at 0x000be958: .gosymtab ALLOC LOAD READONLY DATA HAS_CONTENTS
-     [5]     0x004be960->0x00523070 at 0x000be960: .gopclntab ALLOC LOAD READONLY DATA HAS_CONTENTS
-     [6]     0x00524000->0x00524150 at 0x00124000: .go.buildinfo ALLOC LOAD DATA HAS_CONTENTS
-     [7]     0x00524160->0x00529600 at 0x00124160: .noptrdata ALLOC LOAD DATA HAS_CONTENTS
-     [8]     0x00529600->0x0052d850 at 0x00129600: .data ALLOC LOAD DATA HAS_CONTENTS
-     [9]     0x0052d860->0x0058d390 at 0x0012d860: .bss ALLOC
-     [10]     0x0058d3a0->0x00590de0 at 0x0018d3a0: .noptrbss ALLOC
-     [11]     0x00000000->0x00000214 at 0x0012e000: .debug_abbrev READONLY HAS_CONTENTS
-     [12]     0x00000000->0x00037302 at 0x0012e135: .debug_line READONLY HAS_CONTENTS
-     [13]     0x00000000->0x00012674 at 0x0014d803: .debug_frame READONLY HAS_CONTENTS
-     [14]     0x00000000->0x0000002a at 0x00153a70: .debug_gdb_scripts READONLY HAS_CONTENTS
-     [15]     0x00000000->0x000928ac at 0x00153a9a: .debug_info READONLY HAS_CONTENTS
-     [16]     0x00000000->0x000a772c at 0x00191567: .debug_loc READONLY HAS_CONTENTS
-     [17]     0x00000000->0x0003e3a0 at 0x001adaae: .debug_ranges READONLY HAS_CONTENTS
-     [18]     0x00400fdc->0x00401000 at 0x00000fdc: .note.gnu.build-id ALLOC LOAD READONLY DATA HAS_CONTENTS
-     [19]     0x00400f78->0x00400fdc at 0x00000f78: .note.go.buildid ALLOC LOAD READONLY DATA HAS_CONTENTS
-    Core file:
-        `/home/zhangjie/test/mycore.444388', file type elf64-x86-64.
-     [0]     0x00000000->0x00002798 at 0x00000548: note0 READONLY HAS_CONTENTS
-     [1]     0x00000000->0x000000d8 at 0x00000668: .reg/444388 HAS_CONTENTS
-     [2]     0x00000000->0x000000d8 at 0x00000668: .reg HAS_CONTENTS
-     ...
-    ```
+   ```bash
+   Exec file:
+       `/home/zhangjie/test/main', file type elf64-x86-64.
+    [0]     0x00401000->0x00480c75 at 0x00001000: .text ALLOC LOAD READONLY CODE HAS_CONTENTS
+    [1]     0x00481000->0x004be35d at 0x00081000: .rodata ALLOC LOAD READONLY DATA HAS_CONTENTS
+    [2]     0x004be360->0x004be8f0 at 0x000be360: .typelink ALLOC LOAD READONLY DATA HAS_CONTENTS
+    [3]     0x004be900->0x004be958 at 0x000be900: .itablink ALLOC LOAD READONLY DATA HAS_CONTENTS
+    [4]     0x004be958->0x004be958 at 0x000be958: .gosymtab ALLOC LOAD READONLY DATA HAS_CONTENTS
+    [5]     0x004be960->0x00523070 at 0x000be960: .gopclntab ALLOC LOAD READONLY DATA HAS_CONTENTS
+    [6]     0x00524000->0x00524150 at 0x00124000: .go.buildinfo ALLOC LOAD DATA HAS_CONTENTS
+    [7]     0x00524160->0x00529600 at 0x00124160: .noptrdata ALLOC LOAD DATA HAS_CONTENTS
+    [8]     0x00529600->0x0052d850 at 0x00129600: .data ALLOC LOAD DATA HAS_CONTENTS
+    [9]     0x0052d860->0x0058d390 at 0x0012d860: .bss ALLOC
+    [10]     0x0058d3a0->0x00590de0 at 0x0018d3a0: .noptrbss ALLOC
+    [11]     0x00000000->0x00000214 at 0x0012e000: .debug_abbrev READONLY HAS_CONTENTS
+    [12]     0x00000000->0x00037302 at 0x0012e135: .debug_line READONLY HAS_CONTENTS
+    [13]     0x00000000->0x00012674 at 0x0014d803: .debug_frame READONLY HAS_CONTENTS
+    [14]     0x00000000->0x0000002a at 0x00153a70: .debug_gdb_scripts READONLY HAS_CONTENTS
+    [15]     0x00000000->0x000928ac at 0x00153a9a: .debug_info READONLY HAS_CONTENTS
+    [16]     0x00000000->0x000a772c at 0x00191567: .debug_loc READONLY HAS_CONTENTS
+    [17]     0x00000000->0x0003e3a0 at 0x001adaae: .debug_ranges READONLY HAS_CONTENTS
+    [18]     0x00400fdc->0x00401000 at 0x00000fdc: .note.gnu.build-id ALLOC LOAD READONLY DATA HAS_CONTENTS
+    [19]     0x00400f78->0x00400fdc at 0x00000f78: .note.go.buildid ALLOC LOAD READONLY DATA HAS_CONTENTS
+   Core file:
+       `/home/zhangjie/test/mycore.444388', file type elf64-x86-64.
+    [0]     0x00000000->0x00002798 at 0x00000548: note0 READONLY HAS_CONTENTS
+    [1]     0x00000000->0x000000d8 at 0x00000668: .reg/444388 HAS_CONTENTS
+    [2]     0x00000000->0x000000d8 at 0x00000668: .reg HAS_CONTENTS
+    ...
+   ```
 3. 生成转储，包含了go buildid
-    ```bash
-    gdb$ dump memory dump.go.buildid 0x00400f78 0x00400fdc
-    ```
+   ```bash
+   gdb$ dump memory dump.go.buildid 0x00400f78 0x00400fdc
+   ```
 4. 生成转储，包含了GNU build-id
-    ```bash
-    gdb$ dump memory dump.gnu.buildid 0x00400fdc 0x00401000
-    ```
+   ```bash
+   gdb$ dump memory dump.gnu.buildid 0x00400fdc 0x00401000
+   ```
 
 对比分析上述内存中转出来的buildid信息与ELF文件中数据是否一致：
+
 - 查看上述内存转储数据可以使用 `strings`、`hexdump`；
 - 查看ELF文件中数据 `file`、`readelf -S <main> --string-dump=|--hex-dump=`；
 - 对比发现是一致的。
@@ -210,7 +212,7 @@ Mappings
 但是呢？还是那句话，如果我们拿不到原始的executable文件，拿不到对应的ELF sections、segments信息，上面调试器也输出不了各个sections在内存中的地址，我们也不方便内存转储后分析。
 思来想去，将这个.note.gnu.build-id和.note.go.builid加载到内存，唯一可能的原因就是为了生成core文件的时候能够包含这个信息了。
 
->ps: 得有工具帮助跟踪这个core文件的pid对应的二进制文件的映射关系。
+> ps: 得有工具帮助跟踪这个core文件的pid对应的二进制文件的映射关系。
 
 Read More:
 
