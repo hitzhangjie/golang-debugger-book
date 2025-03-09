@@ -44,6 +44,7 @@
   * [7.7 挺进DWARF](7-headto-sym-debugger/7-headto-dwarf/README.md)
   * [7.80 编译工具链/compile](7-headto-sym-debugger/80-go-tool-compile.md)
   * [7.81 编译工具链/asm](7-headto-sym-debugger/81-go-tool-asm.md)
+  * [7.82 编译工具链/link](7-headto-sym-debugger/82-go-tool-link.md)
   * [7.90 More: GNU build-id+gobuildid](7-headto-sym-debugger/90-why-buildid-loaded.md)
 * [8 调试信息标准: DWARF](8-dwarf/README.md)
   * [8.1 发展历史](8-dwarf/1-history.md)
