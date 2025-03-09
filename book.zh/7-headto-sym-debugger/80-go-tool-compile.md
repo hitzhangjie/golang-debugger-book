@@ -1,4 +1,4 @@
-## Go编译器简介
+## 扩展阅读：Go编译器简介
 
 `cmd/compile` 包含构成Go编译器的主要包。编译器逻辑上可分为四个阶段，我们将简要描述每个阶段，并列出包含其代码的包列表。
 
@@ -47,6 +47,7 @@
 * `cmd/compile/internal/escape`（逃逸分析）
 
 对IR表示执行多个优化过程：
+
 - 死代码消除
 - （早期）虚函数消除
 - 函数调用内联
@@ -61,6 +62,7 @@
 * `cmd/compile/internal/walk`（求值顺序、解糖）
 
 对IR表示的最后一步处理是"walk"，其作用包括：
+
 1. 将复杂语句分解为简单语句，引入临时变量并保持求值顺序（也称为"order"阶段）
 2. 将高级Go构造解糖为原始形式。例如：
    - `switch` 语句转换为二分查找或跳转表
@@ -78,6 +80,7 @@
 转换过程中应用函数内联（intrinsics）——编译器针对特定情况用高度优化的代码替换的特殊函数。某些节点也会降级为更简单的组件（例如 `copy` 内置函数替换为内存移动，`range` 循环重写为 `for` 循环）。出于历史原因，部分转换目前发生在SSA转换之前，但长期计划是将所有转换集中于此阶段。
 
 随后执行一系列与机器无关的传递和规则，包括：
+
 - 死代码消除
 - 删除冗余的空指针检查
 - 删除未使用的分支
@@ -96,12 +99,14 @@
 请注意，降级传递运行所有机器特定重写规则，因此当前也执行大量优化。
 
 一旦SSA被"降级"并针对目标架构具体化，将运行最终代码优化传递，包括：
+
 - 另一次死代码消除
 - 将值移近使用位置
 - 删除从未读取的局部变量
 - 寄存器分配
 
 此步骤的其他重要工作包括：
+
 - 栈帧布局（为局部变量分配栈偏移）
 - 指针存活分析（计算每个GC安全点上栈上指针的存活状态）
 
@@ -112,6 +117,7 @@ SSA生成阶段结束时，Go函数已转换为一系列 `obj.Prog` 指令。这
 ### 7a. 导出（Export）
 
 除了为链接器编写目标文件外，编译器还为下游编译单元编写"导出数据"文件。导出数据包含编译包P时计算的以下信息：
+
 - 所有导出声明的类型信息
 - 可内联函数的IR
 - 可能在其他包实例化的泛型函数的IR
@@ -157,14 +163,16 @@ GOROOT仓库包含统一格式的读取器和写入器；它从/向编译器的I
 
 * 请务必阅读 [快速测试修改](https://go.dev/doc/contribute#quick_test) 部分。
 * 部分测试位于 `cmd/compile` 包内，可通过 `go test ./...` 运行，但许多测试位于顶级 [test](https://github.com/golang/go/tree/master/test) 目录：
+
   ```bash
   $ go test cmd/internal/testdir                           # 运行'test'目录所有测试
   $ go test cmd/internal/testdir -run='Test/escape.*.go'   # 运行特定模式的测试
   ```
+
   详情参见 [testdir README](https://github.com/golang/go/tree/master/test#readme)。
   `testdir_test.go` 中的 `errorCheck` 方法有助于解析测试中使用的 `ERROR` 注释。
-
 * 新的 [基于应用的覆盖率分析](https://go.dev/testing/coverage/) 可用于编译器：
+
   ```bash
   $ go install -cover -coverpkg=cmd/compile/... cmd/compile  # 构建带覆盖率检测的编译器
   $ mkdir /tmp/coverdir                                      # 选择覆盖率数据存放位置
@@ -178,6 +186,7 @@ GOROOT仓库包含统一格式的读取器和写入器；它从/向编译器的I
 * 许多编译器测试使用 `$PATH` 中的 `go` 命令及其对应的 `compile` 二进制文件。
 * 如果您在分支中且 `$PATH` 包含 `<go-repo>/bin`，执行 `go install cmd/compile` 将使用分支代码构建编译器，并安装到正确位置，以便后续 `go` 命令使用新编译器。
 * [toolstash](https://pkg.go.dev/golang.org/x/tools/cmd/toolstash) 提供保存、运行和恢复Go工具链已知良好版本的功能。例如：
+
   ```bash
   $ go install golang.org/x/tools/cmd/toolstash@latest
   $ git clone https://go.googlesource.com/go
@@ -187,20 +196,22 @@ GOROOT仓库包含统一格式的读取器和写入器；它从/向编译器的I
   $ export PATH=$PWD/bin:$PATH
   $ toolstash save               # 保存当前工具链
   ```
+
   之后编辑/编译/测试循环类似：
+
   ```bash
   <... 修改cmd/compile源码 ...>
   $ toolstash restore && go install cmd/compile   # 恢复已知良好工具链构建编译器
   <... 'go build', 'go test', etc. ...>           # 使用新编译器进行测试
   ```
-
 * `toolstash` 还允许比较已安装与存储版本的编译器，例如验证重构后行为一致性：
+
   ```bash
   $ toolstash restore && go install cmd/compile   # 构建最新编译器
   $ go build -toolexec "toolstash -cmp" -a -v std # 比较新旧编译器生成的std库
   ```
-
 * 如果版本不同步（例如出现 `linked object header mismatch` 错误），可执行：
+
   ```bash
   $ toolstash restore && go install cmd/...
   ```
