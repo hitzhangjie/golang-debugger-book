@@ -1,6 +1,6 @@
-### how does tracer automatically trace newly cloned threads
+## Appendix: trace newly cloned threads
 
-> the following answer comes from **claude.ai**:
+### how does tracer automatically trace newly cloned threads
 
 PTRACE_O_TRACECLONE is an option for the ptrace system call that allows a tracer process to receive notifications when a traced process clones new child processes via fork() or clone().
 
