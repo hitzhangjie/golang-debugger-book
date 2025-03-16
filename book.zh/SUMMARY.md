@@ -98,6 +98,8 @@
     * [9.4.19 More...](9-develop-sym-debugger/4-编码实现/x-more.md)
 * [10 主流调试技术解析](10-extras/README.md)
   * [10.1 调试器发展历程](10-extras/1-development-of-debugger.md)
+  * [10.2 调试器发展历程](10-extras/1-development-of-logging.md)
+  * [10.3 调试器发展历程](10-extras/1-development-of-metrics.md)
 * [11 致谢](11-thanks/README.md)
 * [12 附录](12-appendix/README.md)
   * [12.1 go程序启动流程](12-appendix/1-go-programme-start.md)
