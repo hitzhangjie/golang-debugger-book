@@ -101,6 +101,7 @@
   * [10.2 日志系统展历程](10-extras/2-development-of-logging.md)
   * [10.3 指标系统发展历程](10-extras/3-development-of-metrics.md)
   * [10.4 跟踪系统发展历程](10-extras/4-development-of-tracing.md)
+  * [10.5 Bisect发展历程](10-extras/5-development-of-bisect.md)
 * [11 致谢](11-thanks/README.md)
 * [12 附录](12-appendix/README.md)
   * [12.1 go程序启动流程](12-appendix/1-go-programme-start.md)
