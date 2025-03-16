@@ -103,6 +103,7 @@
   * [10.4 跟踪系统发展历程](10-extras/4-development-of-tracing.md)
   * [10.5 Bisect发展历程](10-extras/5-development-of-bisect.md)
   * [10.6 eBPF发展历程](10-extras/6-development-of-eBPF.md)
+  * [10.7 eBPF发展历程](10-extras/7-development-of-replay.md)
 * [11 致谢](11-thanks/README.md)
 * [12 附录](12-appendix/README.md)
   * [12.1 go程序启动流程](12-appendix/1-go-programme-start.md)
