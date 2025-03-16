@@ -108,5 +108,5 @@
 * [11 致谢](11-thanks/README.md)
 * [12 附录](12-appendix/README.md)
   * [12.1 go程序启动流程](12-appendix/1-go-programme-start.md)
-  * [12.2 自动跟踪新线程](12-appendix/2-auto-track-new-threads.md)
+  * [12.2 自动跟踪新线程](12-appendix/2-auto-trace-cloned-threads.md)
   * [12.3 git bisect](12-appendix/3-git-bisect.md)
