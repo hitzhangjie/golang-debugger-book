@@ -102,7 +102,7 @@
   * [10.3 指标系统发展历程](10-extras/3-development-of-metrics.md)
   * [10.4 跟踪系统发展历程](10-extras/4-development-of-tracing.md)
   * [10.5 Bisect发展历程](10-extras/5-development-of-bisect.md)
-  * [10.6 eBPF发展历程](10-extras/6-development-of-eBPF.md)
+  * [10.6 eBPF发展历程](10-extras/6-development-of-ebpf.md)
   * [10.7 录制重放发展历程](10-extras/7-development-of-replay.md)
   * [10.8 分布式调试发展历程](10-extras/8-development-of-debug-dsys.md)
 * [11 致谢](11-thanks/README.md)
