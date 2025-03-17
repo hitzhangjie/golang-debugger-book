@@ -62,7 +62,7 @@ bisect reduce，大致思想就是我们要采用 “特性开关” 的实践�
 
 大致思路是：先打开一半位置（记为集合a）检查有没有预期的bug，如果没有就再添加额外一半位置（记为集合b），如果有bug就将刚才添加的b缩减一半（记为c），如果减少后发现没没bug了，那可以确定刚才新添加的一半位置（差集b-c）会导致该预期的bug。将这些可疑位置（b-c）固定下来并在后续搜索过程中带上它们，接下来继续搜索a中可能的位置 …… 最终可以确定一个导致bug出现的源文件位置的局部最小集合，只要这些位置都被打开就会导致该预期的bug。详细的算法可以参考 https://research.swtch.com/bisect。
 
-这里提供了一个demo供大家学习如何在go项目中使用bisect [bisect example](https://github.com/hitzhangjie/codemaster/tree/master/bisectv2)。
+这里提供了一个demo供大家学习如何在go项目中使用bisect [bisect example](https://github.com/hitzhangjie/golang-debugger-lessons/tree/master/1000_hash_based_bisect_reduce)。
 
 > ps: bisect reduce，和二分搜索都是基于分治或者二分的思想，但也不完全一样，这个场景下核心算法如果使用二分搜索是不正确的。
 
