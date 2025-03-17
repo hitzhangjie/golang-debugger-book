@@ -90,7 +90,7 @@ typedef struct {
 - e_phnum: 段头表中的条目数量；
 - e_shentsize: 节头表中每个条目占用的空间大小；
 - e_shnum: 节头表中的条目数量；
-- e_shstrndx: section名在.strtab中的索引（.shstrtab[e_shstrndx]就是一个null结束的section名）；
+- e_shstrndx: section名在.shstrtab中的索引（.shstrtab[e_shstrndx]就是一个null结束的section名）；
 
 > ps：ELF文件头其他字段都比较容易懂，关于.shstrtab，它的数据存储与.strtab雷同，只是它用来存section名，see https://refspecs.linuxbase.org/elf/gabi4+/ch4.strtab.html。
 >
@@ -102,16 +102,7 @@ typedef struct {
 > | **10** | `i`  | `a`  | `b` | `l` | `e`  | `\0` | `a`  | `b` | `l` | `e` |
 > | **20** | `\0` | `\0` | `x` | `x` | `\0` | ` ` |        |       |       |       |
 >
-> **Section Header String Table Indexes**
->
-> | Index | String          |
-> | ----- | --------------- |
-> | 0     | *none*        |
-> | 1     | name.           |
-> | 7     | Variable        |
-> | 11    | able            |
-> | 16    | able            |
-> | 24    | *null string* |
+> 假定有上述.shstrtab，那么e_shstrndx=0对应的section name为none，e_shstrndx=1的对应着section name为“name.”，e_shstrndx=7的对应的section name为“Variable”。
 
 ### 段头表 (Program Header Table)
 
@@ -229,6 +220,18 @@ Program Headers:
    05
    06 
 ```
+
+一个section中数据最终会不会被加载到内存，也是由引用它的段的类型决定的：如果段类型为PT_LOAD类型，则会被加载到内存； 反之不会。
+
+以上面的go程序demo为例：
+
+1）.gosymtab、.gopclntab所属的段（段索引值 03）是PT_LOAD类型，表示其数据会被加载到内存，这是因为go runtime依赖这些信息来计算stacktrace。
+
+2）而.note.go.buildid所属的段（段索引 01）为NOTE类型，只看这个段的话，section .note.go.buildid不会被加载到内存，但是
+
+3）注意到.note.go.buildid还被下面这个段索引为02、PT_TYPE=LOAD的段引用，那这个section最终就会被加载到内存中。
+
+> ps: 一般情况下，.note.* 这种sections就是给一些外部工具读取使用的，一般不会被加载到内存中，除非go设计者希望能从进程内存中直接读取到这部分信息，或者希望core转储时能包含这些信息以供后续提取使用。
 
 本章稍后的章节，会继续介绍ELF段头表信息如何指导loader加载程序数据到内存，以构建进程映像。
 
@@ -356,9 +359,9 @@ Key to Flags:
 
 #### 类型定义
 
-Section就是一堆bytes数据，没有什么专门的类型定义，它有节头表、段头表来引用。
+Section就是一堆bytes数据，它由节头表、段头表来引用。
 
-#### 常见Sections
+#### 必知的节
 
 ELF文件会包含很多的sections，前面给出的测试实例中就包含了25个sections。先了解些常见的sections的作用，为后续加深对linker、loader、debgguer工作原理的认识提前做点准备。
 
@@ -367,141 +370,25 @@ ELF文件会包含很多的sections，前面给出的测试实例中就包含了
 - .data：已经初始化的全局变量；
 - .bss：未经初始化的全局变量，在ELF文件中只是个占位符，不占用实际空间；
 - .symtab：符号表，每个可重定位文件都有一个符号表，存放程序中定义的全局函数和全局变量的信息，注意它不包含局部变量信息，局部非静态变量由栈来管理，它们对链接器符号解析、重定位没有帮助。
-
-  > ps: .symtab、DWARF都提供了“符号”一类的信息，但它们是独立的。使用.symtab可以更快速查询符号信息，但是DWARF描述更详细。调试器（比如gdb）可同时使用二者，兼顾效率的同时还能提高兼容性。
-  >
 - .debug_*: 调试信息，调试器读取该信息以支持符号级调试（如gcc -g生成，go build默认生成）；
 - .strtab：字符串表，包括.symtab和.[z]debug_*节引用的字符串值、section名；
 - .rel.text：一个.text section中位置及符号列表，当链接器尝试把这个目标文件和其他文件链接时，需要对符号进行解析、重定位成正确的地址；
 - .rel.data：引用的一些全局变量的位置及符号列表，和.rel.text有些类似，也需要符号解析、重定位成正确的地址；
 
-Linux下定义的文章sections列表，详见 `man elf`，另外，ELF也允许vendor自定义sections来进行必要的功能扩展，如go语言就添加了.gosymtab、.gopclntab、.note.build.id来支持go运行时、go工具链的一些操作。
+ELF也支持vendor自定义sections来进行扩展，如go语言就添加了.gosymtab、.gopclntab、.note.build.id来支持go运行时、go工具链的一些操作。如果您想了解更多支持的sections及其作用，可以查看man手册：`man 5 elf`，这里我们就不一一罗列了。
 
-> ps: man elf，看下目前定义了哪些sections，感兴趣的可以自行了解下其用途：
->
-> - .bss
-> - .comment
-> - .ctors
-> - .data
-> - .data1
-> - .debug
-> - .dtors
-> - .dynamic
-> - .dynstr
-> - .dynsym
-> - .fini
-> - .gnu.version
-> - .gnu.version_d
-> - .gnu.version_r
-> - .got
-> - .hash
-> - .init
-> - .interp
-> - .line
-> - .note
-> - .note.ABI-tag
-> - .note.gnu.build-id
-> - .note.GNU-stack
-> - .note.openbsd.ident
-> - .plt
-> - .relNAME
-> - .relaNAME
-> - .rodata
-> - .rodata1
-> - .shstrtab
-> - .strtab
-> - .symtab
-> - .text
+> ps: .symtab、DWARF都提供了“符号”一类的信息，但它们是独立的。使用.symtab可以更快速查询符号信息，但是DWARF描述更详细。调试器（比如gdb）可同时使用二者，兼顾效率的同时还能提高兼容性。
 
-### 常用查看命令
+#### 工具演示
 
-我们来简单介绍下如何查看sections中的内容：
+这里我们来简单介绍下如何查看sections中的内容：
 
-- 查看段头表 `readelf -l <prog>`
+- 以字符串形式打印：`readelf --string-dump=<section> <prog>`；
+- 以十六进制数打印：`readelf --hex-dump=<section> <prog>`；
+- 打印前先完成重定位，再以十六进制打印：`readelf --relocated-dump=<section> <prog>`；
+- 打印DWARF调试信息：`readelf --debug-dump=<section> <prog>`；
 
-```bash
-  $ readelf -l testdata/loop2 
-  ...
-  Program Headers:
-    Type           Offset             VirtAddr           PhysAddr
-                   FileSiz            MemSiz              Flags  Align
-    PHDR           0x0000000000000040 0x0000000000400040 0x0000000000400040
-                   0x0000000000000150 0x0000000000000150  R      0x1000
-    NOTE           0x0000000000000f9c 0x0000000000400f9c 0x0000000000400f9c
-                   0x0000000000000064 0x0000000000000064  R      0x4
-    LOAD           0x0000000000000000 0x0000000000400000 0x0000000000400000
-                   0x00000000000af317 0x00000000000af317  R E    0x1000
-    ...
-```
-
-- 查看节头表 `readelf -S <prog>`
-
-  ```bash
-  $ readelf -S testdata/loop2 
-  There are 25 section headers, starting at offset 0x1c8:
-
-  Section Headers:
-    [Nr] Name              Type             Address           Offset
-         Size              EntSize          Flags  Link  Info  Align
-    [ 0]                   NULL             0000000000000000  00000000
-         0000000000000000  0000000000000000           0     0     0
-    [ 1] .text             PROGBITS         0000000000401000  00001000
-         0000000000098294  0000000000000000  AX       0     0     32
-    [ 2] .rodata           PROGBITS         000000000049a000  0009a000
-         00000000000440c7  0000000000000000   A       0     0     32
-    ...
-  ```
-- 查看指定section数据 `readelf --string-dump=<section> <prog>`
-
-  ```bash
-  $ readelf --string-dump=.note.go.buildid loop
-
-  String dump of section '.note.go.buildid':
-    [     4]  S
-    [     c]  Go
-    [    10]  z3BnMb0ZcNprbNCHGFUE/tKoFiTkxKf0367OgPv1m/xoZJRttC9Gcwqc67tiDf/1NjCWH3otcISEg7g8lG7
-  ```
-- 查看指定section数据 `readelf --hex-dump=<section> <prog>`
-
-  ```bash
-  $ readelf --hex-dump=.note.go.buildid loop
-
-  Hex dump of section '.note.go.buildid':
-    0x00400f9c 04000000 53000000 04000000 476f0000 ....S.......Go..
-    0x00400fac 7a33426e 4d62305a 634e7072 624e4348 z3BnMb0ZcNprbNCH
-    0x00400fbc 47465545 2f744b6f 4669546b 784b6630 GFUE/tKoFiTkxKf0
-    0x00400fcc 3336374f 67507631 6d2f786f 5a4a5274 367OgPv1m/xoZJRt
-    0x00400fdc 74433947 63777163 36377469 44662f31 tC9Gcwqc67tiDf/1
-    0x00400fec 4e6a4357 48336f74 63495345 67376738 NjCWH3otcISEg7g8
-    0x00400ffc 6c473700                            lG7.
-  ```
-- 其他，如 `readelf [--relocated-dump=|--debug-dump=] <prog>`，可以按需选用。
-
-本节ELF内容就先介绍到这里，在此基础上，接下来的几个小节，我们将循序渐进地介绍linker、loader、debugger的工作原理。
-
-### 综合答疑
-
-现在我们来尝试回答几个读者朋友可能的疑问：
-
-#### **section与segments隶属关系？**
-
-一个section属于多少个segments，这个由Program Headers定义，以前面示例做参考，go程序中.note.go.buildid就属于两个段，段索引分别为01、02，但是.data就只属于一个段，段索引02。
-
-#### **section是否会被加载到内存中？**
-
-一个section中数据最终会不会被mmap到进程地址空间，也是由引用它的Program Header的类型决定的，如果Program Header类型为LOAD类型，则会被mmap到进程地址空间，反之则不会。
-
-仍以前面示例做参考，我们发现.gosymtab、.gopclntab所属的段（段索引值 03）是LOAD类型，表示其数据会被加载到内存，这是因为go runtime依赖这些信息来计算stacktrace。
-
-而.note.go.buildid所属的段（段索引 01）为NOTE类型，只看这个段的话，section .note.go.buildid不会被加载到内存，但是注意到.note.go.buildid还被下面这个段索引为02、PT_TYPE=LOAD的段引用，那这个section最终就会被加载到内存中。
-
-> ps: 一般情况下，.note.* 这种sections就是给一些外部工具读取使用的，一般不会被加载到内存中，除非go设计者希望能从进程内存中直接读取到这部分信息，或者希望core转储时能包含这些信息以供后续提取使用。
-
-#### **vendor自定义sections举例？**
-
-以go语言为例，方便 `go tool buildid <prog>`提取buildid信息，这个其实就是存储在.note.go.buildid section中的。
-
-来验证下，首先通过 `go tool buildid`来提取buildid信息：
+以go语言为例，首先 `go tool buildid <prog>`提取buildid信息，这个其实就是存储在.note.go.buildid section中的。来验证下，首先通过 `go tool buildid`来提取buildid信息：
 
 ```bash
 $ go tool buildid testdata/loop
@@ -520,7 +407,7 @@ String dump of section '.note.go.buildid':
 
 结果发现buildid数据是一致的，证实了我们上述判断。
 
-本章稍后的章节，会介绍ELF节头表信息如何指导链接器执行链接操作。
+本节ELF内容就先介绍到这里，在此基础上，接下来的几个小节，我们将循序渐进地介绍linker、loader、debugger的工作原理。
 
 ### 参考文献
 
@@ -531,8 +418,6 @@ String dump of section '.note.go.buildid':
 5. Buiding a better Go Linker, Austin Clements, https://docs.google.com/document/d/1D13QhciikbdLtaI67U6Ble5d_1nsI4befEd6_k1z91U/view
 6. Time for Some Function Recovery, https://www.mdeditor.tw/pl/2DRS/zh-hk
 7. Computer System: A Programmer's Perspective, Randal E.Bryant, David R. O'Hallaron, p450-p479
-
-   深入理解计算机系统, 龚奕利 雷迎春 译, p450-p479
-8. Learning Linux Binary Analysis, Ryan O'Neill, p14-15, p18-19
-
-   Linux二进制分析, 棣琦 译, p14-15, p18-19
+8. 深入理解计算机系统, 龚奕利 雷迎春 译, p450-p479
+9. Learning Linux Binary Analysis, Ryan O'Neill, p14-15, p18-19
+10. Linux二进制分析, 棣琦 译, p14-15, p18-19
