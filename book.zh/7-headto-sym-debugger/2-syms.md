@@ -1,5 +1,69 @@
 ## 符号和符号表
 
+#### 相关sections
+
+- .strtab, .shstrtab：存储的字符串信息，.shstrtab, .strtab 收尾各有1-byte '\0'，其他数据就是 '\0' 结尾的c_string。区别只是，.strtab可以用来存储符号、节的名字，而.shstrtab仅存储节的名字；
+- .symtab：存储的是符号表，符号表包含了定位、重定位程序符号定义与引用所需的信息。如果存在一个PT_TYPE=load的段引用了该section，那么这个section的属性将包含SHF_ALLOC flag，如果没有，就不包含该flag，该flag指示需要分配内存给该section数据；
+- symbol: .symtab中的每一个表项都描述了一个符号（symbol），符号的名字最终记录在.strtab中，符号除了有名字还有哪些属性信息呢？
+
+#### 类型定义
+
+下面是 `man 5 elf` 中列出的32位和64位版本符号对应的类型定义，它们成员相同，仅仅是字段列表定义顺序有所不同。
+
+```c
+typedef struct {
+    uint32_t      st_name;
+    Elf32_Addr    st_value;
+    uint32_t      st_size;
+    unsigned char st_info;
+    unsigned char st_other;
+    uint16_t      st_shndx;
+} Elf32_Sym;
+
+typedef struct {
+    uint32_t      st_name;
+    unsigned char st_info;
+    unsigned char st_other;
+    uint16_t      st_shndx;
+    Elf64_Addr    st_value;
+    uint64_t      st_size;
+} Elf64_Sym;
+```
+
+下面来详细了解下各个字段的作用：
+
+- st_name: 符号的名称，是一个字符串表的索引值。如果非0则表示在.strtab中的索引值；如果为0，则表示该符号没有名字（.strtab[0]=='\0')；
+- st_value: 符号的值，是一个地址值。对于一个全局变量来说，其值就是该变量的内存地址；对于一个函数来说，其值是函数入口地址；
+  TODO 确认下是否是地址值，理论上应该是
+- st_size: 符号的大小，如果大小未知或者无需指定大小就为0；
+  TODO 确定是是st_value的大小吗？
+- st_info: 符号的类型和绑定属性(binding attributes)
+  - STT_NOTYPE: 未指定类型
+  - STT_OBJECT: 该符号关联的是一个数据对象
+  - STT_FUNC: 该符号关联的是一个函数
+  - STT_SECTION: 该符号关联的是一个section
+  - STT_FILE: 该符号关联的是一个目标文件对应的原文件名
+  - STT_LOPROC, STT_HIPROC： 范围[STT_LOPROC, STT_HIPROC]预留给处理器相关的机制
+  - STB_LOCAL：符号可见性仅限于当前编译单元（目标文件）内部，多个编译单元中可以存在多个相同的符号名但是为STT_LOCAL类型的符号
+  - STB_GLOBAL：全局符号对于所有的编译单元（目标文件）可见，一个编译单元中定义的全局符号，可以在另一个编译单元中引用
+  - STB_WEAK: 弱符号，模拟全局符号，但是它的定义拥有更低的优先级
+    TODO 要不要展开讲呢？后面讲linker工作原理时有提到
+  - STB_LOPROC, STB_HIPROC：范围[STB_LOPROC, STB_HIPROC]预留给处理器相关的机制
+  - STT_TLS: 该符号关联的是TLS变量
+- st_other: 定义了符号的可见性 (visibility)
+  - STV_DEFAULT: 默认可见性规则；全局符号和弱符号对其他模块可见；本地模块中的引用，可以使用其他模块中的符号定义来完成解析；
+  - STV_INTERNAL: 处理器特定的隐藏类型 TODO 完善下描述
+  - STV_HIDDEN: 符号对其他模块不可见；本地模块中的引用，不能用其他modules中的符号定义来完成解析，只能解析为当前模块中的符号；
+- st_shndx: 每个符号都是定义在某个section中的，比如变量名、函数名、常量名等，这里表示其从属的section header在节头表中的索引；
+
+> ps: .dynsym + .dynstr 又存储的是什么？
+
+#### 工具演示
+
+大家看完了符号的类型定义后，肯定产生了很多联想，“变量名对应的symbol应该是什么样”，“函数名对应的symbol应该是什么样”，“常量名呢……”，联想是好事，说明大家已经开始在思考符号表、符号的目的了。OK，我们接下来就会结合具体示例，给大家展示下程序中的不同程序构造对应的符号是什么样子的，又有什么作用。
+
+TODO 补充些demo在这里
+
 ### 符号相关sections
 
 在ELF文件一节中，我们有介绍过ELF文件中常见的一些sections及其作用，本节我们重点讲述符号相关的sections，包括：
