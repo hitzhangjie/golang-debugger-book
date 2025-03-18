@@ -1,4 +1,4 @@
-## 符号级调试基础：ELF文件
+## 认识ELF文件
 
 ELF ([Executable and Linkable Format](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format))，可执行可链接格式，是Unix、Linux环境下一种十分常见的文件格式，它可用于可执行程序、目标文件、共享库、core文件等。
 

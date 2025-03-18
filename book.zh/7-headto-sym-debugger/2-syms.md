@@ -1,14 +1,69 @@
-## 符号和符号表
+## 符号表和符号
 
-#### 相关sections
+在 "认识ELF文件" 一节中，我们有介绍过ELF文件中常见的一些section及其作用，本节我们重点讲述符号表及符号。
 
-- .strtab, .shstrtab：存储的字符串信息，.shstrtab, .strtab 收尾各有1-byte '\0'，其他数据就是 '\0' 结尾的c_string。区别只是，.strtab可以用来存储符号、节的名字，而.shstrtab仅存储节的名字；
-- .symtab：存储的是符号表，符号表包含了定位、重定位程序符号定义与引用所需的信息。如果存在一个PT_TYPE=load的段引用了该section，那么这个section的属性将包含SHF_ALLOC flag，如果没有，就不包含该flag，该flag指示需要分配内存给该section数据；
-- symbol: .symtab中的每一个表项都描述了一个符号（symbol），符号的名字最终记录在.strtab中，符号除了有名字还有哪些属性信息呢？
+#### 认识符号表
+
+1）.strtab和.shstrtab 存储的是字符串信息，.shstrtab和.strtab 首尾各有1-byte '\0'，其他数据就是 '\0' 结尾的c_string。区别只是，.strtab可以用来存储符号、节的名字，而.shstrtab仅存储节的名字。
+
+2）.symtab 存储的是符号表，符号表包含了定位、重定位程序符号定义与引用所需的信息。如果存在一个PT_TYPE=load的段引用了该section，那么这个section的属性将包含SHF_ALLOC flag，如果没有，就不包含该flag，该flag指示需要分配内存给该section数据。
+
+关于符号表，每个可重定位模块都有一张自己的符号表：
+
+- *.o文件，会存在.symtab表；
+- *.a文件，它是个归档文件，其中可能包含多个\*.o文件信息，并且每个\*.o文件都有独立的.symtab表，静态链接的时候会拿对应的\*.o文件出来进行链接；
+- *.so文件，会存在.dynsym表，所有\*.o文件信息都被保存在一起了，只有一个.dynsym符号表，动态链接更加节省存储，但是相比静态链接，动态链接要复杂些，要注意提高链接效率；
+- 其他可重定位文件，就不继续展开了；
+
+3）symbol: .symtab中的每一个表项都描述了一个符号（symbol），符号的名字最终记录在.strtab中，符号除了有名字还有哪些属性信息呢？
+
+> ps: 动态链接时，会生成动态符号表（.dynsym）、动态字符串表（.dynstr）。.symtab、.dynsym分别是解决静态链接、动态链接问题，它们记录的符号名分别记录在.strtab、.dynstr。
+
+#### 符号表读取
+
+go标准库中对ELF32 Symbol的定义如下，go没有位字段，定义上有些许差别，理解即可：
+
+```go
+// ELF32 Symbol.
+type Sym32 struct {
+	Name  uint32
+	Value uint32
+	Size  uint32
+    	Info  uint8	// type:4+binding:4
+	Other uint8	// reserved
+	Shndx uint16	// section
+}
+```
+
+关于如何读取符号表，可以参考go源码实现：https://sourcegraph.com/github.com/golang/go/-/blob/src/debug/elf/file.go?L489:16。
+
+现在go工具链已经支持读取符号表，推荐大家优先使用go工具链。Linux binutils也提供了一些类似工具，但是对于go程序而言，有点特殊之处：
+
+- 如果是编译链接完成的可执行程序，通过readelf -s、nm、objdump都可以；
+- 但是如果是go目标文件，由于go是自定义的目标文件格式，则只能借助go tool nm、go tool objdump来查看。
+
+接下来我们来展开了解下如何使用此类工具，以及掌握理解输出的信息 …… oh，在演示之前还得先继续介绍下符号。
+
+#### 认识符号
+
+符号表记录了程序中全局函数和全局变量的相关信息，并且包含了链接器符号解析及重定位所需的数据。局部非静态变量通常不会被包含在符号表中。局部变量的作用域仅限于其定义的函数或块内，它们不需要全局可见性，因此没有必要将这些信息保存在符号表中。
+
+ELF 符号表主要记录的是具有外部作用范围的对象，包括：
+
+- 全局函数
+- 全局变量
+- 静态全局变量和静态函数（尽管它们仅对文件或编译单元可见）
+- 以及其他需要跨文件或模块访问的符号
+
+我们这里所说的符号，和我们所说的符号级调试这里的符号，并不能划等号：1）符号级调试中的符号，强调的是利用源码中函数名、变量名、分支控制逻辑等有别于指令级调试的交互方式。2）本文讲的符号表中的符号，它主要是为了方便链接器进行符号解析和重定位而记录的。但是它记录的这些符号信息也确实会被某些调试器使用，如gdb，尽管它不是为了符号级调试而设计的。3）DWARF调试信息标准，专门用于对不同编程语言中各种各样的程序构造进行描述，以实现符号级调试。
+
+ELF符号表与符号级调试并无直接关系，实际上dlv就完全没有使用.symtab，不过gdb有使用。为了让读者明确ELF符号表用途，我们还是介绍下符号解析、重定位、加载的过程，有助于进一步加深对整个工具链的认识。我们的学习过程不应该是快餐式的，而应该是脚踏实地的。ELF文件格式为什么这么定，为什么包含这些节和段，为什么要生成这些符号表，要解决什么问题，gdb是如何使用它们的，为什么gdb还需要DWARF……多问几个为什么，最后轮到DWARF上场时，我们必然会理解的更加深刻。
+
+所以，为了实现最初的初衷“让大家认识到那些高屋建瓴的设计是如何协调compiler、linker、loader、debugger工作的”，还是要介绍下这部分内容。
 
 #### 类型定义
 
-下面是 `man 5 elf` 中列出的32位和64位版本符号对应的类型定义，它们成员相同，仅仅是字段列表定义顺序有所不同。
+下面是 `man 5 elf` 中列出的32位和64位版本符号对应的类型定义，它们成员相同，仅仅是字段列表定义顺序有所不同。各个字段说明比Go清晰多了。
 
 ```c
 typedef struct {
@@ -32,11 +87,9 @@ typedef struct {
 
 下面来详细了解下各个字段的作用：
 
-- st_name: 符号的名称，是一个字符串表的索引值。如果非0则表示在.strtab中的索引值；如果为0，则表示该符号没有名字（.strtab[0]=='\0')；
-- st_value: 符号的值，是一个地址值。对于一个全局变量来说，其值就是该变量的内存地址；对于一个函数来说，其值是函数入口地址；
-  TODO 确认下是否是地址值，理论上应该是
-- st_size: 符号的大小，如果大小未知或者无需指定大小就为0；
-  TODO 确定是是st_value的大小吗？
+- st_name: 符号的名称，是一个字符串表的索引值。非0表示在.strtab中的索引值；为0则表示该符号没有名字（.strtab[0]=='\0')
+- st_value: 符号的值，对可重定位模块，value是相对定义该符号的位置的偏移量；对于可执行文件来说，该值是一个虚拟内存地址；
+- st_size: 符号指向的对象大小，如果大小未知或者无需指定大小就为0。如符号对应的int变量的字节数；
 - st_info: 符号的类型和绑定属性(binding attributes)
   - STT_NOTYPE: 未指定类型
   - STT_OBJECT: 该符号关联的是一个数据对象
@@ -52,45 +105,19 @@ typedef struct {
   - STT_TLS: 该符号关联的是TLS变量
 - st_other: 定义了符号的可见性 (visibility)
   - STV_DEFAULT: 默认可见性规则；全局符号和弱符号对其他模块可见；本地模块中的引用，可以使用其他模块中的符号定义来完成解析；
-  - STV_INTERNAL: 处理器特定的隐藏类型 TODO 完善下描述
+  - STV_INTERNAL: 处理器特定的隐藏类型
   - STV_HIDDEN: 符号对其他模块不可见；本地模块中的引用，不能用其他modules中的符号定义来完成解析，只能解析为当前模块中的符号；
 - st_shndx: 每个符号都是定义在某个section中的，比如变量名、函数名、常量名等，这里表示其从属的section header在节头表中的索引；
 
-> ps: .dynsym + .dynstr 又存储的是什么？
-
 #### 工具演示
 
-大家看完了符号的类型定义后，肯定产生了很多联想，“变量名对应的symbol应该是什么样”，“函数名对应的symbol应该是什么样”，“常量名呢……”，联想是好事，说明大家已经开始在思考符号表、符号的目的了。OK，我们接下来就会结合具体示例，给大家展示下程序中的不同程序构造对应的符号是什么样子的，又有什么作用。
+大家看完了符号的类型定义后，肯定产生了很多联想，“变量名对应的symbol应该是什么样”，“函数名对应的symbol应该是什么样”，“常量名呢……”，OK，我们接下来就会结合具体示例，给大家展示下程序中的不同程序构造对应的符号是什么样子的。
 
-TODO 补充些demo在这里
+##### readelf -S `prog`
 
-### 符号相关sections
+##### 查看符号的依赖图
 
-在ELF文件一节中，我们有介绍过ELF文件中常见的一些sections及其作用，本节我们重点讲述符号相关的sections，包括：
-
-- 符号相关的符号表（.symtab）、字符串表（.strtab）；
-- 考虑动态链接库的话，还有动态符号表（.dynsym）、动态字符串表（.dynstr）。
-
-.symtab、.strtab与.dynsym、.dynstr的作用是近似的，都是为了解决链接的问题。前者是解决静态链接问题，后者是解决动态链接问题。
-
-我们提到，符号表记录了程序中全局函数、全局变量、局部非静态变量与链接器符号解析、重定位相关的信息。我们还提到，这里提及的符号与我们常提起的调试符号（如gcc -g生成）并非同一个东西。
-
-> 当然了，符号表中可能也会包含一些调试用的符号，下面介绍符号类型时会提及Type N表示调试符号。符号表中符号，也会引用字符串表中定义的字符串。调试相关的.[z]debug_* sections也会引用字符串表中定义的字符串。
-
-虽然多次提及理解ELF中的符号&符号表与开发符号级调试并无直接关系，但让读者明确ELF中符号和符号表的用途、符号解析、重定位、加载的过程，有助于进一步加深大家的认识。而符号级调试相关的.[z]debug_* sections中也确实和符号&符号表有一定关系。
-
-如若只介绍符号级调试相关的内容，而对符号&符号表用途、符号解析、重定位、加载过程浅尝辄止，读者最终还是会产生这样的疑虑：
-
-- .[z]debug_* sections到底与其他sections有何联系？
-- 编译器、链接器为什么生成这些sections？
-- 这些sections后续到底是如何协调linker、loader、debugger工作的？
-- 其他问题；
-
-所以，为了尽可能扫清大家后续可能会有的这些疑虑，以及实现最初的初衷“让大家认识到那些高屋建瓴的标准、设计是如何协调compiler、linker、loader、debugger工作的”，后续还是要介绍下这部分内容。
-
-### 什么是符号&符号表
-
-假如我们编写如下代码，其中的包名main、函数名main.main、导入的外部包名fmt、引用的外部函数fmt.Println，这些都属于符号的范畴。
+代码示例如下，其中的包名main、函数名main.main、导入的外部包名fmt、引用的外部函数fmt.Println，这些都属于符号的范畴。
 
 **file: main.go**
 
@@ -104,7 +131,7 @@ func main() {
 }
 ```
 
-> “vim-go”算不算符号？其本身是一个只读数据，存储在.rodata section中，其本身算不上符号，但可以被符号引用，比如 `var s = "vim-go"`则变量s有对应的符号，其符号名称为s，变量值引用自.rodata中的vim-go。
+> “vim-go”算不算符号？其本身是一个只读数据，存储在.rodata section中，其本身算不上符号，但可以被符号引用，比如定义一个全局变量 `var s = "vim-go"` 则变量s有对应的符号，其符号名称为s，变量值引用自.rodata中的vim-go。
 >
 > ps：可以通过 `readelf --hex-dump .rodata | grep vim-go`来验证。
 >
@@ -125,68 +152,9 @@ func main() {
 >
 > 可以看到生成了一个临时变量main..stmp_0，它引用了go.string."vim-go"，并作为fmt.Println的参数。
 
-.symtab section，存储了符号表，其实这就是符号数组，其中每个元素都是一个符号，我们来看下每个符号的具体定义：
+##### 查看符号表&符号
 
-```c
-typedef struct {
-    int name;		// string table offset，引用.strtab中字符串
-    int value;		// section offset, or VM address
-    int size;		// object size in bytes
-    char type:4;	// data, func, section, or src file name (4 bits)
-    char binding:4;	// local or global (4 bits)
-    char reserved;	// unused
-    char section;	// section header index, ABS, UNDEF or COMMON
-} Elf_Symbol;
-```
-
-- name是字符串表中的字节偏移量，指向以null结尾的字符串对应的字符名；
-- value是符号的地址，对于可重定位的模块来说，value是距离定义该符号的所在目标文件section起始位置的偏移量，对于可执行文件来说，该值是一个绝对运行时地址；
-- size是符号对应的数据对象的大小（单位字节），如符号对应的int变量的字节数；
-- type通常要么表示是数据，要么是函数，还可以是section或源文件名；
-- binding字段表示符号是本地的，还是全局的；
-- section，每个符号都和目标文件的某个section关联，该字段是一个section header table的表索引。
-
-  有3个特殊的伪节（pseudo section），它们在节头表中是没有条目的：
-
-  - ABS代表不该被重定位的符号；
-  - UNDEF代表未定义的符号，也就是只在本模块中引用但是不在本模块定义的符号；
-  - COMMON表示还未被分配位置的未初始化的数据块，此时value会给出对齐要求，size给出大小；
-
-### 如何读取符号&符号表
-
-go标准库中对ELF32 Symbol的定义如下，go没有位字段，定义上有些许差别，理解即可：
-
-```go
-// ELF32 Symbol.
-type Sym32 struct {
-	Name  uint32
-	Value uint32
-	Size  uint32
-    	Info  uint8	// type:4+binding:4
-	Other uint8	// reserved
-	Shndx uint16	// section
-}
-```
-
-关于如何读取符号表，可以参考go源码实现：https://sourcegraph.com/github.com/golang/go/-/blob/src/debug/elf/file.go?L489:16。
-
-关于符号表，每个可重定位模块都有一张自己的符号表：
-
-- *.o文件，会存在.symtab表；
-- *.a文件，它是个归档文件，其中可能包含多个\*.o文件信息，并且每个\*.o文件都有独立的.symtab表，静态链接的时候会拿对应的\*.o文件出来进行链接；
-- *.so文件，会存在.dynsym表，所有\*.o文件信息都被保存在一起了，只有一个.dynsym符号表，动态链接更加节省存储，但是相比静态链接，动态链接要复杂些，要注意提高链接效率；
-- 其他可重定位文件，就不继续展开了；
-
-现在go工具链已经支持读取符号表，推荐大家优先使用go工具链。Linux binutils也提供了一些类似工具，但是对于go程序而言，有点特殊之处：
-
-- 如果是编译链接完成的可执行程序，通过readelf -s、nm、objdump都可以；
-- 但是如果是go目标文件，由于go是自定义的目标文件格式，则只能借助go tool nm、go tool objdump来查看。
-
-接下来我们来展开了解下如何使用此类工具，以及掌握如何理解输出的信息。
-
-### 快速查看符号&符号表
-
-我们仍以以下实例代码为例，来介绍下如何快速查看符号&符号表信息：
+示例代码如下，来介绍下如何快速查看符号&符号表信息：
 
 **file: main.go**
 
@@ -202,7 +170,7 @@ func main() {
 
 `go build -o main main.go`编译成完整程序，然后可通过readelf、nm、objdump等分析程序main包含的符号列表，虽然我们的示例代码很简单，但是由于go运行时非常庞大，会引入非常多的符号。
 
-我们可以考虑只编译main.go这一个编译单元，`go tool compile main.go`会输出一个文件main.o，这里的main.o是一个可重定位目标文件，但是其文件格式却不能被readelf、nm分析，因为它是go自己设计的一种对象文件格式，在[proposal: build a better linker](https://docs.google.com/document/d/1D13QhciikbdLtaI67U6Ble5d_1nsI4befEd6_k1z91U/view)种有提及，要分析main.o只能通过go官方提供的工具。
+我们可以考虑只编译main.go这一个编译单元，`go tool compile main.go`会输出一个文件main.o，这里的main.o是一个可重定位目标文件，但是其文件格式却不能被readelf、nm分析，因为它是go自己设计的一种对象文件格式，在 [proposal: build a better linker](https://docs.google.com/document/d/1D13QhciikbdLtaI67U6Ble5d_1nsI4befEd6_k1z91U/view) 种有提及，要分析main.o只能通过go官方提供的工具。
 
 可以通过 `go tool nm`来查看main.o中定义的符号信息：
 
@@ -288,7 +256,7 @@ $ go tool nm main.o
 
   "?" The symbol type is unknown, or object file format specific.
   ```
-- 第三列，symbol name，符号名，对应字符串是存储在字符串表中，由符号表引用；
+- 第三列，symbol name，符号名在字符串表中索引，对应字符串是存储在字符串表中；
 
 我们回头再看下我们的示例来加深下理解，OK，让我们关注下main函数本身，我们注意到nm输出显示符号 `%22%22.main`是定义在虚地址 `0x13ed`处，并且表示它是一个.text section中定义的符号，那只有一种可能要么是package main，要么是func main.main，其实是main.main。
 
@@ -393,3 +361,4 @@ ldd -r seasonsvr
    深入理解计算机系统, 龚奕利 雷迎春 译, p450-p479
 5. Linker and Libraries Guide, Object File Format, File Format, Symbol Table, https://docs.oracle.com/cd/E19683-01/816-1386/chapter6-79797/index.html
 6. Linking, https://slideplayer.com/slide/9505663/
+7. proposal: build a better linker, https://docs.google.com/document/d/1D13QhciikbdLtaI67U6Ble5d_1nsI4befEd6_k1z91U/view
