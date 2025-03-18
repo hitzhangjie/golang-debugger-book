@@ -92,7 +92,7 @@ typedef struct {
 - e_shnum: 节头表中的条目数量；
 - e_shstrndx: section名在.shstrtab中的索引（.shstrtab[e_shstrndx]就是一个null结束的section名）；
 
-> ps：ELF文件头其他字段都比较容易懂，关于.shstrtab，它的数据存储与.strtab雷同，只是它用来存section名，see https://refspecs.linuxbase.org/elf/gabi4+/ch4.strtab.html。
+> ps：ELF文件头其他字段都比较容易懂，关于.shstrtab，它的数据存储与.strtab雷同，只是它用来存section名 (man手册显示.strtab除了可以存储符号名，也可以存储Section名)。
 >
 > **Section Header String Table (.shstrtab section)**
 >
@@ -421,3 +421,4 @@ String dump of section '.note.go.buildid':
 8. 深入理解计算机系统, 龚奕利 雷迎春 译, p450-p479
 9. Learning Linux Binary Analysis, Ryan O'Neill, p14-15, p18-19
 10. Linux二进制分析, 棣琦 译, p14-15, p18-19
+11. 字符串表示例, https://refspecs.linuxbase.org/elf/gabi4+/ch4.strtab.html
