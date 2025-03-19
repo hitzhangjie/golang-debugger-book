@@ -47,8 +47,6 @@ ELF定义了11种不同类型的重定位类型，有些类型相当神秘，我
 ### 参考内容
 
 1. Computer System: A Programmer's Perspective, Randal E.Bryant, David R. O'Hallaron, p450-p479
-
-   深入理解计算机系统, 龚奕利 雷迎春 译, p450-p479
-2. Learning Linux Binary Analysis, Ryan O'Neill, p14-15, p18-19
-
-   Linux二进制分析, 棣琦 译, p14-15, p18-19
+2. 深入理解计算机系统, 龚奕利 雷迎春 译, p450-p479
+3. Learning Linux Binary Analysis, Ryan O'Neill, p14-15, p18-19
+4. Linux二进制分析, 棣琦 译, p14-15, p18-19

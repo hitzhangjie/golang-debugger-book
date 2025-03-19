@@ -108,10 +108,6 @@ Unix系统中的每个程序都运行在一个进程上下文中，都有自己�
 ### 参考内容
 
 1. Computer System: A Programmer's Perspective, Randal E.Bryant, David R. O'Hallaron, p450-p479
-
-   深入理解计算机系统, 龚奕利 雷迎春 译, p450-p479
-
-2. What are the executable ELF files respectively for static linker, dynamic linker, loader and dynamic loader, Roel Van de Paar, https://www.youtube.com/watch?v=yzI-78zy4HQ
-
-3. Advanced Programming in Unix Environment
-
+2. 深入理解计算机系统, 龚奕利 雷迎春 译, p450-p479
+3. What are the executable ELF files respectively for static linker, dynamic linker, loader and dynamic loader, Roel Van de Paar, https://www.youtube.com/watch?v=yzI-78zy4HQ
+4. Advanced Programming in Unix Environment

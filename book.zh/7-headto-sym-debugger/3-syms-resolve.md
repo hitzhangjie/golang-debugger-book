@@ -210,7 +210,6 @@ L1: 	popl %ebx			; ebx contains the current pc
 2. Go: Object File & Relocations, Vincent Blanchon, https://medium.com/a-journey-with-go/go-object-file-relocations-804438ec379b
 3. Golang Internals, Part 3: The Linker, Object Files, and Relocations, https://www.altoros.com/blog/golang-internals-part-3-the-linker-object-files-and-relocations/
 4. Computer System: A Programmer's Perspective, Randal E.Bryant, David R. O'Hallaron, p450-p479
-
-   深入理解计算机系统, 龚奕利 雷迎春 译, p450-p479
-5. Linker and Libraries Guide, Object File Format, File Format, Symbol Table, https://docs.oracle.com/cd/E19683-01/816-1386/chapter6-79797/index.html
-6. Linking, https://slideplayer.com/slide/9505663/
+5. 深入理解计算机系统, 龚奕利 雷迎春 译, p450-p479
+6. Linker and Libraries Guide, Object File Format, File Format, Symbol Table, https://docs.oracle.com/cd/E19683-01/816-1386/chapter6-79797/index.html
+7. Linking, https://slideplayer.com/slide/9505663/
