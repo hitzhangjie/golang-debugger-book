@@ -42,7 +42,7 @@ trace
 vet
 ```
 
-为了能演示go编译工具链的功能，尽可能让我们关心的这几个都能被调用到、执行到，我们设计如下这个工程实例，详见：[golang-debugger-lessons/30_how_gobuild_works](https://github.com/hitzhangjie/golang-debugger-lessons/tree/master/30_how_gobuild_works) .
+为了能演示go编译工具链的功能，尽可能让compile、asm、linker、pack这几个工具都能被执行，我们设计如下这个工程实例，详见：[golang-debugger-lessons/30_how_gobuild_works](https://github.com/hitzhangjie/golang-debugger-lessons/tree/master/30_how_gobuild_works) .
 
 file1: main.go
 
@@ -74,6 +74,8 @@ TEXT ·archSqrt(SB), NOSPLIT, $0
         RET
 
 ```
+
+file3: go.mod
 
 ```go
 module xx
@@ -179,18 +181,18 @@ mv $WORK/b001/exe/a.out xx
 
 ### 构建过程
 
-从上述输出中，我们对关心的关键步骤进行了标记（🚩），简单总结如下：
+上述输出中，我们对感兴趣的工具的执行步骤进行了标记（🚩），简单总结如下：
 
 1. 准备构建用的临时目录，后续构建产物都在这个临时目录中，我们可以cd到此目录查看，但是因为涉及到mv操作、rm操作，构建结束后某些中间产物会消失；
-2. `go tool asm` 处理汇编源文件main.s，输出汇编文件中定义的函数列表 symabis。如果没有汇编源文件，此步骤则会跳过；
-3. `go tool compile` 处理go源文件main.go，输出对应的目标文件，注意compile直接将*.o文件压缩到了_pkg_.a这个静态库中；
-4. `go tool asm` 对汇编源文件执行汇编操作，输出对应的目标文件main.o。注意哦，main.go以及其他go文件对应的目标文件直接归档到了_pkg_.a；
-5. `go tool pack` 将目标文件main.o追加到静态库文件_pkg_.a中。此时我们module中的源码都编译、汇编后放到_pkg_.a中了；
-6. 准备其他需要链接的目标文件列表，已经编译构建好的go运行时目标文件、标准库对应的目标文件，这些全部写入importcfg.link文件；
-7. `go tool link` 对_pkg_.a以及importcfg.link中记录的go运行时、go标准库进行链接操作，完成符号解析、重定位，生成一个可执行程序a.out，同时写入buildid信息到.note.go.buildid；
+2. `go tool asm` 处理汇编源文件main.s，输出汇编文件中定义的函数列表 symabis。如果没有汇编源文件，此步骤会跳过；
+3. `go tool compile` 处理go源文件main.go，输出目标文件，注意compile直接将*.o文件加到了静态库_pkg_.a中；
+4. `go tool asm` 对汇编源文件执行汇编操作，输出目标文件main.o。注意哦，main.go以及其他go文件对应的目标文件加到了静态库_pkg_.a中；
+5. `go tool pack` 将main.o加到静态库文件_pkg_.a中。此时示例module中的源文件都编译、汇编加入_pkg_.a中了；
+6. 准备其他需要链接的目标文件列表，已经编译构建好的go运行时、标准库对应的目标文件，全部写入importcfg.link文件；
+7. `go tool link` 对_pkg_.a以及importcfg.link中记录的go运行时、标准库进行链接操作，完成符号解析、重定位，生成一个可执行程序a.out，同时在其.note.go.buildid写入buildid信息；
 8. 将a.out重命名为module name，这里为xx；
 
-至此这个简单的测试模块的构建过程结束。
+至此这个示例模块的构建过程结束。
 
 ### 本文小节
 
