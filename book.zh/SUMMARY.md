@@ -47,6 +47,7 @@
   * [7.82 编译工具链/link](7-headto-sym-debugger/82-go-tool-link.md)
   * [7.90 More: GNU build-id+gobuildid](7-headto-sym-debugger/90-why-buildid-loaded.md)
   * [7.91 More: 语法分析vs语义分析区别](7-headto-sym-debugger/91-syntax-and-semantic-analysis.md)
+  * [7.92 More: 为什么GDB使用符号表+DWARF](7-headto-sym-debugger/92-why-gdb-uses-symtab.md)
 * [8 调试信息标准: DWARF](8-dwarf/README.md)
   * [8.1 发展历史](8-dwarf/1-history.md)
   * [8.2 DWARF结构](8-dwarf/2-structure.md)

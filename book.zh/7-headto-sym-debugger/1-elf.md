@@ -8,24 +8,14 @@ ELF文件结构如下图所示，包括ELF文件头 (ELF Header)、段头表 (Pr
 
 ![img](assets/elf.png)
 
-**文件头**：ELF文件头 (ELF FIle Header)，其描述了当前ELF文件的类型（可执行程序、可重定位文件、动态链接文件、core文件等）、32位/64位寻址、ABI、ISA、程序入口地址、Program Header Table起始地址及元素大小、Section Header Table起始地址及元素大小，等等。
+* **文件头**：ELF文件头 (ELF FIle Header)，其描述了当前ELF文件的类型（可执行程序、可重定位文件、动态链接文件、core文件等）、32位/64位寻址、ABI、ISA、程序入口地址、Program Header Table起始地址及元素大小、Section Header Table起始地址及元素大小，等等。
+* **段头表**：段头表定义了程序的“**执行时视图**”，描述了如何创建程序的进程映像。每个表项定义了一个“段 (segment)” ，每个段引用了0、1或多个sections。段有类型，如PT_LOAD表示该段引用的sections需要在运行时被加载到内存。段头表主要是为了指导加载器进行加载。
+  举个例子，.text section隶属于一个Type=PT_LOAD的段，意味着会被加载到内存；并且该段的权限为RE（Read+Execute），意味着指令部分加载到内存后，进程对这部分区域的访问权限为“读+可执行”。加载器 (loader /lib64/ld-linux-x86-64.so) 应按照段定义好的虚拟地址范围、权限，将引用的sections加载到进程地址空间中指定位置，并在GDT、LDT中设置好读、写、执行权限。
+* **节头表**：节头表定义了程序的“**链接时视图**”，描述了二进制可执行文件中包含的每个section的位置、大小、类型、链接顺序，等等，主要目的是为了指导链接器进行链接。
+  举个例子，项目包含多个源文件，每个源文件是一个编译单元，每个编译单元最终会生成一个目标文件(*.o)，每个目标文件都是一个ELF文件，都包含自己的sections。链接器是将依赖的目标文件和库文件的相同section进行合并（如所有*.o文件的.text合并到一起），然后将符号引用解析成正确的偏移量或者地址。
+* **Sections**：ELF文件中的sections数据，夹在段头表、节头表之间，由段头表、节头表引用。不同程序中包含的sections数量是不固定的：有些编程语言会有特殊的sections来支持对应的语言运行时层面的功能，如go .gopclntab, gosymtab；程序采用静态链接、动态链接生成的sections也会不同，如动态链接往往会生成.got, .plt, .rel.text。
 
-**段头表**：段头表定义了程序的“**执行时视图**”，描述了如何创建程序的进程映像。每个表项定义了一个“段 (segment)” ，每个段引用了0、1或多个sections。段有类型，如PT_LOAD表示该段引用的sections需要在运行时被加载到内存。段头表主要是为了指导加载器进行加载。
-
-举个例子，.text section隶属于一个Type=PT_LOAD的段，意味着会被加载到内存；并且该段的权限为RE（Read+Execute），意味着指令部分加载到内存后，进程对这部分区域的访问权限为“读+可执行”。加载器 (loader /lib64/ld-linux-x86-64.so) 应按照段定义好的虚拟地址范围、权限，将引用的sections加载到进程地址空间中指定位置，并在GDT、LDT中设置好读、写、执行权限。
-
-**节头表**：节头表定义了程序的“**链接时视图**”，描述了二进制可执行文件中包含的每个section的位置、大小、类型、链接顺序，等等，主要目的是为了指导链接器进行链接。
-
-举个例子，项目包含多个源文件，每个源文件是一个编译单元，每个编译单元最终会生成一个目标文件(\*.o)，每个目标文件都是一个ELF文件，都包含自己的sections。链接器是将依赖的目标文件和库文件的相同section进行合并（如所有*.o文件的.text合并到一起），然后将符号引用解析成正确的偏移量或者地址。
-
-**Sections**：ELF文件中的sections数据，夹在段头表、节头表之间，由段头表、节头表引用。
-
-不同程序中包含的sections数量是不固定的：
-
-- 有些编程语言会有特殊的sections来支持对应的语言运行时层面的功能，如go .gopclntab, gosymtab；
-- 程序采用静态链接、动态链接生成的sections也会不同，如动态链接往往会生成.got, .plt, .rel.text。
-
-下面，我们详细来看下每个部分。
+下面，我们我们对每个部分进行详细介绍。
 
 ### 文件头（ELF File Header）
 
@@ -159,10 +149,10 @@ typedef struct {
   - PF_R: 可读；
 - p_align: 表示该段对齐方式；
 
-> 注意：
-
+> 注意，又是一些术语使用不够严谨可能导致理解偏差的地方：
+>
 > - 内存地址空间中的内存布局，代码所在区域我们常称为代码段（code segment, CS寄存器来寻址）or 文本段（text segment），数据段我们也常称为数据段（data segment，DS寄存器来寻址）。
-> - 内存布局中的术语text segment、data segment，不是ELF文件中的.text section和.data section，注意区分。
+> - 内存布局中的上述术语text segment、data segment，不是ELF文件中的.text section和.data section，注意区分。
 >
 > 下面的段头表定义给出了一个这样的示例，text segment其实包含了.text section以及其他sections，data segment其实也包含了.data section以外的其他sections。
 >
@@ -221,11 +211,11 @@ Program Headers:
    06 
 ```
 
-一个section中数据最终会不会被加载到内存，也是由引用它的段的类型决定的：如果段类型为PT_LOAD类型，则会被加载到内存； 反之不会。
+一个section中数据最终会不会被加载到内存，也是由引用它的段的类型决定：PT_LOAD类型会被加载到内存，反之不会。
 
 以上面的go程序demo为例：
 
-1）.gosymtab、.gopclntab所属的段（段索引值 03）是PT_LOAD类型，表示其数据会被加载到内存，这是因为go runtime依赖这些信息来计算stacktrace。
+1）.gosymtab、.gopclntab所属的段（段索引值 03）类型是PT_LOAD，表示其数据会被加载到内存，这是因为go runtime依赖这些信息来计算stacktrace，比如 `runtime.Caller(skip)` 或者panic时 `runtime.Stack(buf)`。
 
 2）而.note.go.buildid所属的段（段索引 01）为NOTE类型，只看这个段的话，section .note.go.buildid不会被加载到内存，但是
 
@@ -241,12 +231,11 @@ Program Headers:
 
 在此基础上，节头表 (Section Header Table)，定义了程序的链接视图（the linkable point of view），用来指导linker如何对多个编译单元中的sections进行链接（合并相同sections、符号解析、重定位）。
 
-> - 以C语言为例：每个编译单元编译过程中生成的*.o目标文件也是一个ELF文件，里面包含了当前文件的section信息，最终链接器将所有*.o文件的相同sections合并在一起，所以说它是用来指导链接器连接的一个视图。see：https://stackoverflow.com/a/51165896
-> - 再以Go语言为例，在 [how &#34;go build&#34; works](./0-how-go-build-works.md) 小节里，我们也提及了go tool compile会将go源码文件对应的目标文件归档到静态库文件_pkg_.a，然后go tool pack将go tool asm汇编源文件生成的目标文件 file.o 最终追加到这个_pkg_.a，最终go tool link将这个_pkg_.a与其他运行时、标准库代码链接到一起，形成一个可执行程序。这个过程中对不同目标文件中的sections的处理也是大同小异的。
+这里就不得不提共享库类型：静态共享库（俗称静态链接库）、动态共享库（俗称动态链接库）。静态共享库，可以理解成包含了多个*.o文件；动态共享库，相当于把相同sections合并，merging not including \*.o 文件。链接生成最终的可执行程序的时候也是要将相同sections进行合并。至于更多的一些细节，此处先不展开。
 
 #### 类型定义
 
-节头表其实就是一系列section表项的数组，我们来看看其中每个描述表项的定义。注意这里的是section的描述表项，并不是section数据。
+节头表其实就是一系列section表项的数组，我们来看看其中每个描述表项的定义，section数据可根据其中地址、size来读取。
 
 ```c
 typedef struct {
@@ -359,7 +348,7 @@ Key to Flags:
 
 #### 类型定义
 
-Section就是一堆bytes数据，它由节头表、段头表来引用。
+这里的section指的就是ELF section里面的数据了，就是一堆bytes，它由节头表、段头表来引用。比如节头表表项中有地址、size指向对应的某块section数据。
 
 #### 必知的节
 
@@ -377,7 +366,7 @@ ELF文件会包含很多的sections，前面给出的测试实例中就包含了
 
 ELF也支持vendor自定义sections来进行扩展，如go语言就添加了.gosymtab、.gopclntab、.note.build.id来支持go运行时、go工具链的一些操作。如果您想了解更多支持的sections及其作用，可以查看man手册：`man 5 elf`，这里我们就不一一罗列了。
 
-> ps: .symtab、DWARF都提供了“符号”一类的信息，但它们是独立的。使用.symtab可以更快速查询符号信息，但是DWARF描述更详细。调试器（比如gdb）可同时使用二者，兼顾效率的同时还能提高兼容性。
+> ps: .symtab、DWARF都提供了“符号”一类的信息，但它们是独立的。严格来说.symtab中其实也包含用于支持调试的符号信息，gdb作为一款诞生年代很久的调试器，就非常依赖符号表中的符号信息来进行调试。DWARF是后起之秀，gdb现在也逐渐往DWARF上去靠，但是为了兼容性（如支持老的二进制调试、工具链）还是会保留利用符号表调试的实现。see：[GDB为什么同时使用.symtab和DWARF](./92-why-gdb-uses-symtab.md)。
 
 #### 工具演示
 
@@ -407,7 +396,7 @@ String dump of section '.note.go.buildid':
 
 结果发现buildid数据是一致的，证实了我们上述判断。
 
-本节ELF内容就先介绍到这里，在此基础上，接下来的几个小节，我们将循序渐进地介绍linker、loader、debugger的工作原理。
+本节ELF内容就先介绍到这里，在此基础上，接下来我们将循序渐进地介绍linker、loader、debugger的工作原理。
 
 ### 参考文献
 
@@ -422,3 +411,4 @@ String dump of section '.note.go.buildid':
 9. Learning Linux Binary Analysis, Ryan O'Neill, p14-15, p18-19
 10. Linux二进制分析, 棣琦 译, p14-15, p18-19
 11. 字符串表示例, https://refspecs.linuxbase.org/elf/gabi4+/ch4.strtab.html
+12. Introduction of Shared Libraries, https://medium.com/@hitzhangjie/introduction-of-shared-libraries-df0f2299784f
