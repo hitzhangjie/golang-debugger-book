@@ -21,7 +21,7 @@ ELF文件结构如下图所示，包括ELF文件头 (ELF Header)、段头表 (Pr
 
 #### 类型定义
 
-每个ELF文件，对应着go标准库类型 debug/elf.File，其中包含了文件头 FileHeader、Sections、Progs，FileHeader定义及各字段含义如下：
+每个解析成功的ELF文件，对应着go标准库类型 debug/elf.File，包含了文件头 FileHeader、Sections、Progs：
 
 ```go
 // A File represents an open ELF file.
@@ -31,9 +31,22 @@ type File struct {
 	Progs       []*Prog
 	...
 }
+
+// A FileHeader represents an ELF file header.
+type FileHeader struct {
+	Class      Class
+	Data       Data
+	Version    Version
+	OSABI      OSABI
+	ABIVersion uint8
+	ByteOrder  binary.ByteOrder
+	Type       Type
+	Machine    Machine
+	Entry      uint64
+}
 ```
 
-但是上述结果只是elf文件读取成功后经常需要的一个结构，并不是文件系统中实际的elf文件结构，我们来看下 Linux man 手册中ELF文件头的定义：
+注意，go标准库FileHeader比man手册中ELF file header少了几个字段，这几个字段解析工程中有用，解析完后就没用了，所以go标准库中没有省略了这几个字段。为了更全面理解文件头各字段的作用，来看下man 手册中的定义：
 
 ```c
 #define EI_NIDENT 16
@@ -96,7 +109,7 @@ typedef struct {
 
 ### 段头表 (Program Header Table)
 
-段头表 (Program Header Table)，可以理解为程序执行的视图（executable point of view），主要用来指导loader如何加载。从可执行程序角度来看，进程运行时需要了解如何将程序中不同部分，加载到进程虚拟内存地址空间中的不同区域。Linux下进程地址空间的内存布局，大家并不陌生，如data段、text段，每个段包含的信息其实是由段头表预先定义好的，包括在虚拟内存空间中的位置，以及段中应该包含哪些sections数据。
+段头表 (Program Header Table)，可以理解为程序的执行时视图（executable point of view），主要用来指导loader如何加载。从可执行程序角度来看，进程运行时需要了解如何将程序中不同部分，加载到进程虚拟内存地址空间中的不同区域。Linux下进程地址空间的内存布局，大家并不陌生，如data段、text段，每个段包含的信息其实是由段头表预先定义好的，包括在虚拟内存空间中的位置，以及段中应该包含哪些sections数据。
 
 #### 类型定义
 
@@ -344,13 +357,13 @@ Key to Flags:
   l (large), p (processor specific)
 ```
 
-### Sections
+### 节 (Sections)
 
 #### 类型定义
 
 这里的section指的就是ELF section里面的数据了，就是一堆bytes，它由节头表、段头表来引用。比如节头表表项中有地址、size指向对应的某块section数据。
 
-#### 必知的节
+#### 常见的节
 
 ELF文件会包含很多的sections，前面给出的测试实例中就包含了25个sections。先了解些常见的sections的作用，为后续加深对linker、loader、debgguer工作原理的认识提前做点准备。
 
@@ -364,9 +377,11 @@ ELF文件会包含很多的sections，前面给出的测试实例中就包含了
 - .rel.text：一个.text section中位置及符号列表，当链接器尝试把这个目标文件和其他文件链接时，需要对符号进行解析、重定位成正确的地址；
 - .rel.data：引用的一些全局变量的位置及符号列表，和.rel.text有些类似，也需要符号解析、重定位成正确的地址；
 
-ELF也支持vendor自定义sections来进行扩展，如go语言就添加了.gosymtab、.gopclntab、.note.build.id来支持go运行时、go工具链的一些操作。如果您想了解更多支持的sections及其作用，可以查看man手册：`man 5 elf`，这里我们就不一一罗列了。
+如果您想了解更多支持的sections及其作用，可以查看man手册：`man 5 elf`，这里我们就不一一列举了。
 
-> ps: .symtab、DWARF都提供了“符号”一类的信息，但它们是独立的。严格来说.symtab中其实也包含用于支持调试的符号信息，gdb作为一款诞生年代很久的调试器，就非常依赖符号表中的符号信息来进行调试。DWARF是后起之秀，gdb现在也逐渐往DWARF上去靠，但是为了兼容性（如支持老的二进制调试、工具链）还是会保留利用符号表调试的实现。see：[GDB为什么同时使用.symtab和DWARF](./92-why-gdb-uses-symtab.md)。
+#### 自定义节
+
+ELF也支持自定义sections，如go语言添加了.gosymtab、.gopclntab、.note.build.id来支持go运行时、go工具链的一些操作。
 
 #### 工具演示
 
@@ -397,6 +412,14 @@ String dump of section '.note.go.buildid':
 结果发现buildid数据是一致的，证实了我们上述判断。
 
 本节ELF内容就先介绍到这里，在此基础上，接下来我们将循序渐进地介绍linker、loader、debugger的工作原理。
+
+### 本文总结
+
+本文较为详细地介绍了ELF文件结构，介绍了ELF文件头、段头表、节头表的定义，以及通过实例演示了段头表、节头表对节的引用，以及如何通过readelf命令进行查看。我们还介绍了一些常见的节的作用，go语言中为了支持高级特性自主扩展的一些节。读完本节内容后相信读者已经对ELF文件结构有了一个初步的认识。
+
+接下来，我们将介绍符号表、符号的内容，这里先简单提一下。说起符号，ELF .symtab、DWARF .debug_* sections都提供了“符号”信息，编译过程中会记录下来有哪些符号，链接器连接过程中会决定将上述哪些符号生成到.symtab，以及哪些调试类型的符号需要生成信息到.debug_* sections。现在来看.debug_* sections是专门为调试准备的，是链接器严格按照DWARF标准、语言设计、和调试器约定来生成的，.symtab则主要包含链接器符号解析、重定位需要用到的符号。.symtab中其实也可以包含用于支持调试的符号信息，主要看链接器是个什么策略。
+
+比如，gdb作为一款诞生年代很久的调试器，就非常依赖.symtab中的符号信息来进行调试。DWARF是后起之秀，尽管gdb现在也逐渐往DWARF上去靠，但是为了兼容性（如支持老的二进制调试、工具链）还是会保留利用符号表调试的实现方式。如果想让gdb也能调试go程序，就得了解gdb的工作机制，在.symtab, .debug_\* sections中生成其需要的信息，see：[GDB为什么同时使用.symtab和DWARF](./92-why-gdb-uses-symtab.md)。
 
 ### 参考文献
 

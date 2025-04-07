@@ -2,37 +2,105 @@
 
 在 "认识ELF文件" 一节中，我们有介绍过ELF文件中常见的一些section及其作用，本节我们重点讲述符号表及符号。
 
-#### 符号表
+### 生成过程
 
-1）.strtab和.shstrtab 存储的是字符串信息，.shstrtab和.strtab 首尾各有1-byte '\0'，其他数据就是 '\0' 结尾的c_string。区别只是，.strtab可以用来存储符号、节的名字，而.shstrtab仅存储节的名字。
+尽管这部分知识是非常有价值的，但是仍然难免感觉有些枯燥。OK，那我们换个讲解思路，我们先不介绍那些枯燥的符号表格式、符号类型定义，先看看Go编译工具链中符号表是如何生成的吧。
 
-2）.symtab 存储的是符号表，符号表包含了解析程序中符号引用所需的信息。如果1个section被一个PT_TYPE=load的段引用，那么这个section的属性将包含SHF_ALLOC flag，该flag指示需要分配内存给该section数据；如果没有被引用，就不包含该flag。
+**go编译器的具体工作：**
+
+- 会接受go源文件作为输入，
+- 然后读取源文件进行词法分析得到一系列tokens，
+- 进而进行语法分析（基于gramma进行规约）得到AST，
+- 然后基于AST进行类型检查，
+- 类型检查无误后开始执行函数编译（buildssa、代码优化、生成plist、转换为平台特定机器码），
+- 最后将结果输出到目标文件中。
+
+这里的*.o文件实际上是一个ar文件（通过file \*.o可以求证），并不是gcc生成\*.o文件时常用的ELF格式。这种实现思路是go团队借鉴plan9项目的目标文件格式。每个编译单元对应的\*.o文件中包括了两部分，一部分是compiler object file，一部分是linker object file（通过 `ar -t *.o` 可以看到内部的 `__.PKGDEF` 文件和 `__go__.o` 文件）。 `-linkobj=???`，分布式构建中为了加速也可以指定只输出compiler object file或者linker object file，比如bazel分布式构建来进行编译加速。
+编译器还会在输出的目标文件中记录一些将来由Linker处理的符号信息，这些符号信息实际上就是一个LSym的列表，在前面进行类型检查过程中，编译器会维护这样一个列表，输出到目标文件中。
+
+```go
+// An LSym is the sort of symbol that is written to an object file.
+// It represents Go symbols in a flat pkg+"."+name namespace.
+type LSym struct {
+	Name string
+	Type objabi.SymKind
+	Attribute
+
+	Size   int64
+	Gotype *LSym
+	P      []byte
+	R      []Reloc
+
+	Extra *interface{} // *FuncInfo, *VarInfo, *FileInfo, or *TypeInfo, if present
+
+	Pkg    string
+	PkgIdx int32      // <<<=== look，这里还需要记录包名信息
+	SymIdx int32
+}
+```
+
+这些LSym符号信息，从源码视角来看，其实就是编译器处理过程中识别到的各类pkg.name（如变量、常量、类型、别名、值、定义位置、指令数据），这里的符号如果类型为symbol.Type=SDWARFXXX，表示这是一个调试符号，linker要识别并处理。
+
+**go链接器的具体工作：**
+
+- 除了合并来自多个目标文件中的相同sections以外（输入可能还包含其他共享库，这里暂时不做发散），
+- linker还需要完成符号解析、重定位，
+- 逐渐建立起一个全局符号表，最终写入到构建产物中的符号表.symtab中，用于后续的二次链接，比如产物是个共享库，
+- linker可以做一些全局层面的优化，如deadcode移除， see: [Dead Code Elimination: A Linkers Perspective](https://medium.com/p/d098f4b8c6dc)，等等，
+- 生成DWARF调试信息，
+- 生成最终的可执行程序或者共享库，
+
+OK，这里我们就先不发散太多……前面编译器将LSym列表写入到目标文件之后，Linker就需要读取出来，利用它完成符号解析、重定位相关的工作，一些跨编译单元的导出函数会被最终输出到.symtab符号表中为将来再次链接备用。另外，对那些LSym.Type=SDWARFXXX的符号，linker需要根据DWARF标准与调试器开发者的约定，生成对应的DWARF DIE描述信息写入到.debug_* sections中，方便后续调试器读取。
+
+> go团队设计实现的时候为了更好地进行优化，并没有直接使用ELF格式作为目标文件的格式，而是采用了一种借鉴自plan9目标文件格式的自定义格式。因此go tool compile生成的目标文件，是没法像gcc编译生成的目标文件一样被readelf、nm、objdump等之类的工具直接读取的。尽管go团队并没有公开详细的文档来描述这种目标文件格式，但是go编译工具链提供了go tool nm, go tool objdump等工具来查看这些目标文件中的数据。
+
+为了方便大家理解，我画了下面这个草图，包括了 `go tool compile` 的工作过程，以及与生成符号信息相关的 `go tool link` 的关键步骤。大家如果想查看源码，可以参考此流程来阅读。
+
+<img alt="how_objfile_created" src="./assets/how_objfile_created.jpg" width="768"/>
+
+OK，前面介绍了符号表编译器、链接器之间的协作，最终在可执行程序或者共享库中生成符号表、DWARF调试信息的过程。有了这个之后我们再来补充下符号表、符号的相关认识，读者就更容易吸收了。
+
+### 认识符号表
+
+1）符号表.symtab 存储的是一系列符号，每个符号都描述了它的地址、类型、作用域等信息，用于帮助链接器完成符号解析及重定位相关的工作，当然前面也提到它调试器也可以使用它。
 
 关于符号表，每个可重定位模块都有一张自己的符号表：
 
 - \*.o文件，包含一个符号表.symtab；
-- \*.a文件，它是个归档文件，其中可能包含多个\*.o文件，并且每个\*.o文件在归档文件中都保留了其自身的符号表(.symtab)。静态链接的时候会拿对应的\*.o文件出来进行链接，并把符号表进行合并；
+- \*.a文件，它是个竞态共享库文件，其中可能包含多个\*.o文件，并且每个\*.o文件都独立保留了其自身的符号表(.symtab)。静态链接的时候会拿对应的\*.o文件出来进行链接，链接时符号表会进行合并；
 - \*.so文件，包含动态符号表.dynsym，所有合并入这个\*.so文件的\*.o文件的符号表信息合并成了这个.dynsym，\*.so文件中不像静态库那样还存在独立的\*.o文件了。链接器将这些\*.o文件合成\*.so文件时，Merging, Not Inclusion；
-- 其他可重定位文件，就不继续展开了；
+- 其他不常见的可重定位文件类型，不继续展开；
 
-3）symbol: .symtab中的每一个表项都描述了一个符号（symbol），符号的名字最终记录在.strtab中。符号除了有名字还有一些其他属性，下面继续介绍。
+2）符号symbol，符号表.symtab中的每一个表项都描述了一个符号，符号的名字最终记录在字符串表.strtab中。符号除了有名字还有一些其他属性，下面继续介绍。
 
-#### 符号
+3）字符串表.strtab和.shstrtab 存储的是字符串信息，.shstrtab和.strtab 首尾各有1-byte '\0'，其他数据就是 '\0' 结尾的c_string。区别只是，.strtab可以用来存储符号、节的名字，而.shstrtab仅存储节的名字。
 
-符号表包含了程序中全局作用域的函数、变量及链接器所需要的相关信息，如符号的地址和类型。非静态局部变量（自动变量）通常不会被包含在符号表中，因为它们的作用范围仅限于定义其的函数或块内，不需要全局可见性。然而，静态局部变量会被包含在符号表中，尽管它们没有全局命名空间的访问权限，但具有文件作用域，特别是在多级嵌套代码中，内部嵌套可能引用了外部块中定义的静态局部变量，链接器进行符号解析时依然依赖符号表中存在相应的描述信息。
+如果深究设计实现的话，就是go编译器在编译过程中构建了AST，它知道源码中任意一个符号package.name的相关信息。在此基础上它记录了一个LSym列表，并输出到了目标文件中进一步交给链接器处理。链接器读取并处理后会针对调试类型的LSym生成DWARF调试信息，DWARF调试信息我们将在第八章介绍，其他用于符号解析、重定位后的一些全局符号被记录到最终可执行程序或者共享库的.symtab中，用于后续链接过程。这个.symtab就是一系列 `debug/elf.Sym32/debug/elf.Sym32/64`，而 `debug/elf.Symbol`是解析成功之后更容易使用的方式，比如符号名已经从Sym32/64中的字符串索引值转换为了string类型。
+
+### 认识符号
+
+符号表.symtab包含了一系列符号，描述了程序中全局作用域的函数、变量及链接器所需要的相关信息，如符号的地址和类型。自动变量通常不会被包含在符号表中，因为它们的作用域仅限于定义它的函数或块内，不需要全局可见性。然而，静态局部变量会被包含在符号表中，尽管它们没有全局命名空间的访问权限，但具有文件作用域，特别是在多级嵌套代码中，内部嵌套可能引用了外部块中定义的静态局部变量，链接器进行符号解析时依然依赖符号表中存在相应的描述信息。
 
 ELF 符号表主要记录的是具有外部作用范围的对象，包括：
 
-- 全局函数
-- 全局变量
-- 静态全局变量和静态函数（尽管它们仅对文件或编译单元可见）
+- 全局函数和全局变量
+- 静态函数和静态变量（仅对当前源文件或编译单元可见）
 - 以及其他需要跨文件或模块访问的符号
 
-我们这里所说的符号，和我们所说的符号级调试这里的符号，并不能划等号：1）符号级调试中的符号，强调的是利用源码中函数名、变量名、分支控制逻辑等有别于指令级调试的交互方式。2）本文讲的符号表中的符号，它主要是为了方便链接器进行符号解析和重定位而记录的。但是它记录的这些符号信息也确实会被某些调试器使用，如gdb，尽管它不是为了符号级调试而设计的。3）DWARF调试信息标准，专门用于对不同编程语言中各种各样的程序构造进行描述，以实现符号级调试。
+我们这里所说的符号，是指的.symtab中的表项，并不是DWARF调试信息，它主要是为了方便链接器进行符号解析和重定位而记录的。但是它记录的这些符号信息也确实会被某些调试器使用，尤其是类似DWARF一样的调试信息标准成为业界标准之前。实际上dlv就完全没有使用.symtab，但是gdb有使用，我们在扩展阅读部分也进行了介绍。
 
-ELF符号表与符号级调试并无直接关系，实际上dlv就完全没有使用.symtab，不过gdb有使用。为了让读者明确ELF符号表用途，我们还是介绍下符号解析、重定位、加载的过程，有助于进一步加深对整个工具链的认识。我们的学习过程不应该是快餐式的，而应该是脚踏实地的。ELF文件格式为什么这么定，为什么包含这些节和段，为什么要生成这些符号表，要解决什么问题，gdb是如何使用它们的，为什么gdb还需要DWARF……多问几个为什么，最后轮到DWARF上场时，我们必然会理解的更加深刻。
+还记得我们的初衷吗，“让大家认识到那些高屋建瓴的设计是如何协调compiler、linker、loader、debugger工作的”，读者不妨大胆多问几个为什么？没多少人能不做一番调研就说他精通这些。
 
-还记得我们的初衷吗，“让大家认识到那些高屋建瓴的设计是如何协调compiler、linker、loader、debugger工作的”，我们还是要介绍下这部分内容。
+- 编译构建过程中.symtab是如何生成的？本文已介绍
+- 链接、加载过程中.symtab有什么作用？链接时符号解析、重定位
+- 构建产物中的.symtab为什么要保留？链接时符号解析、重定位，调试等
+- 删掉它对gdb、dlv之类调试器有没有影响？对gdb有影响，对dlv应该没影响
+- 从共享库中删掉它对依赖它的程序的构建有没有影响？链接时链接失败
+- 从共享库中删掉它对依赖它的程序的运行有没有影响？加载时动态链接失败
+- gdb早期实现可以借助.symtab实现，为什么还需要DWARF？DWARF标准更胜一筹，但是成为业界标准较晚
+- gdb现在为什么不弃用.symtab而完全借助DWARF？兼容老的二进制和工具链
+
+我们的学习过程不应该是快餐式的，而应该是脚踏实地的。正视自己内心疑问的每个瞬间，无疑都是一剂帮助我们自我突破、走向更远方的强心剂。
 
 #### 符号定义
 
@@ -81,11 +149,9 @@ typedef struct {
   - STV_HIDDEN: 符号对其他模块不可见；本地模块中的引用，只能解析为当前模块中的符号；
 - st_shndx: 每个符号都是定义在某个section中的，比如变量名、函数名、常量名等，这里表示其从属的section header在节头表中的索引；
 
-### 生成符号表
-
 ### 读取符号表
 
-go标准库中对ELF32 Symbol的定义如下，go没有位字段，定义上有些许差别，理解即可：
+go标准库中对ELF32 Symbol的定义 `debug/elf.Sym32/64` 如下，go没有位字段，定义上有些许差别，理解即可：
 
 ```go
 // ELF32 Symbol.
@@ -106,7 +172,32 @@ type Sym32 struct {
 - 如果是编译链接完成的可执行程序，通过readelf -s、nm、objdump都可以；
 - 但是如果是go目标文件，由于go是自定义的目标文件格式，则只能借助go tool nm、go tool objdump来查看。
 
-接下来我们来展开了解下如何使用此类工具，以及掌握理解输出的信息 …… oh，在演示之前还得先继续介绍下符号。
+可能使用这个类型 `debug/elf.Symbol`会更方便，而且还支持读取动态符号表.dynsym。
+
+```go
+// A Symbol represents an entry in an ELF symbol table section.
+type Symbol struct {
+	Name        string
+	Info, Other byte
+
+	// HasVersion reports whether the symbol has any version information.
+	// This will only be true for the dynamic symbol table.
+	HasVersion bool
+	// VersionIndex is the symbol's version index.
+	// Use the methods of the [VersionIndex] type to access it.
+	// This field is only meaningful if HasVersion is true.
+	VersionIndex VersionIndex
+
+	Section     SectionIndex
+	Value, Size uint64
+
+	// These fields are present only for the dynamic symbol table.
+	Version string
+	Library string
+}
+```
+
+接下来我们来展开了解下如何使用此类工具，以及掌握理解输出的信息。
 
 ### 工具演示
 
@@ -167,9 +258,9 @@ func main() {
 }
 ```
 
-`go build -o main main.go`编译成完整程序，然后可通过readelf、nm、objdump等分析程序main包含的符号列表，虽然我们的示例代码很简单，但是由于go运行时非常庞大，会引入非常多的符号。
+`go build -o main main.go` 编译成完整程序，然后可通过readelf、nm、objdump等分析程序main包含的符号列表，虽然我们的示例代码很简单，但是由于go运行时非常庞大，会引入非常多的符号。
 
-我们可以考虑只编译main.go这一个编译单元，`go tool compile main.go`会输出一个文件main.o，这里的main.o是一个可重定位目标文件，但是其文件格式却不能被readelf、nm分析，因为它是go自己设计的一种对象文件格式，在 [proposal: build a better linker](https://docs.google.com/document/d/1D13QhciikbdLtaI67U6Ble5d_1nsI4befEd6_k1z91U/view) 种有提及，要分析main.o只能通过go官方提供的工具。
+我们可以考虑只编译main.go这一个编译单元，`go tool compile main.go`会输出一个文件main.o，这里的main.o是一个可重定位目标文件，但是其文件格式却不能被readelf、nm分析，因为它是go自己设计的一种对象文件格式，在 [proposal: build a better linker](https://docs.google.com/document/d/1D13QhciikbdLtaI67U6Ble5d_1nsI4befEd6_k1z91U/view) 中有提及，要分析main.o只能通过go官方提供的工具。
 
 可以通过 `go tool nm`来查看main.o中定义的符号信息：
 
@@ -294,6 +385,8 @@ func main() {
 
 另外我们也注意到示例中有很多符号类型是 `U`，这些符号都是在当前模块main.o中未定义的符号，这些符号是定义在其他模块中的，将来需要链接器来解析这些符号并完成重定位。
 
+> 在[how-go-build-works](./0-how-go-build-works.md)小节中我们介绍过importcfg.link，还记得吧？go程序构建时依赖了标准库、运行时，需要和这些一起链接才可以。
+
 之前我们提到，可重定位文件中，存在一些.rel.text、.rel.data sections来实现重定位，但我们也提到了，go目标文件是自定义的，它参考了plan9目标文件格式（当然现在又调整了 `go tool link --go115newobj`），Linux binutils提供的readelf工具是无法读取的，go提供了工具objdump来查看。
 
 ```bash
@@ -346,6 +439,7 @@ ldd -r seasonsvr
 前面我们结合go测试程序详细介绍了：
 
 - 什么是符号&符号表；
+- 符号表&符号是如何生成的？
 - 如何读取符号&符号表；
 - 如何快速查看目标文件中的符号&符号表；
 - 如何完成链接生成可执行程序；
