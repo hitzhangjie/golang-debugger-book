@@ -10,7 +10,7 @@ ELF文件结构如下图所示，包括ELF文件头 (ELF Header)、段头表 (Pr
 
 * **文件头**：ELF文件头 (ELF FIle Header)，其描述了当前ELF文件的类型（可执行程序、可重定位文件、动态链接文件、core文件等）、32位/64位寻址、ABI、ISA、程序入口地址、Program Header Table起始地址及元素大小、Section Header Table起始地址及元素大小，等等。
 * **段头表**：段头表定义了程序的“**执行时视图**”，描述了如何创建程序的进程映像。每个表项定义了一个“段 (segment)” ，每个段引用了0、1或多个sections。段有类型，如PT_LOAD表示该段引用的sections需要在运行时被加载到内存。段头表主要是为了指导加载器进行加载。
-  举个例子，.text section隶属于一个Type=PT_LOAD的段，意味着会被加载到内存；并且该段的权限为RE（Read+Execute），意味着指令部分加载到内存后，进程对这部分区域的访问权限为“读+可执行”。加载器 (loader /lib64/ld-linux-x86-64.so) 应按照段定义好的虚拟地址范围、权限，将引用的sections加载到进程地址空间中指定位置，并在GDT、LDT中设置好读、写、执行权限。
+  举个例子，.text section隶属于一个Type=PT_LOAD的段，意味着会被加载到内存；并且该段的权限为RE（Read+Execute），意味着指令部分加载到内存后，进程对这部分区域的访问权限为“读+可执行”。加载器 (loader /lib64/ld-linux-x86-64.so) 应按照段定义好的虚拟地址范围、权限，将引用的sections加载到进程地址空间中指定位置，并设置好对应的读、写、执行权限（vm_area_struct.vm_flags)。
 * **节头表**：节头表定义了程序的“**链接时视图**”，描述了二进制可执行文件中包含的每个section的位置、大小、类型、链接顺序，等等，主要目的是为了指导链接器进行链接。
   举个例子，项目包含多个源文件，每个源文件是一个编译单元，每个编译单元最终会生成一个目标文件(*.o)，每个目标文件都是一个ELF文件，都包含自己的sections。链接器是将依赖的目标文件和库文件的相同section进行合并（如所有*.o文件的.text合并到一起），然后将符号引用解析成正确的偏移量或者地址。
 * **Sections**：ELF文件中的sections数据，夹在段头表、节头表之间，由段头表、节头表引用。不同程序中包含的sections数量是不固定的：有些编程语言会有特殊的sections来支持对应的语言运行时层面的功能，如go .gopclntab, gosymtab；程序采用静态链接、动态链接生成的sections也会不同，如动态链接往往会生成.got, .plt, .rel.text。
@@ -46,7 +46,7 @@ type FileHeader struct {
 }
 ```
 
-注意，go标准库FileHeader比man手册中ELF file header少了几个字段，这几个字段解析工程中有用，解析完后就没用了，所以go标准库中没有省略了这几个字段。为了更全面理解文件头各字段的作用，来看下man 手册中的定义：
+注意，go标准库FileHeader比man手册中ELF file header少了几个解析期间有用的字段，为了更全面理解文件头各字段的作用，来看下man 手册中的定义：
 
 ```c
 #define EI_NIDENT 16
@@ -93,11 +93,11 @@ typedef struct {
 - e_phnum: 段头表中的条目数量；
 - e_shentsize: 节头表中每个条目占用的空间大小；
 - e_shnum: 节头表中的条目数量；
-- e_shstrndx: section名在.shstrtab中的索引（.shstrtab[e_shstrndx]就是一个null结束的section名）；
+- e_shstrndx: 存储了节名字的节在节头表中的索引 (可能是.strtab或者.shstrtab)；
 
 > ps：ELF文件头其他字段都比较容易懂，关于.shstrtab，它的数据存储与.strtab雷同，只是它用来存section名 (man手册显示.strtab除了可以存储符号名，也可以存储Section名)。
 >
-> **Section Header String Table (.shstrtab section)**
+> **String Table (.strtab section)**
 >
 > | Index        | +0     | +1     | +2    | +3    | +4     | +5     | +6     | +7    | +8    | +9    |
 > | ------------ | ------ | ------ | ----- | ----- | ------ | ------ | ------ | ----- | ----- | ----- |
@@ -105,11 +105,11 @@ typedef struct {
 > | **10** | `i`  | `a`  | `b` | `l` | `e`  | `\0` | `a`  | `b` | `l` | `e` |
 > | **20** | `\0` | `\0` | `x` | `x` | `\0` | ` ` |        |       |       |       |
 >
-> 假定有上述.shstrtab，那么e_shstrndx=0对应的section name为none，e_shstrndx=1的对应着section name为“name.”，e_shstrndx=7的对应的section name为“Variable”。
+> 假定有上述.strtab，那么idx=0对应的字符串为none，idx=1的对应着字符串为“name.”，idx=7的对应的字符串为“Variable”。对于.shstrtab，它的存储方式与.strtab相同，但是存储的是所有节的名字，而节的名字在.shstrtab中的索引由Elf32/Elf64_Shdr.s_name来指定。
 
 ### 段头表 (Program Header Table)
 
-段头表 (Program Header Table)，可以理解为程序的执行时视图（executable point of view），主要用来指导loader如何加载。从可执行程序角度来看，进程运行时需要了解如何将程序中不同部分，加载到进程虚拟内存地址空间中的不同区域。Linux下进程地址空间的内存布局，大家并不陌生，如data段、text段，每个段包含的信息其实是由段头表预先定义好的，包括在虚拟内存空间中的位置，以及段中应该包含哪些sections数据。
+段头表 (Program Header Table)，可以理解为程序的执行时视图（executable point of view），主要用来指导loader如何加载。从可执行程序角度来看，进程运行时需要了解如何将程序中不同部分，加载到进程虚拟内存地址空间中的不同区域。Linux下进程地址空间的内存布局，大家并不陌生，如data段、text段，每个段包含的信息其实是由段头表预先定义好的，包括在虚拟内存空间中的位置，以及段中应该包含哪些sections数据，以及它们的读写执行权限。
 
 #### 类型定义
 
@@ -142,7 +142,7 @@ typedef struct {
 下面详细解释下，上面两个结构分别是面向32位、64位系统下的结构体，其字段含义如下：
 
 - p_type: 段类型
-  - PT_NULL: 改表想描述了一个undefined的段，可以忽略；
+  - PT_NULL: 该表想描述了一个undefined的段，可以忽略；
   - PT_LOAD: 该表项描述了一个可加载的段；
   - PT_DYNAMIC: 该表项描述了一个动态链接信息；
   - PT_INTERP: 该表项指定了一个interpreter的路径；
@@ -374,7 +374,7 @@ ELF文件会包含很多的sections，前面给出的测试实例中就包含了
 - .symtab：符号表，每个可重定位文件都有一个符号表，存放程序中定义的全局函数和全局变量的信息，注意它不包含局部变量信息，局部非静态变量由栈来管理，它们对链接器符号解析、重定位没有帮助。
 - .debug_*: 调试信息，调试器读取该信息以支持符号级调试（如gcc -g生成，go build默认生成）；
 - .strtab：字符串表，包括.symtab和.[z]debug_*节引用的字符串值、section名；
-- .rel.text：一个.text section中位置及符号列表，当链接器尝试把这个目标文件和其他文件链接时，需要对符号进行解析、重定位成正确的地址；
+- .rel.text：一个.text section中引用的位置及符号列表，当链接器尝试把这个目标文件和其他文件链接时，需要对其中符号进行解析、重定位成正确的地址；
 - .rel.data：引用的一些全局变量的位置及符号列表，和.rel.text有些类似，也需要符号解析、重定位成正确的地址；
 
 如果您想了解更多支持的sections及其作用，可以查看man手册：`man 5 elf`，这里我们就不一一列举了。
