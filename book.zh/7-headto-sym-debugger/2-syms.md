@@ -39,7 +39,7 @@ type LSym struct {
 }
 ```
 
-这些LSym符号信息，从源码视角来看，其实就是编译器处理过程中识别到的各类pkg.name（如变量、常量、类型、别名、值、定义位置、指令数据），这里的符号如果类型为`symbol.Type=SDWARFXXX`，表示这是一个调试符号，linker要识别并处理。
+这些LSym符号信息，从源码视角来看，其实就是编译器处理过程中识别到的各类pkg.name（如变量、常量、类型、别名、值、定义位置、指令数据），这里的符号如果类型为 `symbol.Type=SDWARFXXX`，表示这是一个调试符号，linker要识别并处理。
 
 **go链接器的具体工作：**
 
@@ -50,7 +50,7 @@ type LSym struct {
 - 生成DWARF调试信息，
 - 生成最终的可执行程序或者共享库，
 
-OK，这里我们就先不发散太多……前面编译器将LSym列表写入到目标文件之后，Linker就需要读取出来，利用它完成符号解析、重定位相关的工作，一些跨编译单元的导出函数会被最终输出到.symtab符号表中为将来再次链接备用。另外，对那些`LSym.Type=SDWARFXXX`的符号，linker需要根据DWARF标准与调试器开发者的约定，生成对应的DWARF DIE描述信息写入到.debug_* sections中，方便后续调试器读取。
+OK，这里我们就先不发散太多……前面编译器将LSym列表写入到目标文件之后，Linker就需要读取出来，利用它完成符号解析、重定位相关的工作，一些跨编译单元的导出函数会被最终输出到.symtab符号表中为将来再次链接备用。另外，对那些 `LSym.Type=SDWARFXXX`的符号，linker需要根据DWARF标准与调试器开发者的约定，生成对应的DWARF DIE描述信息写入到.debug_* sections中，方便后续调试器读取。
 
 > go团队设计实现的时候为了更好地进行优化，并没有直接使用ELF格式作为目标文件的格式，而是采用了一种借鉴自plan9目标文件格式的自定义格式。因此go tool compile生成的目标文件，是没法像gcc编译生成的目标文件一样被readelf、nm、objdump等之类的工具直接读取的。尽管go团队并没有公开详细的文档来描述这种目标文件格式，但是go编译工具链提供了go tool nm, go tool objdump等工具来查看这些目标文件中的数据。
 
@@ -67,15 +67,15 @@ OK，前面介绍了编译器、链接器之间的协作，最终在可执行程
 关于符号表，每个可重定位模块都有一张自己的符号表：
 
 - \*.o文件，包含一个符号表.symtab；
-- \*.a文件，它是个竞态共享库文件，其中可能包含多个\*.o文件，并且每个\*.o文件都独立保留了其自身的符号表(.symtab)。静态链接的时候会拿对应的\*.o文件出来进行链接，链接时符号表会进行合并；
-- \*.so文件，包含动态符号表.dynsym，所有合并入这个\*.so文件的\*.o文件的符号表信息合并成了这个.dynsym，\*.so文件中不像静态库那样还存在独立的\*.o文件了。链接器将这些\*.o文件合成\*.so文件时，Merging, Not Inclusion；
+- \*.a文件，它是个静态共享库文件，其中可能包含多个\*.o文件，并且每个\*.o文件都独立保留了其自身的符号表(.symtab)。静态链接的时候会拿对应的\*.o文件出来进行链接，链接时符号表会进行合并；
+- \*.so文件，包含动态符号表.dynsym，所有合并入这个\*.so文件的\*.o文件的符号表信息合并成了这个.dynsym，\*.so文件中不像静态库那样还存在独立的\*.o文件了。链接器将这些\*.o文件合成\*.so文件时，Merging Not Inclusion；
 - 其他不常见的可重定位文件类型，不继续展开；
 
 2）符号symbol，符号表.symtab中的每一个表项都描述了一个符号，符号的名字最终记录在字符串表.strtab中。符号除了有名字还有一些其他属性，下面继续介绍。
 
 3）字符串表.strtab和.shstrtab 存储的是字符串信息，.shstrtab和.strtab 首尾各有1-byte '\0'，其他数据就是 '\0' 结尾的c_string。区别只是，.strtab可以用来存储符号、节的名字，而.shstrtab仅存储节的名字。
 
-如果深究设计实现的话，就是go编译器在编译过程中构建了AST，它知道源码中任意一个符号package.name的相关信息。在此基础上它记录了一个LSym列表，并输出到了目标文件中进一步交给链接器处理。链接器读取并处理后会针对调试类型的LSym生成DWARF调试信息，DWARF调试信息我们将在第八章介绍，其他用于符号解析、重定位后的一些全局符号被记录到最终可执行程序或者共享库的.symtab中，用于后续链接过程。这个.symtab就是一系列 `debug/elf.Sym32/debug/elf.Sym32/64`，而 `debug/elf.Symbol`是解析成功之后更容易使用的方式，比如符号名已经从Sym32/64中的字符串索引值转换为了string类型。
+如果深究设计实现的话，就是go编译器在编译过程中构建了AST，它知道源码中任意一个符号package.name的相关信息。在此基础上它记录了一个LSym列表，并输出到了目标文件中进一步交给链接器处理。链接器读取并处理后会针对调试类型的LSym生成DWARF调试信息，DWARF调试信息我们将在第八章介绍，其他用于符号解析、重定位后的一些全局符号被记录到最终可执行程序或者共享库的.symtab中，用于后续链接过程。这个.symtab就是一系列 `debug/elf.Sym32 or Sym64`，而 `debug/elf.Symbol`是解析成功之后更容易使用的方式，比如符号名已经从Sym32/64中的字符串索引值转换为了string类型。
 
 ### 认识符号
 
@@ -203,13 +203,7 @@ type Symbol struct {
 
 大家看完了符号的类型定义后，肯定产生了很多联想，“变量名对应的symbol应该是什么样”，“函数名对应的symbol应该是什么样”，“常量名呢……”，OK，我们接下来就会结合具体示例，给大家展示下程序中的不同程序构造对应的符号是什么样子的。
 
-##### readelf -S `prog`
-
-##### 查看符号的依赖图
-
-代码示例如下，其中的包名main、函数名main.main、导入的外部包名fmt、引用的外部函数fmt.Println，这些都属于符号的范畴。
-
-**file: main.go**
+代码示例如下，**file: main.go**
 
 ```go
 package main
@@ -221,12 +215,38 @@ func main() {
 }
 ```
 
-> “vim-go”算不算符号？其本身是一个只读数据，存储在.rodata section中，其本身算不上符号，但可以被符号引用，比如定义一个全局变量 `var s = "vim-go"` 则变量s有对应的符号，其符号名称为s，变量值引用自.rodata中的vim-go。
->
-> ps：可以通过 `readelf --hex-dump .rodata | grep vim-go`来验证。
->
-> 上述示例中其实会生成一个临时变量，该临时变量的值为"vim_go"，要想查看符号依赖图，可以通过 `go tool link --dumpdep main.o | grep main.main`验证，或者 `go build -ldflags "--dumpdep" main.go | grep main.main` 也可以。
->
+#### 列出所有的符号
+
+`readelf -s <prog>`，可以显示出程序prog中的所有符号列表，举个例子：
+
+```bash
+$ readelf -s main
+
+Symbol table '.symtab' contains 1991 entries:
+   Num:    Value          Size Type    Bind   Vis      Ndx Name
+     0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND 
+     1: 0000000000000000     0 FILE    LOCAL  DEFAULT  ABS go.go
+     2: 0000000000401000     0 FUNC    LOCAL  DEFAULT    1 runtime.text
+     3: 0000000000402d00   557 FUNC    LOCAL  DEFAULT    1 cmpbody
+     4: 0000000000402f50   339 FUNC    LOCAL  DEFAULT    1 memeqbody
+     5: 0000000000403100   297 FUNC    LOCAL  DEFAULT    1 indexbytebody
+     6: 000000000045f5c0    64 FUNC    LOCAL  DEFAULT    1 gogo
+     7: 000000000045f600    43 FUNC    LOCAL  DEFAULT    1 callRet
+     8: 000000000045f640    47 FUNC    LOCAL  DEFAULT    1 gosave_systemsta[...]
+     9: 000000000045f680    13 FUNC    LOCAL  DEFAULT    1 setg_gcc
+    10: 000000000045f690  1380 FUNC    LOCAL  DEFAULT    1 aeshashbody
+    11: 000000000045fc00   205 FUNC    LOCAL  DEFAULT    1 gcWriteBarrier
+        ...
+```
+
+#### 查看符号的依赖图
+
+示例中的包名main、函数名main.main、导入的外部包名fmt、引用的外部函数fmt.Println，这些都属于符号的范畴。
+
+“vim-go”算不算符号？其本身是一个只读数据，存储在.rodata section中，其本身算不上符号，但可以被符号引用，比如定义一个全局变量 `var s = "vim-go"` 则变量s有对应的符号，其符号名称为s，变量值引用自.rodata中的vim-go。
+
+我们可以通过 `readelf --hex-dump .rodata | grep vim-go`来验证。上述示例中其实会生成一个临时变量，该临时变量的值为"vim_go"，要想查看符号依赖图，可以通过 `go tool link --dumpdep main.o | grep main.main`验证，或者 `go build -ldflags "--dumpdep" main.go | grep main.main` 也可以。
+
 > ```bash
 > $ go build -ldflags "--dumpdep" main.go 2>&1 | grep main.main
 >
@@ -239,24 +259,12 @@ func main() {
 > main..stmp_0 -> go.string."vim-go"
 > main.main.stkobj -> type.[1]interface {}
 > ```
->
-> 可以看到生成了一个临时变量main..stmp_0，它引用了go.string."vim-go"，并作为fmt.Println的参数。
 
-##### 查看符号表&符号
+可以看到生成了一个临时变量main..stmp_0，它引用了go.string."vim-go"，并作为fmt.Println的参数。
 
-示例代码如下，来介绍下如何快速查看符号&符号表信息：
+#### 查看符号表&符号
 
-**file: main.go**
-
-```go
-package main
-
-import "fmt"
-
-func main() {
-	fmt.Println("vim-go")
-}
-```
+示例代码不变，来介绍下如何快速查看符号&符号表信息：
 
 `go build -o main main.go` 编译成完整程序，然后可通过readelf、nm、objdump等分析程序main包含的符号列表，虽然我们的示例代码很简单，但是由于go运行时非常庞大，会引入非常多的符号。
 
@@ -441,7 +449,7 @@ ldd -r seasonsvr
 - 什么是符号&符号表；
 - 符号表&符号是如何生成的？
 - 如何读取符号&符号表；
-- 如何快速查看目标文件中的符号&符号表；
+- 如何快速查看目标文件中的符号列表&符号依赖关系；
 - 如何完成链接生成可执行程序；
 
 至此，相信大家已经对符号&符号表有了比较清晰的认识，我们可以继续后续内容了。
