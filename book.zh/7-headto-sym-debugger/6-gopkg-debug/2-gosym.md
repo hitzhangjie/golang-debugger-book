@@ -8,52 +8,50 @@ package debug/gosym中的相关重要数据结构，如下图所示：
 
 ![gopkg debug/gosym](assets/1c07e57ff316dda1.png)
 
-关于go定制的.gosymtab、.gopclntab相关的符号信息设计，可以参考 [Go 1.2 Runtime Symbol Information](Go 1.2 Runtime Symbol Information, Russ Cox, https://docs.google.com/document/d/1lyPIbmsYbXnpNj57a261hgOYVpNRcgydurVQIyZOz_o/pub)，整体来看，比较重要的就是“**Table**”这个数据结构，注意到它有几个非常实用的导出方法，我们可以用来**在指令地址与源文件位置之前进行快速的转换**，借此可以实现一个调用栈追踪的能力。.gosymtab、.gopclntab的主要目的也是在此。
+关于go定制的.gosymtab、.gopclntab相关的符号信息设计，可以参考 [Go 1.2 Runtime Symbol Information](https://docs.google.com/document/d/1lyPIbmsYbXnpNj57a261hgOYVpNRcgydurVQIyZOz_o/pub)，整体来看，比较重要的就是“**Table**”这个数据结构，注意到它有几个非常实用的导出方法，我们可以用来**在指令地址与源文件位置之前进行快速的转换**，借此可以在运行时回溯调用栈Caller PC值的基础上，查询这个表，就可以实现一个获得当前的调用栈。.gosymtab、.gopclntab的主要目的也是在此。
 
 ### go定制的sections
 
-ELF文件中符号表信息一般会存储在`.symtab` section中，go程序有点特殊在go1.2及之前的版本有一个特殊的.gosymtab，其中存储了接近plan9风格的符号表结构信息，但是在go1.3之后，.gosymtab不再包含任何符号信息。
+ELF文件中符号表信息一般会存储在 `.symtab` section中，go程序有点特殊在go1.2及之前的版本有一个特殊的.gosymtab，其中存储了接近plan9风格的符号表结构信息，但是在go1.3之后，.gosymtab不再包含任何符号信息。
 
-另外，ELF文件存储调试用的行号表、调用栈信息，如果是DWARF调试信息格式的话，一版是存储在.[z]debug_line、.[z]debug_frame中。go程序比较特殊，为了使程序在运行时可以可靠地跟踪调用栈，go编译工具链生成了一个名为`.gopclntab`的section，其中保存了go程序的行号表信息。
+另外，ELF文件存储调试用的行号表、调用栈信息，如果是DWARF调试信息格式的话，一版是存储在.[z]debug_line、.[z]debug_frame中。go程序比较特殊，为了使程序在运行时可以可靠地跟踪调用栈，go编译工具链生成了一个名为 `.gopclntab`的section，其中保存了go程序的行号表信息。
 
 那么，go为什么不使用.[z]debug_line、.[z]debug_frame sections呢？为什么要独立添加一个.gosymtab、.gopclntab呢？这几个sections有什么区别呢？
 
 - 我们确定的是.[z]debug_前缀开头的sections中包含的是调试信息，是给调试器等使用的，.gosymtab、.gopclntab则是给go运行时使用的。
-
 - go程序执行时，其运行时部分会加载.gosymtab、.gopclntab的数据到进程内存中，用来执行栈跟踪（stack tracebacks），比如runtime.Callers。但是.symtab、.[z]debug_\* sections并没有被加载到内存中，它是由外部调试器来读取并加载的，如gdb、delve。
-    ```bash
-    $ readelf -l <prog>
-    
-    Program Headers:
-      Type           Offset             VirtAddr           PhysAddr
-                     FileSiz            MemSiz              Flags  Align
-      PHDR           ...
-      NOTE           ...
-      LOAD           ...// 02 .note.go.builid
-      LOAD           ...// 03 .rodata ... .gosymtab .gopclntab
-      LOAD           ...// 04 .go.buildinfo ...
-      GNU_STACK      ...
-      LOOS+5041580   ...
-    
-     Section to Segment mapping:
-      Segment Sections...
-       00     
-       01     .note.go.buildid 
-       02     .text .note.go.buildid 
-       03     .rodata .typelink .itablink .gosymtab .gopclntab 
-       04     .go.buildinfo .noptrdata .data .bss .noptrbss 
-       05     
-       06 
-    
-    ```
 
-  对一个构建好的go程序执行命令`readelf -l <prog>`我们可以看到段索引02、03、04位LOAD类型表示是要加载到内存中的，这个段对应的sections也显示包含.gosymtab、.gopclntab但是不包含.[z]debug_\*相关的sections。
-  
+  ```bash
+  $ readelf -l <prog>
+
+  Program Headers:
+    Type           Offset             VirtAddr           PhysAddr
+                   FileSiz            MemSiz              Flags  Align
+    PHDR           ...
+    NOTE           ...
+    LOAD           ...// 02 .note.go.builid
+    LOAD           ...// 03 .rodata ... .gosymtab .gopclntab
+    LOAD           ...// 04 .go.buildinfo ...
+    GNU_STACK      ...
+    LOOS+5041580   ...
+
+   Section to Segment mapping:
+    Segment Sections...
+     00   
+     01     .note.go.buildid 
+     02     .text .note.go.buildid 
+     03     .rodata .typelink .itablink .gosymtab .gopclntab 
+     04     .go.buildinfo .noptrdata .data .bss .noptrbss 
+     05   
+     06 
+
+  ```
+
+  对一个构建好的go程序执行命令 `readelf -l <prog>`我们可以看到段索引02、03、04位LOAD类型表示是要加载到内存中的，这个段对应的sections也显示包含.gosymtab、.gopclntab但是不包含.[z]debug_\*相关的sections。
+
   这既符合常见编程语言、工具链的惯例，也是为了更高效地在指令地址、源码行之间做转换，后面会介绍go是如何做转换的。
 
-可能会有疑问，为什么go程序不直接利用.symtab、.[z]debug_\* sections呢，这几个sections中的数据结合起来也足以实现栈跟踪？
-
-目前我了解到的是，DWARF数据的解析、使用应该会更复杂一点，go早期核心开发者很多有Plan9的工作经验，在研发Plan9时就已经有了类似pclntab的尝试，从Plan9的man手册中可以查看到相关的信息。
+其实，go早期的核心开发者，它们多出自Bell实验室，很多有Plan9的工作经验，在研发Plan9时就已经有了类似pclntab的尝试，从Plan9的man手册中可以查看到相关的信息。
 
 **Plan9's man a.out**
 
@@ -86,19 +84,19 @@ DESCRIPTION
 
 go程序的很多核心开发者本身就是Plan9的开发者，go中借鉴Plan9的经验也就不足为奇了，早期pclntab的存储结构与plan9下程序的pclntab很接近，但是现在已经差别很大了，可以参考go1.2 pclntab的设计proposal：[Go 1.2 Runtime Symbol Information](https://docs.google.com/document/d/1lyPIbmsYbXnpNj57a261hgOYVpNRcgydurVQIyZOz_o/pub)。
 
-> 注：另外提一下，cgo程序中，似乎是没有.gosymtab、.gopclntab的。
+> 注：另外提一下，程序中涉及到cgo的部分，是没有办法通过.gosymtab、.gopclntab的方式来跟踪其调用栈的。
 
 通过package `debug/gosym`可以构建出pcln table，通过其方法PcToLine、LineToPc等，可以帮助我们快速查询指令地址与源文件中位置的关系，也可以通过它来进一步分析调用栈，如程序panic时我们希望打印调用栈来定位出错的位置。
 
-我理解，**对调用栈信息的支持才是.gosymtab、.gopclntab所主要解决的问题**，go1.3之后调用栈数据应该是完全由.gopclntab支持了，所以.gosymtab也就为空了。和调试器需要的.[z]debug_line、.[z]debug_frame等在设计目的上有着很大区别，其中.[z]debug_frame不仅可以追踪调用栈信息，也可以追踪每一个栈帧中的寄存器数据的变化，其数据编码、解析、运算逻辑也更加复杂。
+**对调用栈信息的支持才是.gosymtab、.gopclntab所主要解决的问题**，go1.3之后调用栈数据应该是完全由.gopclntab支持了，所以.gosymtab也就为空了。和调试器需要的.[z]debug_line、.[z]debug_frame等在设计目的上有着很大区别，其中.[z]debug_frame不仅可以追踪调用栈信息，也可以追踪每一个栈帧中的寄存器数据的变化，其数据编码、解析、运算逻辑也更加复杂。
 
 那.gosymtab、.gopclntab能否用于调试器呢？也不能说完全没用，只是这里面的数据相对DWARF调试信息来说，缺失了一些调试需要的信息，我们还是需要用到DWARF才能完整解决调试场景中的问题。
 
-现在我们应该清楚package debug/gosym以及对应.gosymtab、.gopclntab sections的用途了，也应该清楚与.symtab以及调试相关的.[z]debug_\*这些sections的区别了。 
+现在我们应该清楚package debug/gosym以及对应.gosymtab、.gopclntab sections的用途了，也应该清楚与.symtab以及调试相关的.[z]debug_\*这些sections的区别了。
 
 ### 常用操作及示例
 
-这是我们的一个测试程序 testdata/loop2.go，我们先展示下其源文件信息，接下来执行`go build -gcflags="all=-N -l" -o loop2 loop2.go`将其编译成可执行程序loop2，后面我们读取loop2并继续做实验。
+这是我们的一个测试程序 testdata/loop2.go，我们先展示下其源文件信息，接下来执行 `go build -gcflags="all=-N -l" -o loop2 loop2.go`将其编译成可执行程序loop2，后面我们读取loop2并继续做实验。
 
 #### PC与源文件互转
 
@@ -129,7 +127,7 @@ go程序的很多核心开发者本身就是Plan9的开发者，go中借鉴Plan9
     22  }
 ```
 
-下面我们通过`debug/gosym`来写个测试程序，目标是实现虚拟内存地址pc和源文件位置、函数之间的转换。
+下面我们通过 `debug/gosym`来写个测试程序，目标是实现虚拟内存地址pc和源文件位置、函数之间的转换。
 
 **main.go：**
 
@@ -153,7 +151,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-    
+  
 	gosymtab, _ := file.Section(".gosymtab").Data()
 	gopclntab, _ := file.Section(".gopclntab").Data()
 
@@ -167,14 +165,14 @@ func main() {
 	} else {
 		fmt.Printf("pc => %#x\tfn => %s\n", pc, fn.Name)
 	}
-    
-	pc, fn, _ = table.LineToPC("/root/debugger101/testdata/loop2.go", 9)
+  
+	pc, fn, _ = table.LineToPC("/path-to/testdata/loop2.go", 9)
 	fmt.Printf("pc => %#x\tfn => %s\n", pc, fn.Name)
-    
-	pc, fn, _ = table.LineToPC("/root/debugger101/testdata/loop2.go", 11)
+  
+	pc, fn, _ = table.LineToPC("/path-to/testdata/loop2.go", 11)
 	fmt.Printf("pc => %#x\tfn => %s\n", pc, fn.Name)
-    
-	pc, fn, _ = table.LineToPC("/root/debugger101/testdata/loop2.go", 17)
+  
+	pc, fn, _ = table.LineToPC("/path-to/testdata/loop2.go", 17)
 	fmt.Printf("pc => %#x\tfn => %s\n", pc, fn.Name)
 
     // here 0x4b86cf is hardcoded, it's the address of loop2.go:9
@@ -183,7 +181,7 @@ func main() {
 }
 ````
 
-运行测试`go run main.go ../testdata/loop2`，注意以上程序中指定源文件时使用了绝对路径，我们将得到如下输出：
+运行测试 `go run main.go ../testdata/loop2`，注意以上程序中指定源文件时使用了绝对路径，我们将得到如下输出：
 
 ```bash
 $ go run main.go ../testdata/loop2
@@ -233,7 +231,7 @@ go程序除了通过error来传播错误，还有一种方式是通过panic来�
 22  }
 ```
 
-运行`go run main.go`进行测试：
+运行 `go run main.go`进行测试：
 
 ```bash
 $ go run main.go
@@ -287,7 +285,7 @@ main.main()
 - 返回地址绝大多数情况下都是返回到caller对应的函数调用中（除非尾递归优化不返回，但是go编译器不支持尾递归优化，所以忽略），将这个返回地址作为pc，去gosym.Table中找对应的函数定义，这样就确定了一个caller；
 - 重复上述过程即可，直到符合栈跟踪的深度要求。
 
-go标准库`runtime/debug.PrintStack()`就是这么实现的，只是它考虑的更周全，比如打印所有goroutine调用栈需要STW，调用栈信息过大可能超出goroutine栈上限，所以会先切到systemstack再生成调用栈信息，会考虑对gc的影响，等等。
+go标准库 `runtime/debug.PrintStack()`就是这么实现的，只是它考虑的更周全，比如打印所有goroutine的调用栈时需要STW，调用栈信息过大可能超出goroutine栈上限，所以会先切到systemstack再生成调用栈信息，会考虑对gc的影响，等等。
 
 ##### 调试器利用.gopclntab+FDE实现栈跟踪
 
@@ -298,9 +296,8 @@ go标准库`runtime/debug.PrintStack()`就是这么实现的，只是它考虑�
 **研究delve源码发现，在[go-delve/delve@913153e7](https://sourcegraph.com/github.com/go-delve/delve@913153e7ffb62512ccdf850bc37bf3abd3aecc2b/-/blob/pkg/proc/stack.go?subtree=true#L115)及之前的版本中是借助gosym.Table结合DWARF FDE实现的**：
 
 - dlv首先利用DWARF .debug_frame section来构建FDE列表；
-
-- dlv获得tracee的pc值，然后遍历FDE列表，找到FDE地址范围覆盖pc的FDE，这个FDE就是对应的函数栈帧了；
-- 然后再找caller，此时dlv再获取bp值，再计算出返回地址位置，再读取返回地址，然后再去遍历FDE列表找地址范围覆盖这个返回地址的FDE，这个FDE对应的就是caller；
+- dlv获得tracee的pc值，然后遍历FDE列表，找到FDE地址范围覆盖pc的FDE，这个FDE就是pc对应的函数栈帧了；
+- 然后再找caller，此时dlv再获取bp值，再计算出返回地址位置，再从该位置读取返回地址，然后再去遍历FDE列表找地址范围覆盖这个返回地址的FDE，这个FDE对应的就是caller；
 - 重复以上过程即可，直到符合栈跟踪深度要求；
 
 **找caller-callee关系，dlv就是按上述过程处理的，至于callee当前pc以及caller调用当前函数处的pc，这些虚拟内存地址对应的函数名、源文件位置信息，还是通过gosym.Table来转换实现的。**
@@ -317,10 +314,10 @@ Author: aarzilli <alessandro.arzilli@gmail.com>
 Date:   Fri Sep 1 15:30:45 2017 +0200
 
 	proc: replace all uses of gosymtab/gopclntab with uses of debug_line
-    
+  
     gosymtab and gopclntab only contain informations about go code, linked
     C code isn't there, we should use debug_line instead to also cover C.
-    
+  
     Updates #935
 ```
 
@@ -335,12 +332,7 @@ ok，这里大家应该明白实现原理了，我们将在下一章调试器开
 ### 参考内容
 
 1. How to Fool Analysis Tools, https://tuanlinh.gitbook.io/ctf/golang-function-name-obfuscation-how-to-fool-analysis-tools
-
 2. Go 1.2 Runtime Symbol Information, Russ Cox, https://docs.google.com/document/d/1lyPIbmsYbXnpNj57a261hgOYVpNRcgydurVQIyZOz_o/pub
-
 3. Some notes on the structure of Go Binaries, https://utcc.utoronto.ca/~cks/space/blog/programming/GoBinaryStructureNotes
-
 4. Buiding a better Go Linker, Austin Clements, https://docs.google.com/document/d/1D13QhciikbdLtaI67U6Ble5d_1nsI4befEd6_k1z91U/view
-
-
-5.  Time for Some Function Recovery, https://www.mdeditor.tw/pl/2DRS/zh-hk
+5. Time for Some Function Recovery, https://www.mdeditor.tw/pl/2DRS/zh-hk
