@@ -41,6 +41,8 @@
     * [7.6.2 debug/gosym](7-headto-sym-debugger/6-gopkg-debug/2-gosym.md)
     * [7.6.3 debug/dwarf](7-headto-sym-debugger/6-gopkg-debug/3-dwarf.md)
   * [7.7 挺进DWARF](7-headto-sym-debugger/7-headto-dwarf/README.md)
+    * [7.7.1 编译器生成DWARF数据](7-headto-sym-debugger/7-headto-dwarf/1-compiler-gen-dwarfdata.md)
+    * [7.7.2 链接器生成DWARF数据](7-headto-sym-debugger/7-headto-dwarf/2-linker-gen-dwarfdata.md)
   * [7.80 编译工具链/compile](7-headto-sym-debugger/80-go-tool-compile.md)
   * [7.81 编译工具链/asm](7-headto-sym-debugger/81-go-tool-asm.md)
   * [7.82 编译工具链/link](7-headto-sym-debugger/82-go-tool-link.md)
