@@ -170,7 +170,7 @@ func gc.Main(...) {
             nextFunc++
             continue
         }
-    
+  
         // The SSA backend supports using multiple goroutines, so keep it
         // as late as possible to maximize how much work we can batch and
         // process concurrently.
@@ -179,7 +179,7 @@ func gc.Main(...) {
             continue
         }
         ...
-    
+  
         // Finalize DWARF inline routine DIEs, then explicitly turn off
         // further DWARF inlining generation to avoid problems with
         // generated method wrappers.
@@ -388,5 +388,112 @@ func (ft *DwarfFixupTable) Finalize(myimportpath string, trace bool) {
             ft.processFixups(slot, s)
         }
     }
+}
+```
+
+### DWARF数据最终记录在哪里了？
+
+OK, 先说结论，实际上是编译器将这些待生成的某个程序构造（类型定义、变量定义、常量定义、函数定义等）都用一个link.LSym来表示，将其符号类型设置为link.LSym.Type=SDWARFXXX类型，并且根据语言设计以及DWARF调试信息标准，根据多方约定好的生成方式（比如与链接器、调试器维护者沟通好），将该程序构造对应的DWARF编码数据写入到link.LSym.P中。
+
+file: cmd/internal/obj/link.go
+
+```go
+// An LSym is the sort of symbol that is written to an object file.
+// It represents Go symbols in a flat pkg+"."+name namespace.
+type LSym struct {
+    Name string
+    Type objabi.SymKind // <= 这里的类型为DWARF符号类型，
+                        //    1) 将来链接器会将其统一生成到.debug_ 相关的sections
+                        //    2) 那是不是所有DWARF信息都是通过LSym记录的呢？
+                        //       可以这么说！链接器负责整合、再加工这些信息，然后生成到.debug_ sections,
+                        //       比如典型的.debug_frames，编译器记录函数相关的LSym，
+                        //       
+    Attribute
+
+    Size   int64
+    Gotype *LSym
+    P      []byte       // <= DWARF编码数据会记录在这里
+    R      []Reloc
+
+    Extra *interface{} // *FuncInfo, *VarInfo, *FileInfo, or *TypeInfo, if present
+
+    Pkg    string
+    PkgIdx int32
+    SymIdx int32
+}
+```
+
+file: cmd/internal/dwarf/dwarf.go
+
+```go
+func (ctxt *Link) DwarfAbstractFunc(curfn Func, s *LSym) {
+    ...
+    if err := dwarf.PutAbstractFunc(dwctxt, &fnstate); err != nil {
+        ctxt.Diag("emitting DWARF for %s failed: %v", s.Name, err)
+    }
+}
+
+// Emit DWARF attributes and child DIEs for an 'abstract' subprogram.
+// The abstract subprogram DIE for a function contains its
+// location-independent attributes (name, type, etc). Other instances
+// of the function (any inlined copy of it, or the single out-of-line
+// 'concrete' instance) will contain a pointer back to this abstract
+// DIE (as a space-saving measure, so that name/type etc doesn't have
+// to be repeated for each inlined copy).
+func PutAbstractFunc(ctxt Context, s *FnState) error {
+    if logDwarf {
+        ctxt.Logf("PutAbstractFunc(%v)\n", s.Absfn)
+    }
+
+    abbrev := DW_ABRV_FUNCTION_ABSTRACT
+    Uleb128put(ctxt, s.Absfn, int64(abbrev))
+    ...
+}
+
+// Uleb128put appends v to s using DWARF's unsigned LEB128 encoding.
+func Uleb128put(ctxt Context, s Sym, v int64) {
+    b := sevenBitU(v)
+    if b == nil {
+        var encbuf [20]byte
+        b = AppendUleb128(encbuf[:0], uint64(v))
+    }
+    ctxt.AddBytes(s, b)
+}
+```
+
+file: cmd/internal/obj/dwarf.go
+
+```go
+// A Context specifies how to add data to a Sym.
+type Context interface {
+    PtrSize() int
+    Size(s Sym) int64
+    AddInt(s Sym, size int, i int64)
+    AddBytes(s Sym, b []byte)
+    AddAddress(s Sym, t interface{}, ofs int64)
+    AddCURelativeAddress(s Sym, t interface{}, ofs int64)
+    AddSectionOffset(s Sym, size int, t interface{}, ofs int64)
+    AddDWARFAddrSectionOffset(s Sym, t interface{}, ofs int64)
+    CurrentOffset(s Sym) int64
+    RecordDclReference(from Sym, to Sym, dclIdx int, inlIndex int)
+    RecordChildDieOffsets(s Sym, vars []*Var, offsets []int32)
+    AddString(s Sym, v string)
+    Logf(format string, args ...interface{})
+}
+
+func (c dwCtxt) AddBytes(s dwarf.Sym, b []byte) {
+    ls := s.(*LSym)
+    ls.WriteBytes(c.Link, ls.Size, b)
+}
+```
+
+file: cmd/internal/obj/data.go
+
+```go
+// WriteBytes writes a slice of bytes into s at offset off.
+func (s *LSym) WriteBytes(ctxt *Link, off int64, b []byte) int64 {
+    s.prepwrite(ctxt, off, len(b))
+    copy(s.P[off:], b)
+    return off + int64(len(b))
 }
 ```

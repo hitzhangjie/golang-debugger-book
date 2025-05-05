@@ -67,7 +67,31 @@ func main() {
 
 > go编译单元是如何产生的，go tool compile \*.go，每个源文件是一个编译单元？每个源文件编译完后对应着一个目标文件？联想下C和C++，每个源文件是一个独立的编译单元，每个源文件对应着一个目标文件。这点上go有些差异，大家在跑下面测试的时候可以看出来。
 >
-> go中更像是按照package来组织的，一个包对应着一个或者几个编译单元，但是不是一个源文件对应着一个编译单元。那在最终编译期间，每个源文件对应着一个\*.o文件，还是每个包呢？I don't care，anyway，它是按照每个文件来组织，还是按照每个包来组织，完全不影响我们最终可执行程序读取，我们不再这些不重要的地方浪费精力。
+> // A CompilationUnit represents a set of source files that are compiled
+> // together. Since all Go sources in a Go package are compiled together,
+> // there's one CompilationUnit per package that represents all Go sources in
+> // that package, plus one for each assembly file.
+> //
+> // Equivalently, there's one CompilationUnit per object file in each Library
+> // loaded by the linker.
+> //
+> // These are used for both DWARF and pclntab generation.
+> type CompilationUnit struct {
+> 	Lib       *Library      		// Our library
+> 	PclnIndex int           	// Index of this CU in pclntab
+> 	PCs       []dwarf.Range 	// PC ranges, relative to Textp[0]
+> 	DWInfo    *dwarf.DWDie  // CU root DIE
+> 	FileTable []string      	// The file table used in this compilation unit.
+>
+>     Consts    LoaderSym   	// Package constants DIEs
+> 	FuncDIEs  []LoaderSym // Function DIE subtrees
+> 	VarDIEs   []LoaderSym 	// Global variable DIEs
+> 	AbsFnDIEs []LoaderSym // Abstract function DIE subtrees
+> 	RangeSyms []LoaderSym // Symbols for debug_range
+> 	Textp     []LoaderSym 	// Text symbols in this CU
+> }
+>
+> go中是按照package来组织的，一个包对应着一个编译单元，如果有汇编文件，每个汇编文件单独作为一个编译单元，每个编译单元对应着一个目标文件。
 
 `rd := dwarf.Data.Reader()`会返回一个reader对象，通过 `rd.Next()`能够让我们遍历ELF文件中所有的DIE，因为所有的编译单元、类型、变量、函数这些都是通过DIE来表示的，我们也就具备了遍历ELF文件中所有编译单元及编译单元中定义的类型、变量、函数的能力。
 
@@ -240,7 +264,7 @@ func parseDwarf(dw *dwarf.Data) error {
 
             cu := &CompileUnit{}
             curCompileUnit = cu
-      
+    
             // record the files contained in this compilation unit
             for _, v := range lrd.Files() {
                 if v == nil {
@@ -377,7 +401,7 @@ func parseDwarf(dw *dwarf.Data) error {}
     ...
     for idx := 0; ; idx++ {
         ...
-    
+  
         if entry.Tag == dwarf.TagCompileUnit {
             lrd, err := dw.LineReader(entry)
             ...
