@@ -30,73 +30,92 @@ SUM:                            34            920            573           6413
 
 也是因此，Go非官方调试器 [go-delve/delve](https://github.com/go-delve/delve) 内部才自己实现了这部分DWARF的生成、解析逻辑，它还自己实现了生成逻辑，一方面与Go编译工具链团队生成的DWARf数据做对比，一方面对Go编译工具链生成DWARF数据描述不够充分的时候，也方便从调试器开发者视角去反馈下此处应该如何生成更好，这样就形成了和Go核心团队的协作、共建。
 
-> ps: 有个小哥自己实现自己的调试器 [ggg](https://github.com/ConradIrwin/ggg) 时也定制化了debug/dwarf，详见：[ConradIrwin/go-dwarf](https://github.com/ConradIrwin/go-dwarf)。这里只是举个定制化 `debug/dwarf`的例子，不代表这个库可用，而且最后更新已经是11年前的事情了。即使要用，也应该优先考虑 `go-delve/delve` 中的实现部分。
+> ps: 有个小哥学习调试器开发时，开发了个demo [ggg](https://github.com/ConradIrwin/ggg) ，当时也定制化了debug/dwarf，详见：[ConradIrwin/go-dwarf](https://github.com/ConradIrwin/go-dwarf)。这里只是举个定制化 `debug/dwarf`的例子，不代表这个库可用，而且最后更新已经是11年前的事情了。即使要用，也应该优先考虑 `go-delve/delve` 中的实现部分。
 
 ### 实现1：Go标准库 debug/dwarf
 
-前面小节我们介绍了go标准库 `debug/* `，这其中就包括了 `debug/dwarf`，它提供了对DWARF调试信息的解析，作为官方实现它提供了底层的API，允许你遍历和检查DWARF数据结构。
+前面小节我们介绍了go标准库 `debug/dwarf`，它提供了对DWARF调试信息的解析，作为官方实现它提供了底层的API，允许你遍历和检查DWARF数据结构。
 
-相对来说，官方库是最基础和可靠的选择。如果需要进行更高级的分析或集成，可能需要基于官方库进行二次开发，再次基础上增加更多的特性、提供更高级的抽象等。我们分析了为什么当前debug/dwarf不太可能是达到“完美”程度的原因，也列举了 `go-delve/delve` 和 `ggg` 的例子。
+相对来说，官方库是最基础和可靠的选择。如果需要进行更高级的分析或集成，可能需要基于官方库进行二次开发，在此基础上增加更多的特性、提供更高级的抽象等。我们分析了为什么当前 `debug/dwarf` 不太可能是达到“完美”程度的原因，也列举了 `go-delve/delve` 和 `ggg` 的例子。
 
-OK，那我们看下 `debug/dwarf` 的支持程度和局限性，前面有提到 `debug/dwarf`只支持部分调试信息的解析，包括：
-
-- .debug_abbrev，描述一些缩写信息，.debug_info section中会引用；
-- .debug_info，描述编译单元、类型、变量、函数；
-
-  > .debug_types section也可以保存类型描述信息，何时需将类型描述放在.debug_types section？
-  >
-  > 有些情况下，一个类型在多个编译单元中出现，可能会造成多个编译单元重复生成类型对应的调试信息，导致二进制文件尺寸偏大，此时可以考虑将该类型的描述从.debug_info section转移到.debug_types section，并利用COMDAT section+链接器对COMDAT groups的处理，可以减少文件尺寸。
-  >
-  > see https://gcc.gnu.org/wiki/DwarfSeparateTypeInfo
-  >
-- .debug_str，描述字符串表，.debug_info section中会引用；
-- .debug_line，描述行号表信息，用于在pc和行号之间映射；
-- .debug_ranges，查询表，用于在pc和编译单元之间映射；
-
-关于标准库debug/dwarf支持读取解析哪些调试信息，这点可以从下面的源码看出来。
-
-**src/debug/elf/file.go**
+OK，那我们看下 `debug/dwarf` 的支持程度和局限性，`debug/dwarf`，以go1.24为例：
+1）支持读取 .debug_ .zdebug_ sections；
+2）如果调试信息开了zlib或者zstd压缩，支持自动解压缩 `debug/elf.(*Section).Data()`；
+3）有些调试信息需要考虑进行重定位操作，支持按需重定位操作 `debug/elf.(*File).applyRelocations(a, b)`；
+4）DWARFv4多个.debug_types，dwarf.Data里面对其section名进行额外的编号，方便定位问题；
+5）所有.debug_ .zdebug_ sections，dwarf.Data里面统一转换为.debug_ sections；
+6) 所有的DWARF sections都会被正常读取！
 
 ```go
 func (f *File) DWARF() (*dwarf.Data, error) {
-    dwarfSuffix := func(s *Section) string {
-        // 去掉.debug_/.zdebug_后的后缀
-    }
-    // sectionData gets the data for s, checks its size, and
-    // applies any applicable relations.
-    sectionData := func(i int, s *Section) ([]byte, error) {
-        // 读取section数据
-        // 如果是zlib压缩数据，则执行对应解压缩
-        // 如果是需要重定位的，则执行重定位操作
-        // 返回处理后section数据
-    }
+    // 获取 .[z]debug_ sections后面的后缀，其他section返回空
+    dwarfSuffix := func(s *Section) string { ... }
+    // 获取 .[z]debug_ sections的数据，并按需解压缩，按需重定位
+    sectionData := func(i int, s *Section) ([]byte, error) { ... }
 
-    // debug/dwarf package当前只支持处理这些sections
+    // DWARFv4 有非常多的.[z]debug_ sections，最开始 debug/dwarf 主要处理下面这些 sections
     var dat = map[string][]byte{"abbrev": nil, "info": nil, "str": nil, "line": nil, "ranges": nil}
     for i, s := range f.Sections {
-      suffix := dwarfSuffix(s)
-      if _, ok := dat[suffix]; !ok {
-        continue
-      }
-      b, err := sectionData(i, s)
-      ...
-      dat[suffix] = b
+        suffix := dwarfSuffix(s)
+        if suffix == "" {
+            continue
+        }
+        if _, ok := dat[suffix]; !ok {
+            continue
+        }
+        b, err := sectionData(i, s)
+        if err != nil {
+            return nil, err
+        }
+        dat[suffix] = b
     }
 
-    // 注意，nil对应的参数，debug/dwarf当前并不支持解析
+    // 创建dwarf.Data，只包含了已经处理的.[z]debug_ sections
     d, err := dwarf.New(dat["abbrev"], nil, nil, dat["info"], dat["line"], nil, dat["ranges"], dat["str"])
-    ...
+    if err != nil {
+        return nil, err
+    }
 
-    // 继续处理，DWARF4 .debug_types sections and DWARF5 sections.
+    // 继续处理 multiple .debug_types sections and other DWARFv4/v5 sections.
     for i, s := range f.Sections {
-    ...
+        if suffix == "" {
+            continue
+        }
+        if _, ok := dat[suffix]; ok {
+            // Already handled.
+            continue
+        }
+
+        b, err := sectionData(i, s)
+        if err != nil {
+            return nil, err
+        }
+
+        // 如果有多个.debug_types sections，dwarf.Data里的section名加上编号，方便定位问题
+        if suffix == "types" {
+            if err := d.AddTypes(fmt.Sprintf("types-%d", i), b); err != nil {
+                return nil, err
+            }
+        } else {
+            // 其他DWARF sections
+            if err := d.AddSection(".debug_"+suffix, b); err != nil {
+                return nil, err
+            }
+        }
     }
 
     return d, nil
 }
 ```
 
-`debug/dwarf` 确实只实现了部分调试信息的读取解析，调试器要能正常调试还依赖其他几个sections的信息的支持，如调用栈信息表 `.debug_frame`、位置列表信息 `.debug_loc`等等，这些信息标准库并没有提供读取解析的能力，需要自己动手编码实现。
+`debug/dwarf` 确实有读取所有的DWARF数据，但是这不够！读取、解析并提供了合适的API后，对我们才真正的有用。调试器要实现常规的调试能力，需要：
+- 支持类型、变量、常量的查看或者修改，需要读取解析.debug_info中的DIEs -- debug/dwarf支持
+- 需要能实现指令地址与源代码位置之间的转换，需要读取解析.debug_line中的行号表 -- debug/dwarf支持
+- 实现调用栈的回溯，需要知道pcsp的关系，需要读取解析.debug_frame中的调用栈信息表 -- debug/dwarf不支持!!!
+  >ps: go runtime是利用了.gopclntab并结合tls.g信息生成调用栈。
+- 其他的sections也没有提供对应的API来操作。
+
+总的来说，就是 debug/dwarf 完成了DWARF数据的读取、解压缩、重定位，但是并没有提供全面完整的API覆盖，我们想读取不同类型的DWARF信息时就比较棘手。这也意味着，要实现调试器里面需要的各种DWARF数据的查询操作，我们要自己实现。
 
 ### 实现2：Go工具链 cmd/internal/dwarf
 
