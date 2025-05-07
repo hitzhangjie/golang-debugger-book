@@ -407,7 +407,7 @@ type LSym struct {
                         //    2) 那是不是所有DWARF信息都是通过LSym记录的呢？
                         //       可以这么说！链接器负责整合、再加工这些信息，然后生成到.debug_ sections,
                         //       比如典型的.debug_frames，编译器记录函数相关的LSym，
-                        //       
+                        //     
     Attribute
 
     Size   int64
