@@ -48,7 +48,7 @@
     * [7.7.5 可以了解DWARF了](7-headto-sym-debugger/7-headto-dwarf/5-headto-dwarf.md)
 * [8 调试信息标准: DWARF](8-dwarf/README.md)
   * [8.1 发展历史](8-dwarf/1-history.md)
-  * [8.2 DWARF结构](8-dwarf/2-structure.md)
+  * [8.2 关键数据结构](8-dwarf/2-datastructure.md)
   * [8.3 调试信息条目：DIE](8-dwarf/3-die-readme.md)
     * [8.3.1 DIE介绍](8-dwarf/3-die-intro.md)
     * [8.3.2 DIE描述数据和类型](8-dwarf/3-die-desc-datatype.md)
