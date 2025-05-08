@@ -1,9 +1,9 @@
 ![DWARF Logo](assets/dwarf_logo.gif)
 
-**DWARF** 是一种广泛使用的调试信息格式，DWARF的设计初衷是配合ELF格式使用，不过DWARF与具体的文件格式是没有依赖关系的。DWARF这个词是中世纪幻想小说中的用语，也没有什么官方含义，后来才提出 “**Debugging With Attributed Record Formats**” 这个术语来作为DWARF的另一种定义。
+**DWARF** 是一种广泛使用的调试信息格式。最初设计用于配合 ELF 格式，但它与具体文件格式并不绑定。“DWARF” 一词源于中世纪幻想小说，本身没有官方含义。后来，人们提出了“**Debugging With Attributed Record Formats**”作为 DWARF 调试信息的另一种定义。
 
-DWARF使用**DIE（Debugging Information Entry）**来描述变量、数据类型、代码等，DIE中包含了**标签（Tag）**和**一系列属性（Attributes）**。
+DWARF 使用 **DIE (Debugging Information Entry)** 来描述变量、数据类型和代码。每个 DIE 包含 **标签 (Tag)** 和 **一系列属性 (Attributes)**。
 
-DWARF还定义了一些关键的数据结构，如**行号表（Line Number Table)**、**调用栈信息（Call Frame Information）**等，有了这些关键数据结构之后，开发者就可以在源码级别动态添加断点、显示当前PC对应的源码位置、显示完整的调用栈信息、查看调用栈中指定栈帧的信息。
+DWARF 还定义了关键数据结构，如 **行号表 (Line Number Table)** 和 **调用栈信息 (Call Frame Information)**。这些结构使得开发者能够在源码级别动态添加断点、显示当前 PC 对应的源码位置、显示完整的调用栈信息，并查看调用栈中指定栈帧的信息。
 
-在DWARF标准中可以了解到很多精妙绝伦的设计，如果你对高级语言的符号级调试感兴趣，就一定不要错过本章节内容。
+DWARF 标准包含许多精妙的设计。如果你对高级语言的符号级调试感兴趣，强烈建议学习本章内容。
