@@ -37,3 +37,13 @@ DIEs之间建立了Siblings、Children这两个不同维度上的引用关系，
 ### 本文小结
 
 本文简单介绍了DWARF调试信息中我们打交道最多的几类数据，DIE是对不同程序构造的描述，而行号表、调用栈信息表则是对程序执行时静态视图、动态视图的一种体现。OK，接下来，将先介绍如何使用DIE对不同程序构造进行描述。
+
+### 参考文献
+
+1. DWARF, https://en.wikipedia.org/wiki/DWARF
+2. DWARFv1, https://dwarfstd.org/doc/dwarf_1_1_0.pdf
+3. DWARFv2, https://dwarfstd.org/doc/dwarf-2.0.0.pdf
+4. DWARFv3, https://dwarfstd.org/doc/Dwarf3.pdf
+5. DWARFv4, https://dwarfstd.org/doc/DWARF4.pdf
+6. DWARFv5, https://dwarfstd.org/doc/DWARF5.pdf
+
