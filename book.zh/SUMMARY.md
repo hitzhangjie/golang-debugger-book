@@ -51,7 +51,7 @@
   * [8.2 关键数据结构](8-dwarf/2-datastructure.md)
   * [8.3 调试信息条目：DIE](8-dwarf/3-die/README.md)
     * [8.3.1 DIE详细介绍](8-dwarf/3-die/1-introduction.md)
-    * [8.3.2 DIE描述数据和类型](8-dwarf/3-die/2-desc-datatype.md)
+    * [8.3.2 DIE描述数据和类型](8-dwarf/3-die/2-desc-data-type.md)
     * [8.3.3 DIE描述可执行代码](8-dwarf/3-die/3-desc-code.md)
     * [8.3.4 DIE数据编码](8-dwarf/3-die/4-encoding.md)
   * [8.4 其他调试数据](8-dwarf/4-other-readme.md)
