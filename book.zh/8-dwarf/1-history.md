@@ -42,6 +42,10 @@ DWARF委员会的意见是，从DWARF v2或v3迁移到更高版本应该是简�
 
 DWARF也是现在go语言工具链使用的调试信息格式，截止到go1.12.10，当前采用的版本是DWARF v4。在C++中，某些编译器如gcc已经开始应用了部分DWARF v5的特性，go语言也有这方面的讨论，如果对此感兴趣，可以关注go语言issue：: https://github.com/golang/go/issues/26379.
 
+### DWARF v6 working draft (2023/12)
+
+目前DWARF v4应用应该是最多的，有些语言在慢慢向DWARF v5看齐，尽管如此，DWARF v6标准已经在路上了。由于当前还处于草案阶段，我们先不予以介绍。
+
 ### 参考文献
 
 1. DWARF, https://en.wikipedia.org/wiki/DWARF
@@ -50,3 +54,5 @@ DWARF也是现在go语言工具链使用的调试信息格式，截止到go1.12.
 4. DWARFv3, https://dwarfstd.org/doc/Dwarf3.pdf
 5. DWARFv4, https://dwarfstd.org/doc/DWARF4.pdf
 6. DWARFv5, https://dwarfstd.org/doc/DWARF5.pdf
+7. DWARFv6 draft, https://dwarfstd.org/languages-v6.html
+8. Introduction to the DWARF Debugging Format, https://dwarfstd.org/doc/Debugging-using-DWARF-2012.pdf
