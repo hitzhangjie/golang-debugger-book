@@ -22,8 +22,8 @@ var gcArchSizes = map[string]*gcSizes{
 }
 
 type gcSizes struct {
-	WordSize int64 // word size in bytes - must be >= 4 (32bits)
-	MaxAlign int64 // maximum alignment in bytes - must be >= 1
+    WordSize int64 // word size in bytes - must be >= 4 (32bits)
+    MaxAlign int64 // maximum alignment in bytes - must be >= 1
 }
 ```
 
@@ -102,8 +102,8 @@ $ cat main.go
 package main
 
 func main() {
-        var nums [16]int
-        _ = nums
+    var nums [16]int
+    _ = nums
 }
 ```
 
@@ -131,22 +131,22 @@ $ cat main.go
 package main
 
 type Student struct {
-        Name   string
-        Age    int
-        Sex    int
-        Grades map[string]float32
+    Name   string
+    Age    int
+    Sex    int
+    Grades map[string]float32
 }
 
 type CollegeStudent struct {
-        Student
-        Clubs []string
+    Student
+    Clubs []string
 }
 
 func main() {
-        var s1 Student
-        var s2 CollegeStudent
-        _ = s1
-        _ = s2
+    var s1 Student
+    var s2 CollegeStudent
+    _ = s1
+    _ = s2
 }
 ```
 
@@ -173,10 +173,10 @@ func main() {
 package main
 
 func main() {
-        var a string = "helloworld"
-        var b int = 100
-        _ = a
-        _ = b
+    var a string = "helloworld"
+    var b int = 100
+    _ = a
+    _ = b
 }
 ```
 
@@ -188,136 +188,20 @@ func main() {
 package main
 
 func main() {
-        var a string = "helloworld"
-        var b int = 100
+    var a string = "helloworld"
+    var b int = 100
+    _ = a
+    _ = b
+    {
+        var a string = "helloworld2"
         _ = a
-        _ = b
-        {
-                var a string = "helloworld2"
-                _ = a
-        }
+    }
 }
 ```
 
 然后我们再来可视化生成的DIE信息，看下有什么不同，我们注意到作用域的表示是通过 `DW_TAG_lexical_block` 来实现的：
 
 <img alt="dwarf_desc_variable" src="assets/dwarf_desc_variable_scopes.png" width="720px">
-
-### 位置数据
-
-DWARF提供了一种非常通用的机制描述如何确定变量在内存中的实际位置，就是通过属性**DW_AT_location**，该属性允许指定一个操作序列，来告知调试器如何确定变量的地址。
-
-下面是一个示例，展示如何使用属性DW_AT_location来定位变量的地址，注意变量可以定义在寄存器中、内存中（堆中、栈中、全局存储区），对应的寻址规则也有差异。
-
-![img](assets/clip_image006.png)
-
-Figure 7这个示例中：
-
-- 变量b定义在寄存器中， `DW_AT_location = (DW_OP_reg0)`，直接存储在reg0对应的寄存器中；
-- 变量c存储在栈上，`DW_AT_location = (DW_OP_fbreg: -12)`，EA=fbreg-12；
-- 变量a存储在固定地址（.data section中），`DW_AT_location = (DW_OP_addr: 0)`，存储在.data端开头；
-
-调试信息必须为调试器提供一种方法，使其能够查找程序变量的位置、确定动态数组和字符串的范围，以及能找到函数栈帧的基地址或函数返回地址的方法。 此外，为了满足最新的计算机体系结构和优化技术的需求，调试信息必须能够描述对象的位置，还需要注意的是，该对象的位置可能会在对象的生命周期内发生变化（如Java GC时会在内存中迁移对象，而Go是非移动式GC）。
-
-通过location来描述程序中某个对象的位置信息，位置描述可以分为两类：
-
-- **位置表达式（Location expressions）**，是与语言无关的寻址规则表示形式，它是由一些基本构建块、操作序列组合而成的任意复杂度的寻址规则。 只要对象的生命周期是静态的（static）或与拥有它的词法块相同，并且在整个生命周期内都不会移动，它们就足以描述任何对象的位置。
-- **位置列表（Location lists）**，用于描述生命周期有限的对象或在整个生命周期内可能会更改位置的对象。
-
-#### 位置表达式
-
-位置表达式由0或者多个位置操作组成。位置操作可以划分为两种类型，寄存器名 和 地址操作，下面分别介绍。如果没有位置运算表达式，则表示该对象在源代码中存在，但在目标代码中不存在，如构建期间被编译器给优化掉了。
-
-##### 寄存器名
-
-寄存器名，始终是单独出现的，并指示所引用的对象包含在特定寄存器中。请注意，寄存器号是DWARF中特定的数字到给定体系结构的实际寄存器的映射。`DW_OP_reg${n} (0<=n<=31)` 操作编码了32个寄存器, 该对象地址在寄存器n中. `DW_OP_regx` 操作有一个无符号LEB128编码的操作数，该操作数代表寄存器号。
-
-##### 地址操作
-
-地址操作是存储器地址计算规则。 所有位置操作都被编码为操作码流，每个操作码后跟零个或多个操作数。 操作数的数量由操作码决定。
-
-每个寻址操作都表示**栈架构机器上的后缀操作**。
-
-- 栈上每个元素，是一个目标机器上的地址的值；
-- 执行位置表达式之后，栈顶元素的值就是计算结果（对象的地址，或者数组长度，或者字符串长度）。
-
-对于结构体成员地址的计算，在执行位置表达式之前，需要先将包含该成员的结构体的起始地址push到栈上。
-
-**位置表达式中的地址计算方式，主要包括如下几种：**
-
-1. **寄存器寻址**
-
-   寄存器寻址方式， 计算目标寄存器中的值与指定偏移量的和，结果push到栈上：
-
-   - DW_OP_fbreg \$offset, 计算栈基址寄存器 (rbp)中的值 与 偏移量 $offset的和；
-   - DW_OP_breg\${n} \${offset}, 计算编号n的寄存器中的值 与 偏移量$offset（LEB128编码）的和；
-   - DW_OP_bregx \${n} \${offset}, 计算编号n（LEB128编码）的寄存器中的值 与 偏移量 $offset（LEB128编码）的和；
-2. **栈操作**
-
-   以下操作执行后都会push一个值到addressing stack上：
-
-   - DW_OP_lit\${n} (0<=n<=31), 编码一个无符号字面量值\${n}；
-   - DW_OP_addr, 编码一个与目标机器匹配的机器地址；
-   - DW_OP_const1u/1s/2u/2s/4u/4s/8u/8s, 编码一个1/2/4/8 字节 无符号 or 有符号整数；
-   - DW_OP_constu/s, 编码一个 LEB128 无符号 or 有符号整数.
-
-   以下操作会操作location stack，栈顶索引值为0：
-
-   - DW_OP_dup, duplicates the top stack entry and pushes.
-   - DW_OP_drop, pops the value at the top of stack.
-   - DW_OP_pick, picks the stack entry specified by 1-byte ${index} and pushes.
-   - DW_OP_over, duplicate the stack entry with index 2 and pushes.
-   - DW_OP_swap, swap two stack entries, which are specified by two operands.
-   - DW_OP_rot, rotate the top 3 stack entries.
-   - DW_OP_deref, pops the value at the top of stack as address and retrieves data from that address, then pushes the data whose size is the size of address on target machine.
-   - DW_OP_deref_size, similar to DW_OP_deref, plus when retrieveing data from address, bytes that’ll be read is specified by 1-byte operand, the read data will be zero-extended to match the size of address on target machine.
-   - DW_OP_xderef & DW_OP_xderef_size, similar to DW_OP_deref, plus extended dereference mechanism. When dereferencing, the top stack entry is popped as address, the second top stack entry is popped as an address space identifier. Do some calculation to get the address and retrieve data from it, then push the data to the stack.
-3. **算术和逻辑运算**
-
-   DW_OP_abs, DW_OP_and, DW_OP_div, DW_OP_minus, DW_OP_mod, DW_OP_mul, DW_OP_neg, DW_OP_not, DW_OP_or, DW_OP_plus, DW_OP_plus_uconst, DW_OP_shl, DW_OP_shr, DW_OP_shra, DW_OP_xor, 这些操作工作方式类似，都是从栈里面pop操作数然后计算，并将结果push到栈上。
-4. **控制流操作**
-
-   以下操作提供对位置表达式流程的简单控制：
-
-   - 关系运算符，这六个运算符分别弹出顶部的两个堆栈元素，并将顶部的第一个与第二个条目进行比较，如果结果为true，则push值1；如果结果为false，则push值0；
-   - DW_OP_skip，无条件分支，其操作数是一个2字节常量，表示要从当前位置表达式跳过的位置表达式的字节数，从2字节常量之后开始；
-   - DW_OP_bra，条件分支，此操作从栈上pop一个元素，如果弹出的值不为零，则跳过一些字节以跳转到位置表达式。 要跳过的字节数由其操作数指定，该操作数是一个2字节的常量，表示从当前定位表达式开始要跳过的位置表达式的字节数（从2字节常量开始）；
-5. **特殊操作**
-
-   DWARF v2中有两种特殊的操作（DWARF v4中是否有新增，暂时先不关注）：
-
-   - DW_OP_piece, 许多编译器将单个变量存储在一组寄存器中，或者部分存储在寄存器中，部分存储在内存中。 DW_OP_piece提供了一种描述特定地址位置所指向变量的哪一部分、该部分有多大的方式；
-   - DW_OP_nop, 它是一个占位符，它对位置堆栈或其任何值都没有影响；
-
-##### 操作示例
-
-上面提到的寻址操作都是些常规描述，下面是一些示例。
-
-- 栈操作示例
-
-![img](assets/clip_image007.png)
-
-- 位置表达式示例
-
-  以下是一些有关如何使用位置运算来形成位置表达式的示例。
-
-  ![img](assets/clip_image008.png)
-
-#### 位置列表
-
-如果一个对象的位置在其生命周期内可能会发生改变，就可以使用位置列表代替位置表达式来描述其位置。位置列表包含在单独的目标文件部分 **.debug_loc** 中。
-
-一个对象的位置列表的位置，是由.debug_loc中该对象位置列表的起始字节相对于.debug_loc起始位置的偏移量来指示的。
-
-位置列表中的每一项包括:
-
-- 起始地址，相对于引用此位置列表的编译单元的基址，它标记该位置有效的地址范围的起始位置；
-- 结束地址，它还是相对于引用此位置列表的编译单元的基址而言的，它标记了该位置有效的地址范围的结尾；
-- 一个位置表达式，它描述对象在起始地址和结束地址指定的范围内的位置；
-
-位置列表以一个特殊的list entry标识列表的结束，该list entry中的起始地址、结束地址都是0，并且没有位置描述。
-
-> DWARF v5会将.debug_loc和.debug_ranges替换为.debug_loclists和.debug_rnglists，从而实现更紧凑的数据表示，并消除重定位。
 
 ### 了解更多
 
@@ -328,3 +212,28 @@ Figure 7这个示例中：
 - Virtuality of Declarations, C++提供了虚函数、纯虚函数支持，可以通过指定属性 DW_AT_virtuality 来实现, 可取值 DW_VIRTUALITY_none, DW_VIRTUALITY_virtual, DW_VIRTUALITY_pure_virtual；
 - Artificial Entries, 编译器可能希望为那些不是在程序源码中声明的对象或类型添加调试信息条目，举个例子，C++中类成员函数（非静态成员），每个形式参数都有一个形参描述条目，此外还需要多加一个描述隐式传递的this指针；
 - Declaration coordinates, 每个描述对象、模块、函数或者类型的DIE（调试信息条目）都会有下面几个属性 DW_AT_decl_file、DW_AT_decl_line、DW_AT_decl_column，这几个属性描述了声明在源文件中出现的位置；
+
+### 本文总结
+
+本文介绍了DWARF中如何描述数据和数据类型。主要内容包括:
+
+- DWARF通过基本类型的组合来构建复杂的数据类型,以适应不同编程语言和平台的需求；
+- 使用DW_TAG_base_type及其属性来描述基本数据类型,包括类型名称、编码方式、大小等信息；
+- 使用DW_AT_type属性来引用使用到的类型DIE；
+- 使用DW_AT_byte_size, DW_AT_bit_size, DW_AT_bit_offset来表示分配的字节数、实际使用的bits数以及偏移量；
+- 变量的作用域通过DW_TAG_lexical_block来表示,可以准确描述不同作用域中的同名变量；
+- 通过DW_AT_location属性来描述变量的位置信息,它存储了一个位置表达式而不是直接的地址值；
+
+这种灵活的类型描述机制使得DWARF能够精确地表达各种编程语言中的数据类型，并支持调试器正确地访问和显示变量信息。同时通过位置表达式和作用域的描述,也能准确地定位和区分变量。下一节我们将详细介绍下DW_AT_location位置信息是如何设计的。
+
+### 参考文献
+
+1. DWARF, https://en.wikipedia.org/wiki/DWARF
+2. DWARFv1, https://dwarfstd.org/doc/dwarf_1_1_0.pdf
+3. DWARFv2, https://dwarfstd.org/doc/dwarf-2.0.0.pdf
+4. DWARFv3, https://dwarfstd.org/doc/Dwarf3.pdf
+5. DWARFv4, https://dwarfstd.org/doc/DWARF4.pdf
+6. DWARFv5, https://dwarfstd.org/doc/DWARF5.pdf
+7. DWARFv6 draft, https://dwarfstd.org/languages-v6.html
+8. Introduction to the DWARF Debugging Format, https://dwarfstd.org/doc/Debugging-using-DWARF-2012.pdf
+9. dwarfviewer, https://github.com/hitzhangjie/dwarfviewer
