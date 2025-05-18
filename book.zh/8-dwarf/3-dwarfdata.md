@@ -9,13 +9,11 @@ DWARF (Debugging With Attributed Record Formats) 使用一系列数据结构来�
 DWARF 使用 **调试信息条目 (DIE, Debugging Information Entry)** 来表示程序中的各种构造，例如变量、常量、类型、函数、编译单元等。每个 DIE 包含以下关键元素：
 
 - **Tag:** 一个标识符（例如 `DW_TAG_variable`，`DW_TAG_pointer_type`，`DW_TAG_subprogram`），指示DIE代表的程序构造的类型。 这些tag定义了DIE的语义。
-
 - **Attributes:** 键值对，提供关于DIE的额外信息。例如，一个变量的DIE可能会有 `name`（变量名）, `type` (变量类型), `location` (变量在内存中的位置) 等属性。
 
 #### DIEs之间的关系
 
 - **Children:** DIE可以包含其他DIE作为其子节点。这些子节点构成了树形的层级结构，用于描述复杂的程序构造。 例如，一个编译单元中包含了定义的函数，而每一个函数又包含了函数参数、返回值以及其局部变量。Children DIEs在存储上紧跟在parent DIE之后，读取Children DIEs直到遇到一个null DIE对象表示结束。
-
 - **Siblings**: DIE之间的引用还可以通过属性实现。例如，一个描述变量的DIE需要有属性指明其数据类型，即属性 `DW_AT_type`，它指向1个描述数据类型的DIE。这种层级关系允许DWARF描述复杂的类型和作用域结构。
 
 DIEs之间建立了Children、Siblings这两个不同维度上的引用关系，实际上形成了一个巨大的树，为了减少存储时的存储占用，也设计了一些编码方式来应对。

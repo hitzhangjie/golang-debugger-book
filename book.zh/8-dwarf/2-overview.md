@@ -8,11 +8,7 @@ DWARF 遵循这种模型，它的调试信息条目（DIE) 本身也是块结构
 
 DWARF DIE可以以统一的方式进行扩展（比如扩展DIE的Tags、Attributes），以便调试器可以识别并忽略扩展，即使它可能不理解其含义。但这比大多数其他调试格式遇到不认识的数据时直接报致命错误要好多了。DWARF 的设计宗旨也是为了通过扩展来支持更多编程语言、更多特性，并且不受限于特定的架构、大小端限制。
 
-除了上述DIE数据（.debug_info）以外，DWARF数据中还有一类数据也很重要，如行号表（.debug_line）、调用栈信息表 (.debug_frame)、宏信息 (.debug_macro)、加速访问表信息 (.debug_pubnames, .debug_pubtype,.debug_pubranges)等等。
-
-这些信息都存储在.debug_前缀的sections中，它们之间的引用关系入下图 (DWARFv4 Appendix B) 所示，大家先有个直观的认识。注意DWARF v5有些变化，比如.debug_types废弃，.debug_pubnames, .debug_pubtypes 使用 .debug_names代替等，但是Go从1.12开始主要使用的是DWARF v4，所以从v4到v5的变化，我们了解即可。
-
-<img alt="dwarfv4-sections" src="assets/dwarfv4-sections.jpg" width="480px"/>
+除了上述DIE数据（.debug_info）以外，DWARF数据中还有一类数据也很重要，如行号表（.debug_line）、调用栈信息表 (.debug_frame)、宏信息 (.debug_macro)、加速访问表信息 (.debug_pubnames, .debug_pubtype,.debug_pubranges)等等。由于篇幅原因，难以在一个章节里面覆盖DWARF调试信息标准的所有细节，要知道单单DWARF v4内容就有325 pages。要更加深入细致地了解这部分内容，就需要阅读DWARF调试信息标准了。
 
 虽然 DWARF 最初是设计出来用于 ELF 文件格式，但它在设计上支持扩展到其他文件格式。总的来说，现在DWARF是最广泛使用的调试信息格式，这得益于其标准化、完整性和持续演进。它不仅被主流编程语言采用，还在不断改进以适应新的需求。虽然存在其他调试信息格式，但DWARF凭借其优势成为了事实上的标准。
 
