@@ -54,7 +54,7 @@
     * [8.3.1 DIE描述数据和类型](8-dwarf/3-die/1-desc-data-type.md)
     * [8.3.2 位置数据](8-dwarf/3-die/2-desc-locations.md)
     * [8.3.3 DIE描述可执行代码](8-dwarf/3-die/3-desc-code.md)
-    * [8.3.4 DIE数据编码](8-dwarf/3-die/4-data-encoding.md)
+    * [8.3.4 DIE数据编码](8-dwarf/3-die/4-encoding.md)
   * [8.4 其他调试数据](8-dwarf/4-other/README.md)
     * [8.4.1 加速访问](8-dwarf/4-other/1-accelerated-access.md)
     * [8.4.2 行号表信息](8-dwarf/4-other/2-lineno-table.md)
