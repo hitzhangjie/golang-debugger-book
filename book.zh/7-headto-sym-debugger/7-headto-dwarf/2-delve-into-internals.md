@@ -2,7 +2,7 @@
 
 本章节开头我们介绍了 `go build` 执行期间实际调用的工具列表，DWARF调试信息生成逻辑是由compile、link生成的，本文介绍下编译器compile中生成DWARF调试信息的大致过程。
 
-对于一个相对比较陌生的项目，大家可能会通过走读代码、调试器跟踪执行来大致了解其执行过程：
+对于一个相对比较陌生的项目，大家可能会通过走读代码、调试器跟踪执行来大致了解其执行过程。
 
 ### 走读代码的方式
 
@@ -14,7 +14,7 @@
 path-to/go/src/cmd $ cloc compile/ link/
 
      877 text files.
-     853 unique files.                                          
+     853 unique files.                                        
       34 files ignored.
 
 github.com/AlDanial/cloc v 2.01  T=1.00 s (853.0 files/s, 561112.0 lines/s)
@@ -66,7 +66,6 @@ cd src
 ./make.bash
 ```
 
-
 构建完成后，可以查看构建产物：
 
 ```
@@ -86,6 +85,7 @@ asm        cgo      covdata  dist   doc       link  objdump  pprof  test2json   
 了解我的同学，都知道我是一个喜欢不断打破边界的人，我不喜欢职场中那些搞信息壁垒的做法，我喜欢OpenMinded，包括服务架构中存在的风险，我不喜欢以个人笔记的方式进行管理，我喜欢以issue的方式进行公开讨论。因为我更倾向于相信，如果一个人拥有的信息足够多，他就能够做出越来越合理的决策。对于个人成长，对于团队成长，都是非常棒的。因为我常年浪迹于开源社区，我非常明白Open对于激发一个个优秀的个体的潜力有多大的作用。但是有些人喜欢喜欢偷偷摸摸的干，开小会，问问题只问答案不交代背景，手里资料也“舍不得”公开，负责模块的问题也愿让人知道，这让我不是很喜欢。
 
 当我的领导让我朝着TechLead这个方向努力时，我就开始落地我的一系列理念。
+
 1. 系统问题你不是想藏着掖着吗？OK，那从监控平台拉出主调、被调维度的模调监控数据，建立SLA看板，让每个人名下的每个服务的每个接口的成功率完全暴漏在看板下；
 2. 方案问题你不是想藏着掖着吗？OK，那建立wiki空间，将所有团队的各个子系统的系统设计、里程碑计划、跟进进度，全部给我搬上去；
 3. 你们不是喜欢不暴漏问题、不讨论问题、自己“偷偷”修改代码吗？OK，那精细化管理项目组成员的代码push、merge权限，代码提交必须关联--story|--bug|--task等需求、问题、任务信息，否则拒绝push。
@@ -109,7 +109,7 @@ y
 add arg rule at 47cc40: {Type:1 Reg:0 Size:8 Length:1 Offsets:[0 0 0 0 0 0 0 0] Deference:[1 0 0 0 0 0 0 0]}
 add arg rule at 47cc40: {Type:1 Reg:0 Size:8 Length:1 Offsets:[8 0 0 0 0 0 0 0] Deference:[0 0 0 0 0 0 0 0]}
 add arg rule at 47cc40: {Type:1 Reg:0 Size:8 Length:1 Offsets:[16 0 0 0 0 0 0 0] Deference:[0 0 0 0 0 0 0 0]}
-INFO[0002] start tracing                                
+INFO[0002] start tracing                              
 
 ...
 
@@ -134,7 +134,7 @@ INFO[0002] start tracing
 
 >>> press `Ctrl+C` to quit.
 
-INFO[0007] start detaching                              
+INFO[0007] start detaching                            
 detaching 16/16
 ```
 
@@ -145,6 +145,7 @@ detaching 16/16
 哈哈哈，现在 LLM 也是一个非常好的办法，“hi，请给我解释下这段代码”。确实，我现在也经常使用这种方法，而且通常都有非常正向的帮助。
 
 这些是我日常经常使用的一些AI产品和大模型：
+
 - Website: claude.ai / you.com / chatgpt.com / gemini.google.com / sourcegraph.com
 - App: 腾讯元宝 / 豆包 / kimi / gemini
 - LLM: claude / gpt-4o / qwen2.5 / gemma3 / deepseek / hunyuan
@@ -161,5 +162,3 @@ detaching 16/16
 有可能读者最初是想了解下调试器开发，但是读到这几个小节，因为我们用不少篇幅介绍了go编译工具链，大家可能也想去了解下go编译工具链、go运行时、go标准库的设计实现。作者当然理解一个喜欢钻研技术的同学有多么想穷尽所有细节，我理解，所以我分享了在我过去类似工作学习中认为还不错的掌握中大型工程“细节”的一些方法，如果你真的有这个必要。不同于业务代码中的一些相对简单的CRUD逻辑，不是看看文档、PPT、听别人口述个大概就可以说OK的，有些项目讲究的就是一个“精确”“严谨”，我非常欣赏那些愿意投入个人时间在这些枯燥的细节上稳扎稳打的技术人。你们在这些地方的投入，最终会不断丰满你们的羽翼，让你们飞的更高。
 
 ps: 我说的更高，并不是世俗上认为的成功，而是一种“超越”。
-
-
