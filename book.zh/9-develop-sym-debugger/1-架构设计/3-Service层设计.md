@@ -110,24 +110,26 @@ func Pipe() (Conn, Conn) {
 
 ### 有哪些RPC要支持
 
-概要设计中我们列出了要支持的系列调试命令，这些调试命令背后对被调试进程施加的操作不同，但是有些也会有共同之处。这里我们要梳理每个调试器命令（调试器前端支持），都对应着调试器后端的哪些能力（以json-rpc服务接口形式暴露），调试器前端实现某个调试器命令的功能时，就需要通过请求调试器后端的一个或者多个接口来完成调试动作。
+前端UI层设计中我们列出了一些调试命令，包括启动调试的一些子命令 `attach exec debug trace ...`，还有一些调试会话中的交互式命令 `breakpoint continue step print ...`。这些调试命令执行时，调试器前端会调用对应的调试器后端的1个API接口或者多个相关的API接口，来请求调试器后端完成响应处理。
 
-下面是调试器前端Service层Client接口定义，其中描述了我们需要支持的RPC接口列表：
+以下Client接口定义，体现了调试器需要暴露给客户端调用的一些方法，每个Client接口方法都是一个方法调用约定，对应的有调试器后端的实现、调试器前端的桩代码调用。调试器前端接收并执行某个调试命令时，调用client的1个或者多个方法，并结合一些前端的计算、转换、展示，最终实现该调试命令。
 
 ```go
 // Client represents a client of a debugger service. All client methods are synchronous.
 type Client interface {
-	// ProcessPid Returns the pid of the process we are debugging.
+	// ProcessPid returns the pid of the process we are debugging.
 	ProcessPid() int
 
-	// LastModified returns the time that the process' executable was modified.
-	LastModified() time.Time
+	// BuildID returns the BuildID of the process' executable we are debugging.
+	BuildID() string
 
 	// Detach detaches the debugger, optionally killing the process.
 	Detach(killProcess bool) error
 
-	// Restarts program. Set true if you want to rebuild the process we are debugging.
+	// Restart restarts program. Set true if you want to rebuild the process we are debugging.
 	Restart(rebuild bool) ([]api.DiscardedBreakpoint, error)
+	// RestartFrom restarts program from the specified position.
+	RestartFrom(rerecord bool, pos string, resetArgs bool, newArgs []string, newRedirects [3]string, rebuild bool) ([]api.DiscardedBreakpoint, error)
 
 	// GetState returns the current debugger state.
 	GetState() (*api.DebuggerState, error)
@@ -136,23 +138,33 @@ type Client interface {
 
 	// Continue resumes process execution.
 	Continue() <-chan *api.DebuggerState
-	// DirectionCongruentContinue resumes process execution, if a next, step or stepout operation is in progress it will resume execution.
+	// Rewind resumes process execution backwards.
+	Rewind() <-chan *api.DebuggerState
+	// DirectionCongruentContinue resumes process execution, if a reverse next, step or stepout operation is in progress it will resume execution backward.
 	DirectionCongruentContinue() <-chan *api.DebuggerState
 	// Next continues to the next source line, not entering function calls.
 	Next() (*api.DebuggerState, error)
+	// ReverseNext continues backward to the previous line of source code, not entering function calls.
+	ReverseNext() (*api.DebuggerState, error)
 	// Step continues to the next source line, entering function calls.
 	Step() (*api.DebuggerState, error)
+	// ReverseStep continues backward to the previous line of source code, entering function calls.
+	ReverseStep() (*api.DebuggerState, error)
 	// StepOut continues to the return address of the current function.
 	StepOut() (*api.DebuggerState, error)
+	// ReverseStepOut continues backward to the caller of the current function.
+	ReverseStepOut() (*api.DebuggerState, error)
 	// Call resumes process execution while making a function call.
-	Call(goroutineID int, expr string, unsafe bool) (*api.DebuggerState, error)
+	Call(goroutineID int64, expr string, unsafe bool) (*api.DebuggerState, error)
 
-	// SingleStep will step a single cpu instruction.
-	StepInstruction() (*api.DebuggerState, error)
+	// StepInstruction will step a single cpu instruction.
+	StepInstruction(skipCalls bool) (*api.DebuggerState, error)
+	// ReverseStepInstruction will reverse step a single cpu instruction.
+	ReverseStepInstruction(skipCalls bool) (*api.DebuggerState, error)
 	// SwitchThread switches the current thread context.
 	SwitchThread(threadID int) (*api.DebuggerState, error)
 	// SwitchGoroutine switches the current goroutine (and the current thread as well)
-	SwitchGoroutine(goroutineID int) (*api.DebuggerState, error)
+	SwitchGoroutine(goroutineID int64) (*api.DebuggerState, error)
 	// Halt suspends the process.
 	Halt() (*api.DebuggerState, error)
 
@@ -162,6 +174,8 @@ type Client interface {
 	GetBreakpointByName(name string) (*api.Breakpoint, error)
 	// CreateBreakpoint creates a new breakpoint.
 	CreateBreakpoint(*api.Breakpoint) (*api.Breakpoint, error)
+	// CreateBreakpointWithExpr creates a new breakpoint and sets an expression to restore it after it is disabled.
+	CreateBreakpointWithExpr(*api.Breakpoint, string, [][2]string, bool) (*api.Breakpoint, error)
 	// CreateWatchpoint creates a new watchpoint.
 	CreateWatchpoint(api.EvalScope, string, api.WatchType) (*api.Breakpoint, error)
 	// ListBreakpoints gets all breakpoints.
@@ -174,10 +188,10 @@ type Client interface {
 	ToggleBreakpoint(id int) (*api.Breakpoint, error)
 	// ToggleBreakpointByName toggles on or off a breakpoint by name.
 	ToggleBreakpointByName(name string) (*api.Breakpoint, error)
-	// Allows user to update an existing breakpoint for example to change the information
+	// AmendBreakpoint allows user to update an existing breakpoint for example to change the information
 	// retrieved when the breakpoint is hit or to change, add or remove the break condition
 	AmendBreakpoint(*api.Breakpoint) error
-	// Cancels a Next or Step call that was interrupted by a manual stop or by another breakpoint
+	// CancelNext cancels a Next or Step call that was interrupted by a manual stop or by another breakpoint
 	CancelNext() error
 
 	// ListThreads lists all threads.
@@ -196,10 +210,12 @@ type Client interface {
 	// ListSources lists all source files in the process matching filter.
 	ListSources(filter string) ([]string, error)
 	// ListFunctions lists all functions in the process matching filter.
-	ListFunctions(filter string) ([]string, error)
+	ListFunctions(filter string, tracefollow int) ([]string, error)
 	// ListTypes lists all types in the process matching filter.
 	ListTypes(filter string) ([]string, error)
-	// ListLocals lists all local variables in scope.
+	// ListPackagesBuildInfo lists all packages in the process matching filter.
+	ListPackagesBuildInfo(filter string, includeFiles bool) ([]api.PackageBuildInfo, error)
+	// ListLocalVariables lists all local variables in scope.
 	ListLocalVariables(scope api.EvalScope, cfg api.LoadConfig) ([]api.Variable, error)
 	// ListFunctionArgs lists all arguments to the current function.
 	ListFunctionArgs(scope api.EvalScope, cfg api.LoadConfig) ([]api.Variable, error)
@@ -211,18 +227,18 @@ type Client interface {
 	// ListGoroutines lists all goroutines.
 	ListGoroutines(start, count int) ([]*api.Goroutine, int, error)
 	// ListGoroutinesWithFilter lists goroutines matching the filters
-	ListGoroutinesWithFilter(start, count int, filters []api.ListGoroutinesFilter, group *api.GoroutineGroupingOptions) ([]*api.Goroutine, []api.GoroutineGroup, int, bool, error)
+	ListGoroutinesWithFilter(start, count int, filters []api.ListGoroutinesFilter, group *api.GoroutineGroupingOptions, scope *api.EvalScope) ([]*api.Goroutine, []api.GoroutineGroup, int, bool, error)
 
-	// Returns stacktrace
-	Stacktrace(goroutineID int, depth int, opts api.StacktraceOptions, cfg *api.LoadConfig) ([]api.Stackframe, error)
+	// Stacktrace returns stacktrace
+	Stacktrace(goroutineID int64, depth int, opts api.StacktraceOptions, cfg *api.LoadConfig) ([]api.Stackframe, error)
 
-	// Returns ancestor stacktraces
-	Ancestors(goroutineID int, numAncestors int, depth int) ([]api.Ancestor, error)
+	// Ancestors returns ancestor stacktraces
+	Ancestors(goroutineID int64, numAncestors int, depth int) ([]api.Ancestor, error)
 
-	// Returns whether we attached to a running process or not
+	// AttachedToExistingProcess returns whether we attached to a running process or not
 	AttachedToExistingProcess() bool
 
-	// Returns concrete location information described by a location expression
+	// FindLocation returns concrete location information described by a location expression
 	// loc ::= <filename>:<line> | <function>[:<line>] | /<regex>/ | (+|-)<offset> | <line> | *<address>
 	// * <filename> can be the full path of a file or just a suffix
 	// * <function> ::= <package>.<receiver type>.<name> | <package>.(*<receiver type>).<name> | <receiver type>.<name> | <package>.<name> | (*<receiver type>).<name> | <name>
@@ -234,20 +250,28 @@ type Client interface {
 	// * *<address> returns the location corresponding to the specified address
 	// NOTE: this function does not actually set breakpoints.
 	// If findInstruction is true FindLocation will only return locations that correspond to instructions.
-	FindLocation(scope api.EvalScope, loc string, findInstruction bool, substitutePathRules [][2]string) ([]api.Location, error)
+	FindLocation(scope api.EvalScope, loc string, findInstruction bool, substitutePathRules [][2]string) ([]api.Location, string, error)
 
-	// Disassemble code between startPC and endPC
+	// DisassembleRange disassemble code between startPC and endPC
 	DisassembleRange(scope api.EvalScope, startPC, endPC uint64, flavour api.AssemblyFlavour) (api.AsmInstructions, error)
-	// Disassemble code of the function containing PC
+	// DisassemblePC disassemble code of the function containing PC
 	DisassemblePC(scope api.EvalScope, pc uint64, flavour api.AssemblyFlavour) (api.AsmInstructions, error)
+
+	// Recorded returns true if the target is a recording.
+	Recorded() bool
+	// TraceDirectory returns the path to the trace directory for a recording.
+	TraceDirectory() (string, error)
+	// Checkpoint sets a checkpoint at the current position.
+	Checkpoint(where string) (checkpointID int, err error)
+	// ListCheckpoints gets all checkpoints.
+	ListCheckpoints() ([]api.Checkpoint, error)
+	// ClearCheckpoint removes a checkpoint
+	ClearCheckpoint(id int) error
 
 	// SetReturnValuesLoadConfig sets the load configuration for return values.
 	SetReturnValuesLoadConfig(*api.LoadConfig)
 
-	// FunctionReturnLocations return locations when function `fnName` returns
-	FunctionReturnLocations(fnName string) ([]uint64, error)
-
-	// IsMulticlien returns true if the headless instance is multiclient.
+	// IsMulticlient returns true if the headless instance is multiclient.
 	IsMulticlient() bool
 
 	// ListDynamicLibraries returns a list of loaded dynamic libraries.
@@ -258,6 +282,9 @@ type Client interface {
 	// This function will return an error if it reads less than `length` bytes.
 	ExamineMemory(address uint64, length int) ([]byte, bool, error)
 
+	// StopRecording stops a recording if one is in progress.
+	StopRecording() error
+
 	// CoreDumpStart starts creating a core dump to the specified file
 	CoreDumpStart(dest string) (api.DumpState, error)
 	// CoreDumpWait waits for the core dump to finish, or for the specified amount of milliseconds
@@ -265,19 +292,36 @@ type Client interface {
 	// CoreDumpCancel cancels a core dump in progress
 	CoreDumpCancel() error
 
+	// ListTargets returns the list of connected targets
+	ListTargets() ([]api.Target, error)
+	// FollowExec enables or disables the follow exec mode. In follow exec mode
+	// Delve will automatically debug child processes launched by the target
+	// process
+	FollowExec(bool, string) error
+	FollowExecEnabled() bool
+
 	// Disconnect closes the connection to the server without sending a Detach request first.
 	// If cont is true a continue command will be sent instead.
 	Disconnect(cont bool) error
 
-	// CallAPI allows calling an arbitrary rpcv2 method (used by starlark bindings)
+	// SetDebugInfoDirectories sets directories used to search for debug symbols
+	SetDebugInfoDirectories([]string) error
+
+	// GetDebugInfoDirectories returns the list of directories used to search for debug symbols
+	GetDebugInfoDirectories() ([]string, error)
+
+	// GuessSubstitutePath tries to guess a substitute-path configuration for the client
+	GuessSubstitutePath() ([][2]string, error)
+
+	// CallAPI allows calling an arbitrary rpc method (used by starlark bindings)
 	CallAPI(method string, args, reply interface{}) error
 }
 ```
 
-您现在开始感到了惊讶，怎么需要这么多接口？如果我们是做个玩具，那它会相对来说比较简单；如果我们是做个工程，要想能达到可用水准，它一定会变得很复杂。作者当然想尽可能简单地叙述完，但是那样很明显是在应付读者，但我不想那样 :)
+您现在开始感到了惊讶，怎么需要这么多接口？如果我们是做个玩具，那它会相对来说比较简单；如果我们是做个达到可用水准的工具，它就没那么简单了。上述接口 `go-delve/delve` 都已经实现，在我们的demo调试器中，由于篇幅原因，我们只会讲述哪些最核心的接口的实现，其他的接口读者可以自行实现，或者参考下delve的实现。
 
 ### 本节小结
 
 本节介绍了调试器前后端分离式架构下Service层的设计，包括了远程调试、本地调试时的的详细设计说明，最后也给出了我们要支持的RPC接口列表，换言之我们接下来的任务就是围绕着在前后端去实现这些RPC接口列表。
 
->ps: 与调试器进行交互，除了通过调试器前端显示输入调试命令，还需要一些更友好的方式，比如希望将当前调试会话进行保存，后面从这里继续进行调试。或者希望将一个完整的调试过程分享给其他人一起协助定位问题。go-delve/delve 允许用户通过编写starlark脚本的方式来完成这个操作，调试器会话内通过 `source /path-to/your.star` 来自动执行脚本中的调试操作，这个是非常方便的。starlark脚本中可以执行dlv预先支持好的一些函数，如 `dlv_command("会话中的调试命令")` 来执行调试命令，最终还是会转换成通过API调用的方式去调用调试器后端中的实现逻辑。作为调试器交互逻辑的补充，这里我们简单提一下，我们后面会对此进行详细介绍。
+> ps: 与调试器进行交互，除了通过调试器前端显示输入调试命令，还需要一些更友好的方式，比如希望将当前调试会话进行保存，后面从这里继续进行调试。或者希望将一个完整的调试过程分享给其他人一起协助定位问题。go-delve/delve 允许用户通过编写starlark脚本的方式来完成这个操作，调试器会话内通过 `source /path-to/your.star` 来自动执行脚本中的调试操作，这个是非常方便的。starlark脚本中可以执行dlv预先支持好的一些函数，如 `dlv_command("会话中的调试命令")` 来执行调试命令，最终还是会转换成通过API调用的方式去调用调试器后端中的实现逻辑。作为调试器交互逻辑的补充，这里我们简单提一下，我们后面会对此进行详细介绍。
