@@ -67,7 +67,7 @@
   * [8.7 本章总结](8-dwarf/7-summary.md)
 * [9 开发go符号级调试器](9-develop-sym-debugger/README.md)
   * [9.1 现代调试器架构](9-develop-sym-debugger/1-现代调试器架构.md)
-  * [9.2 调试器整体设计](9-develop-sym-debugger/2-概要设计/README.md)
+  * [9.2 概要设计](9-develop-sym-debugger/2-概要设计/README.md)
     * [9.2.1 需求分析](9-develop-sym-debugger/2-概要设计/1-需求分析.md)
     * [9.2.2 前端UI层设计](9-develop-sym-debugger/2-概要设计/2-前端UI层设计.md) 
     * [9.2.3 Service层设计](9-develop-sym-debugger/2-概要设计/3-Service层设计.md)
