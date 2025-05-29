@@ -13,7 +13,9 @@
 
 概要设计中提到了远程调试情况下，调试器前后端需要通过网络进行通信，我们采用json-rpc的方式来实现前后端的通讯。远程调试情况下，调试器前后端service层的设计如下。
 
-![service-jsonrpc](assets/service-jsonrpc.png)
+<p align="center">
+<img alt="service-jsonrpc" src="assets/service-jsonrpc.png" />
+</p>
 
 RPC是client/server架构设计中常见的一种通讯模式，它的理念是让client端能够像本地方法调用一样来完成对服务端同名接口处理函数的请求，底层的服务发现、频控、熔断、序列化、编解码、网络通讯等细节全部在桩代码以及更底层的框架中予以解决。
 
@@ -91,7 +93,9 @@ func Pipe() (Conn, Conn) {
 
 所以设计图上来看，通过net.Pipe进行通信，与通过json-rpc通讯时的差异并不是很明显。具体差异主要体现在，它不走网络，也不需要走http协议。这样统一于net.Conn的通信操作，使得我们在编码实现调试器前后端通讯时会更清晰简洁。
 
-![service-pipelistener](assets/service-pipelistener.png)
+<p align="center">
+<img alt="service-pipelistener" src="assets/service-pipelistener.png" />
+</p>
 
 然后，我们需要再考虑下面几个问题，net.Pipe()虽然返回了net.Conn供我们进行全双工通信，但是：
 
