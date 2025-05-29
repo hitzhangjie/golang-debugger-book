@@ -1,11 +1,15 @@
 ## Service层设计
 
-调试器前后端分离式架构，调试器的前端和后端需要通过service层进行通信。调试器调试存在本地调试、远程调试两种类型：
+调试器前后端分离式架构，调试器的前端和后端需要通过service层进行通信。尽管调试器调试存在本地调试、远程调试两种类型，但是从架构设计上来看，后端都是希望以API调用的方式来处理请求、响应。
 
-- 本地调试我们通过实现了net.Listener接口的ListenerPipe来模拟类似TcpListener的Accept建立通信连接的操作，ListenerPipe是在net.Pipe上建立起来的，这样整个service层的通信接口就可以统一用网络层的通信接口来完成；
-- 远程调试我们就可以通过真正的网络通信来完成了，为了简化收包、解包、编解码、序列化的问题，我们可以直接使用go标准库提供的json-rpc实现来完成调试器前后端的网络通信；
+远程调试场景下，前端、后端是以C/S协议请求方式来交互，后端自然是以API调用的方式来提供服务的；对于本地调试场景下，为了实现架构上的优雅统一，此时进程内逻辑会一分为二，一部分是前端逻辑，一部分是后端逻辑，它们之间通过net.Pipe进行协议通信。
 
-### 远程调试：JSON-RPC
+- 远程调试，通过真正的C/S网络通信来完成调试请求发送、处理、响应，为了简化收包、解包、编解码、序列化的问题，我们可以直接使用go标准库提供的JSON-RPC实现来完成调试器前后端的网络通信；
+- 本地调试，在net.Pipe基础上实现一个 `preConnectedListener`，它实现了net.Listener接口，这样可以通过统一的Accept操作来完成前端、后端连接的建立；
+
+这样整个service层的通信接口就可以统一用网络层的通信接口来完成连接建立，进而统一通过API调用的方式来完成请求发送、处理、响应，整体代码处理逻辑就非常优雅，接下来会详细介绍。
+
+### 远程调试：JSON-RPC over network
 
 概要设计中提到了远程调试情况下，调试器前后端需要通过网络进行通信，我们采用json-rpc的方式来实现前后端的通讯。远程调试情况下，调试器前后端service层的设计如下。
 
@@ -19,7 +23,7 @@ RPC是client/server架构设计中常见的一种通讯模式，它的理念是�
 >
 > 作者假定读者朋友已经掌握了RPC相关的知识，因此不会在本书正文部分对相关内容进行大篇幅的介绍。如您对相关内容感兴趣，可以自行从网络上检索相关资料。
 
-### 本地调试：ListenerPipe
+### 本地调试：JSON-RPC over net.Pipe
 
 本地调试时调试器前后端该如何通讯呢？我们熟知的进程间通信手段有很多，比如pipe、fifo、shm等。而在go程序中，goroutines之间通讯广泛采用通信串行处理的思想（Communicating Sequential Processes，简称CSP），即通过chan通信。
 
@@ -93,13 +97,12 @@ func Pipe() (Conn, Conn) {
 
 - 服务端往往是先创建net.Listener然后Accept客户端连接请求才能创建net.Conn；
 
-  我们可以创建一个实现了net.Listener接口的新类型preconnectedListener，其内部保存`net.Pipe() (Conn, Conn)`返回的一个net.Conn，每当调用Accept的时候直接返回该保存的net.Conn即可。
-
+  我们可以创建一个实现了net.Listener接口的新类型preconnectedListener，其内部保存 `net.Pipe() (Conn, Conn)`返回的一个net.Conn，每当调用Accept的时候直接返回该保存的net.Conn即可。
 - 客户端往往是通过net.Dial然后才能创建net.Conn；
 
-​	`net.Pipe() (Conn, Conn)`，其返回的另一个Conn作为client的net.Dial的net.Conn，client就不用net.Dial来创建连接了。
+  `net.Pipe() (Conn, Conn)`，其返回的另一个Conn作为client的net.Dial的net.Conn，client就不用net.Dial来创建连接了。
 
-这样，当本地调试时，我们就不通过`net.Listen(network, address)`而是通过`net.ListenerPipe()`来返回preconnectedListener来作为net.Listener即可。
+这样，当本地调试时，我们就不通过 `net.Listen(network, address)`而是通过 `net.ListenerPipe()`来返回preconnectedListener来作为net.Listener即可。
 
 ### 有哪些RPC要支持
 
@@ -272,3 +275,5 @@ type Client interface {
 ### 本节小结
 
 本节介绍了调试器前后端分离式架构下Service层的设计，包括了远程调试、本地调试时的的详细设计说明，最后也给出了我们要支持的RPC接口列表，换言之我们接下来的任务就是围绕着在前后端去实现这些RPC接口列表。
+
+>ps: 与调试器进行交互，除了通过调试器前端显示输入调试命令，还需要一些更友好的方式，比如希望将当前调试会话进行保存，后面从这里继续进行调试。或者希望将一个完整的调试过程分享给其他人一起协助定位问题。go-delve/delve 允许用户通过编写starlark脚本的方式来完成这个操作，调试器会话内通过 `source /path-to/your.star` 来自动执行脚本中的调试操作，这个是非常方便的。starlark脚本中可以执行dlv预先支持好的一些函数，如 `dlv_command("会话中的调试命令")` 来执行调试命令，最终还是会转换成通过API调用的方式去调用调试器后端中的实现逻辑。作为调试器交互逻辑的补充，这里我们简单提一下，我们后面会对此进行详细介绍。
