@@ -95,6 +95,7 @@
     * [9.3.18 跟踪多线程程序](9-develop-sym-debugger/3-详细实现/18-multi-threads.md)
     * [9.3.19 More...](9-develop-sym-debugger/3-详细实现/x-more.md)
     * [9.3.100 扩展:集成starlark](9-develop-sym-debugger/2-详细实现/100-howto_integrate_starlark.md)
+    * [9.3.101 扩展:基于eBPF跟踪](9-develop-sym-debugger/2-详细实现/101-howto_tracing_via_ebpf.md)
 * [10 主流调试技术解析](10-extras/README.md)
   * [10.1 调试器发展历程](10-extras/1-development-of-debugger.md)
   * [10.2 日志系统展历程](10-extras/2-development-of-logging.md)
