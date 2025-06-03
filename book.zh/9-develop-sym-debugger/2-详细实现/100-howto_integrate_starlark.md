@@ -301,8 +301,176 @@ func main() {
 
 ```
 
+### 调试器集成 starlark
+
+go-delve/delve 中集成了starlark，并使用本文体积的方法来支持了对某些调试器内部函数的调用，比如：
+
+```go
+//go:generate go run ../../../_scripts/gen-starlark-bindings.go go ./starlark_mapping.go
+const (
+	dlvCommandBuiltinName        = "dlv_command"
+	readFileBuiltinName          = "read_file"
+	writeFileBuiltinName         = "write_file"
+	commandPrefix                = "command_"
+	dlvContextName               = "dlv_context"
+	curScopeBuiltinName          = "cur_scope"
+	defaultLoadConfigBuiltinName = "default_load_config"
+	helpBuiltinName              = "help"
+)
+```
+
+比如有下面的go源程序，我们使用 go-delve/delve 来进行自动化调试：
+
+file: main.go （这里保留行号信息，方便与starlark脚本对应）
+
+```go
+     1 package main                                                                                                        
+     2 
+     3 import (
+     4     "fmt"
+     5     "time"
+     6 )
+     7 
+     8 type Person struct {
+     9     Name string
+    10     Age  int
+    11 }
+    12 
+    13 func main() {
+    14     people := []Person{
+    15         {Name: "Alice", Age: 25},
+    16         {Name: "Bob", Age: 30},
+    17         {Name: "Charlie", Age: 35},
+    18     }
+    19 
+    20     for i, p := range people {
+    21         fmt.Printf("Processing person %d: %s\n", i, p.Name)
+    22         time.Sleep(time.Second) // 添加一些延迟以便于调试
+    23         processPerson(p)
+    24     }
+    25 }
+    26 
+    27 func processPerson(p Person) {
+    28     fmt.Printf("Name: %s, Age: %d\n", p.Name, p.Age)
+    29 }
+```
+
+starlark自动化调试脚本：
+
+file: debug.star
+
+```
+# 定义一个函数来打印当前作用域的信息
+def print_scope():
+    scope = cur_scope()
+    print("Current scope:", scope)
+    dlv_command("locals")
+
+# 定义一个函数来设置断点并执行调试命令
+def debug_person():
+    # 打印当前作用域
+    print_scope()
+    
+    # 打印变量 p 的值
+    dlv_command("print p")
+    
+    # 单步执行
+    dlv_command("next")
+    
+    # 再次打印作用域
+    print_scope()
+
+# 定义一个函数来保存调试信息到文件
+def save_debug_info():
+    # 获取当前作用域
+    scope = cur_scope()
+    
+    # 将调试信息写入文件
+    debug_info = "Debug session at " + str(time.time()) + "\n"
+    debug_info += "Current scope: " + str(scope) + "\n"
+    
+    # 保存到文件
+    write_file("debug_info.txt", debug_info)
+
+# 主函数
+def main():
+    print("Starting debug session...")
+    
+    # 设置断点
+    dlv_command("break main.main")
+    dlv_command("break main.processPerson")
+    
+    # 继续执行到main.main
+    dlv_command("continue")
+    
+    # 继续执行到main.processPerson
+    dlv_command("continue")
+ 
+    # 执行调试操作
+    debug_person()
+    
+    # 保存调试信息
+    save_debug_info()
+    
+    print("Debug session completed.")
+
+# 直接调用 main 函数 (source命令会自动调用定义的 `main` 函数)
+#main() 
+```
+
+运行调试器 `dlv debug main.go`，调试会话就绪后运行 `source debug.star` 即可。
+
+```bash
+$ tinydbg debug main.go
+Type 'help' for list of commands.
+(dlv) source debug.star
+Starting debug session...
+Breakpoint 1 set at 0x49d0f6 for main.main() ./main.go:13
+Breakpoint 2 set at 0x49d40e for main.processPerson() ./main.go:27
+> [Breakpoint 1] main.main() ./main.go:13 (hits goroutine(1):1 total:1) (PC: 0x49d0f6)
+     8: type Person struct {
+     9:         Name string
+    10:         Age  int
+    11: }
+    12:
+=>  13: func main() {
+    14:         people := []Person{
+    15:                 {Name: "Alice", Age: 25},
+    16:                 {Name: "Bob", Age: 30},
+    17:                 {Name: "Charlie", Age: 35},
+    18:         }
+Processing person 0: Alice
+> [Breakpoint 2] main.processPerson() ./main.go:27 (hits goroutine(1):1 total:1) (PC: 0x49d40e)
+    22:                 time.Sleep(time.Second) // 添加一些延迟以便于调试
+    23:                 processPerson(p)
+    24:         }
+    25: }
+    26:
+=>  27: func processPerson(p Person) {
+    28:         fmt.Printf("Name: %s, Age: %d\n", p.Name, p.Age)
+    29: }
+Current scope: api.EvalScope{GoroutineID:-1, Frame:0, DeferredCall:0}
+(no locals)
+main.Person {Name: "Alice", Age: 25}
+> main.processPerson() ./main.go:28 (PC: 0x49d42a)
+    23:                 processPerson(p)
+    24:         }
+    25: }
+    26:
+    27: func processPerson(p Person) {
+=>  28:         fmt.Printf("Name: %s, Age: %d\n", p.Name, p.Age)
+    29: }
+Current scope: api.EvalScope{GoroutineID:-1, Frame:0, DeferredCall:0}
+(no locals)
+Debug session completed.
+```
+
+tinydbg暂时保留了go-delve/delve中的starlark实现，pkg/terminal/starlark.go + pkg/terminal/starlark_test.go 一共300行代码，starbind/ 下有近3000行代码，不过这部分代码是通过脚本自动生成的。由于这部分代码相对来说比较独立，不像ebpf-based tracing那样影响到很多地方，所以我们暂时保留这部分代码。上述测试用的源码、star脚本，您可以在路径 tinydbg/examples/starlark_demo 找到。
+
 ### 本文总结
 
 我在学习bazelbuild时了解到starlark这门语言，在学习go-delve/delve时进一步了解了它。如果我们正在编写一个工具或者分析型工具，希望通过暴漏我们的底层能力，以让用户自由发挥他们的创造性用途，比如类似go-delve/delve希望用户可以按需执行自动化调试，我们其实可以将starlark解释器引擎集成到我们的程序中，然后通过一点胶水代码打通starlark与我们的程序，使得starlark解释器调用starlark函数来执行我们程序中定义的函数。这无疑会释放我们程序的底层能力，允许使用者在底层能力开放程度受控的情况下进一步去发挥、去挖掘。
 
 本文演示了如何轻松starklark集成到您的Go程序中，starlark的更多用法请参考 [bazelbuild/starlark](https://github.com/bazelbuild/starlark)。
+
+本文还介绍了调试器与starlark集成以及使用示例，有自动化测试诉求，或者希望分享你的调试会话的时候，可以通过这种方式来实现。
