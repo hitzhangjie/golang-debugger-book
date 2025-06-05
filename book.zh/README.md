@@ -47,7 +47,7 @@ Hi，我是张杰，目前就职于腾讯（深圳）科技有限公司，后台
    >
    > 强烈建议您先试用提供的开发容器进行测试、学习，当您掌握了一些基础之后，再按需升级go版本不迟。
    >
-3. [**hitzhangjie/delve**](https://github.com/hitzhangjie/delve)，该项目由go-delve/delve裁剪而来，为了方便讲述与符号级调试器最核心的部分，项目中剔除了与linux/amd64无关的一些扩展实现。本书有关符号级调试器实现部分会借鉴此项目中的代码。
+3. [**hitzhangjie/delve**](https://github.com/hitzhangjie/tinydbg)，该项目由go-delve/delve裁剪而来，为了方便讲述与符号级调试器最核心的部分，项目中剔除了与linux/amd64无关的一些扩展实现。本书有关符号级调试器实现部分会借鉴此项目中的代码。
 
 ## 1.5 联系方式
 
