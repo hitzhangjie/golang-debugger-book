@@ -98,6 +98,7 @@
     * [9.3.101 扩展:基于eBPF跟踪](9-develop-sym-debugger/2-详细实现/101-howto_tracing_via_ebpf.md)
     * [9.3.102 扩展:实现语法高亮](9-develop-sym-debugger/2-详细实现/102-howto_syntax_highlight.md)
     * [9.3.103 扩展:实现分页输出](9-develop-sym-debugger/2-详细实现/103-howto_paging_output.md)
+    * [9.3.104 扩展:读取分离存储的DWARF数据](9-develop-sym-debugger/2-详细实现/104-howto_read_separate_dwarfdata.md)
 * [10 主流调试技术解析](10-extras/README.md)
   * [10.1 调试器发展历程](10-extras/1-development-of-debugger.md)
   * [10.2 日志系统展历程](10-extras/2-development-of-logging.md)
