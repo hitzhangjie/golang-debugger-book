@@ -100,6 +100,7 @@
     * [9.3.103 扩展:实现分页输出](9-develop-sym-debugger/2-详细实现/103-howto_paging_output.md)
     * [9.3.104 扩展:读取分离存储的DWARF数据](9-develop-sym-debugger/2-详细实现/104-howto_read_separate_dwarfdata.md)
     * [9.3.105 扩展:自动推测源文件路径映射](9-develop-sym-debugger/2-详细实现/105-howto_guess_substitutepath.md)
+    * [9.3.106 扩展:实现目标进程IO重定向](9-develop-sym-debugger/2-详细实现/106-howto_redirect_target_io.md)
 * [10 主流调试技术解析](10-extras/README.md)
   * [10.1 调试器发展历程](10-extras/1-development-of-debugger.md)
   * [10.2 日志系统展历程](10-extras/2-development-of-logging.md)
