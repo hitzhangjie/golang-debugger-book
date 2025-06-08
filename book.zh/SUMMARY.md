@@ -101,6 +101,7 @@
     * [9.3.104 扩展:读取分离存储的DWARF数据](9-develop-sym-debugger/3-实用功能扩展/104-howto_read_separate_dwarfdata.md)
     * [9.3.105 扩展:自动推测源文件路径映射](9-develop-sym-debugger/3-实用功能扩展/105-howto_guess_substitutepath.md)
     * [9.3.106 扩展:实现目标进程IO重定向](9-develop-sym-debugger/3-实用功能扩展/106-howto_redirect_target_io.md)
+    * [9.3.107 扩展:支持用户偏好配置](9-develop-sym-debugger/3-实用功能扩展/107-howto_customize_tinydbg.md)
 * [10 主流调试技术解析](10-extras/README.md)
   * [10.1 调试器发展历程](10-extras/1-development-of-debugger.md)
   * [10.2 日志系统展历程](10-extras/2-development-of-logging.md)
