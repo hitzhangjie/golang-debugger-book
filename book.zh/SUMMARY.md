@@ -74,7 +74,7 @@
     * [9.1.5 后端目标层设计](9-develop-sym-debugger/1-架构设计/5-后端目标层设计.md)
     * [9.1.6 日志系统设计](9-develop-sym-debugger/1-架构设计/6-日志系统设计.md)
   * [9.2 核心调试逻辑](9-develop-sym-debugger/2-核心调试逻辑/README.md)
-    * [9.2.0 调试命令速览](9-develop-sym-debugger/2-核心调试逻辑/0-cmds.md)
+    * [9.2.0 核心调试命令](9-develop-sym-debugger/2-核心调试逻辑/0-cmds.md)
     * [9.2.1 进程启动](9-develop-sym-debugger/2-核心调试逻辑/1-process_start.md)
     * [9.2.2 进程attach](9-develop-sym-debugger/2-核心调试逻辑/2-process_attach.md)
     * [9.2.3 进程启动并attach](9-develop-sym-debugger/2-核心调试逻辑/3-process_start_attach.md)
