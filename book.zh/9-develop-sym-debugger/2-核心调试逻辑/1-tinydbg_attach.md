@@ -54,7 +54,7 @@ OK，我们一起来看看Attach的详细设计实现。
 FIXME: 这个图有问题，参考第6章start+attach的put it together部分总结。
 
 <p align="center">
-<img alt="tinydbg attach" src="./assets/tinydbg_xxx.png" />
+<img alt="tinydbg attach" src="./assets/how_attach_works.png" />
 </p>
 
 大致处理过程：
