@@ -75,11 +75,47 @@ type Function struct {
 }
 ```
 
+#### 获取函数列表
+
+
 #### 函数调用遍历
 
 当`FollowCalls`大于0时,调试器会执行函数调用的广度优先遍历。这是在`traverse`函数中实现的:
 
 ```go
+// Functions returns a list of functions in the target process.
+func (d *Debugger) Functions(filter string, followCalls int) ([]string, error) {
+	d.targetMutex.Lock()
+	defer d.targetMutex.Unlock()
+
+	regex, err := regexp.Compile(filter)
+	if err != nil {
+		return nil, fmt.Errorf("invalid filter argument: %s", err.Error())
+	}
+
+	funcs := []string{}
+	t := proc.ValidTargets{Group: d.target}
+	for t.Next() {
+		for _, f := range t.BinInfo().Functions {
+			if regex.MatchString(f.Name) {
+				if followCalls > 0 {
+					newfuncs, err := traverse(t, &f, 1, followCalls)
+					if err != nil {
+						return nil, fmt.Errorf("traverse failed with error %w", err)
+					}
+					funcs = append(funcs, newfuncs...)
+				} else {
+					funcs = append(funcs, f.Name)
+				}
+			}
+		}
+	}
+	// uniq = sort + compact
+	sort.Strings(funcs)
+	funcs = slices.Compact(funcs)
+	return funcs, nil
+}
+
 func traverse(t proc.ValidTargets, f *proc.Function, depth int, followCalls int) ([]string, error) {
     type TraceFunc struct {
         Func    *proc.Function
