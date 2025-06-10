@@ -1,4 +1,4 @@
-## godbg> funcs `<expr>`
+## godbg> funcs `<regexp>`
 
 ### 实现目标
 
