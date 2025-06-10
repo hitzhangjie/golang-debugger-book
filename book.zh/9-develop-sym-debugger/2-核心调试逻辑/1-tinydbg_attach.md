@@ -51,6 +51,8 @@ OK，我们一起来看看Attach的详细设计实现。
 
 在第六章指令级调试器开发过程中，我们结合Linux内核源码非常详细地介绍了syscall.PtraceAttach(...)的处理过程，如果您已经忘记了这里的细节，可以回去再看看相应内容。这里我们仅通过一张时序图对关键处理逻辑进行总结。
 
+FIXME: 这个图有问题，参考第6章start+attach的put it together部分总结。
+
 <p align="center">
 <img alt="tinydbg attach" src="./assets/tinydbg_xxx.png" />
 </p>

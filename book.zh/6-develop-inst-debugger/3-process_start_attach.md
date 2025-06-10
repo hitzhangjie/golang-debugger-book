@@ -347,7 +347,9 @@ static long do_wait(struct wait_opts *wo)
 
 接下来，如果该进程没有特殊的ptrace标记位，子进程状态将被更新为可运行等待下次调度。当内核发现这个子进程ptrace标记位为PT_PTRACED时，则会执行这样的逻辑：内核给这个子进程发送了一个**SIGTRAP**信号，该信号将被追加到进程的pending信号队列中，并尝试唤醒该进程，当内核任务调度器调度到该进程时，发现其有pending信号到达，将执行SIGTRAP的信号处理逻辑，只不过SIGTRAP比较特殊是内核代为处理。
 
-**SIGTRAP信号处理具体做什么呢？**它会暂停目标进程的执行，并向父进程通知自己的状态变化，此时父进程通过系统调用wait就可以获取到子进程状态变化的情况。一旦父进程tracer发现子进程tracee已经停下来，就可以发起后续的ptrace操作，如读写内存数据。
+**SIGTRAP信号处理具体做什么呢？**它会暂停目标进程的执行，并通过SIGCHLD信号向父进程通知自己的状态变化。注意，父进程调用完 `ptrace(PTRACE_ATTACH, ...)` 这个操作并不会等待到tracee停下来，父进程通过系统调用wait尝试获取进程状态时，此时tracee可能还没停下来。tracer调用wait会将tracer状态变为 “**Interruptible Wait**”，当前tracer会被加入tracee进程状态变化的等待队列里。直到前面讲的内核处理tracee的SIGTRAP信号后将其停下来，然后发送SIGCHLD信号通知tracer将tracer唤醒。
+
+此时，tracer被唤醒，wait就可以返回子进程tracee的状态变化情况。tracer发现子进程tracee已经停下来（并且是因为SIGTRAP停下来），就可以发起后续调试命令对应的ptrace操作，如读写内存数据。
 
 ### 代码实现
 
