@@ -80,6 +80,7 @@
     * [9.2.3 tinydbg exec](9-develop-sym-debugger/2-核心调试逻辑/3-tinydbg_exec.md)
     * [9.2.4 tinydbg debug](9-develop-sym-debugger/2-核心调试逻辑/4-tinydbg_debug.md)
     * [9.2.5 tinydbg core](9-develop-sym-debugger/2-核心调试逻辑/5-tinydbg_core.md)
+    * [9.2.6 tinydbg connect](9-develop-sym-debugger/2-核心调试逻辑/6-tinydbg_connect.md)
     * [9.2.20 tinydbg> 调试会话](9-develop-sym-debugger/2-核心调试逻辑/20-debug-session.md)
     * [9.2.21 tinydbg> disass](9-develop-sym-debugger/2-核心调试逻辑/21-disassemble.md)
     * [9.2.22 tinydbg> breakpoint](9-develop-sym-debugger/2-核心调试逻辑/22-breakpoint.md)

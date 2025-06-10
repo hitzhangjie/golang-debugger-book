@@ -6,7 +6,7 @@
 
 ### 代码实现
 
-#### 调试器前端执行 tinydbg exec <executable>
+#### 调试器前端执行 tinydbg exec `<executable>`
 
 #### 调试器前端发送 json-rpc请求给后端
 
