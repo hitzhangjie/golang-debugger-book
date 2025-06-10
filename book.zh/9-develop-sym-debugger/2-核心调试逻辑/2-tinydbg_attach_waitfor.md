@@ -4,6 +4,27 @@
 
 在调试进程时，我们经常需要等待目标进程启动后再附加调试器。`waitfor` 机制提供了一种灵活的方式来等待进程启动，它通过匹配进程名称前缀来实现。本文将详细解释这个功能在调试器中是如何工作的。
 
+```bash
+```bash
+$ tinydbg help attach
+Attach to an already running process and begin debugging it.
+
+This command will cause Delve to take control of an already running process, and
+begin a new debug session.  When exiting the debug session you will have the
+option to let the process continue or kill it.
+
+Usage:
+  tinydbg attach pid [executable] [flags]
+
+Flags:
+      --continue                 Continue the debugged process on start.
+  -h, --help                     help for attach
+      --waitfor string           Wait for a process with a name beginning with this prefix
+      --waitfor-duration float   Total time to wait for a process
+      --waitfor-interval float   Interval between checks of the process list, in millisecond (default 1)
+      ...
+```
+
 ### 为什么需要 WaitFor
 
 在以下场景中，我们需要等待进程：
