@@ -1,4 +1,4 @@
-## godbg> funcs `<expr>`
+## ListFunctions
 
 ### 实现目标
 
