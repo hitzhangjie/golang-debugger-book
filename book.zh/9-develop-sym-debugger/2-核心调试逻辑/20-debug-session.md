@@ -40,7 +40,7 @@ OK，下面我们介绍下这块的调试会话初始化、输入调试命令进
 
 什么情况下会启动一个调试会话呢？
 - 本地调试时总是会创建一个调试会话，不管是执行attach、debug、exec、core，此时调试器前端、后端位于同一个调试器进程中，它们通过net.Pipe进行通信；
-- 远程调试时调试器前后端分离，后端单独一个进程且没有控制终端，调试器前端通过connect命令连接到调试器后端，前后端通过net.TCPConn进行通信。调试器前端会初始化一个调试会话，用户通过这个调试会话进行交互。
+- 远程调试时调试器前后端分离，后端单独一个进程且没有控制终端，调试器前端通过connect命令连接到调试器后端，前后端通过net.TCPConn或者net.UnixConn进行通信。调试器前端会初始化一个调试会话，用户通过这个调试会话进行交互。
 
 如果咱们是本地调试，执行的是attach命令，那么建立调试会话的代码路径是：
 
@@ -83,7 +83,7 @@ main.go:main.main
             \--> connectCommand.Run()
                     \--> connectCmd(...)
                             \--> connect(addr, nil, conf)
-                                    \--> client/server communicate via net.TCPListener+net.TCPConn
+                                    \--> client/server communicate via net.TCPListener+net.TCPConn or net.UnixListener+net.UnixConn
 ```
 
 这里讲的是调试器前后端如何连接起来，我们还需要看看调试前端如何输出 "godbg> " 以及如何解析命令、解析为本地client方法调用。
@@ -387,6 +387,8 @@ OK，所以dlv这里是通过自定义的方式来对调试会话中的命令进
 OK，下面我们先看看JSON-RPC这里的代码逻辑，然后结合一个具体的例子看看。
 
 #### 调试器前端发送 json-rpc请求给后端
+
+
 
 #### 调试器后端初始化并接受请求
 
