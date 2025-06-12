@@ -69,7 +69,7 @@ FIXME: 这个图有问题，参考第6章start+attach的put it together部分总
 
 attach操作作为我们第一个介绍的调试命令实现，我们有必要在此详细地把调试器前后端交互的全流程介绍一遍，介绍后续调试命令的时候，我们就不会再这么重复地、详细地介绍了。所以请读者朋友们耐心。
 
-#### 调试器前端执行 `tinydbg attach <pid>`
+#### Shell中执行 `tinydbg attach <pid>`
 
 首先，用户执行命令 `tinydbg attach <pid>`，tinydbg主程序是一个基于spf13/cobra的命令行程序：
 
@@ -195,37 +195,31 @@ func attachCmd(_ *cobra.Command, args []string) {
 
 ps：在9.1 架构设计中Service层设计时，我们提到过，对于本地调试其实是通过 preConnectedListener+net.Pipe 来模拟真实了网络连接通信过程。本质上还是按照C/S架构进行请求、处理的。
 
-#### 调试器前端发送 json-rpc请求给后端
+#### attach操作前后端扮演的职责
 
-我们来看下前端这里的处理逻辑，execute方法包含了客户端、服务端的设置，我们这里先知关注客户端的核心逻辑：
+执行到execute方法时，才开始体现出前后端分离式架构下前后端的不同职责。对于本地调试模式，execute方法中既有初始化前端JSON-RPC client、调试会话的逻辑，也有初始化后端网络IO和debugger核心功能的逻辑。在远程调试模式下，execute方法主要是后端网络IO和debugger核心功能初始化，前端初始化要通过connect操作来完成，初始化JSON-RPC client和调试会话。
+
+调试会话的初始化以及工作工程，我们前一节介绍过了。这个小节，我们来看下attach操作，不管是本地调试模式，还是远程调试模式，其实在已经介绍了调试会话的基础上，我们只需要关心attach操作涉及到的调试器后端的debugger核心功能初始化即可。
+
+实际上，如果是远程调试模式，attach操作其实主要是调试器后端的操作，基本没前端什么事，attach操作并不需要前端发JSON-RPC请求，只需要后端做下网络IO初始化、debugger初始化，然后让debugger attach到目标进程就算结束了。如果是本地调试模式，在调试器后端完成上述初始化之后，调试器前端建立个调试会话就算准备就绪了，后续与后端的通信通过net.Pipe。
 
 see: path-to/tinydbg/cmds/cmd_root.go
 
 ```go
 func execute(attachPid int, processArgs []string, conf *config.Config, coreFile string, kind debugger.ExecuteKind, dlvArgs []string, buildFlags string) int {
-  ...
+  	...
 
-  // Setup the debugger backend listener 
 	var listener net.Listener
-
-  // Setup the debugger frontend client
 	var clientConn net.Conn
-
-	// Make a TCP listener for debugger backend
 	if headless {
 		listener, err = netListen(addr)               // remote debug mode via TCP network
 	} else {
 		listener, clientConn = service.ListenerPipe() // local debug mode via net.Pipe
 	}
-	if err != nil {
-		fmt.Printf("couldn't start listener: %s\n", err)
-		return 1
-	}
-	defer listener.Close()
 
-  ...
+	...
 
-	// Create and start a debugger server
+	// debugger backend: create and start a debugger server
 	server := rpccommon.NewServer(&service.Config{
 		Listener:       listener,
 		ProcessArgs:    processArgs,
@@ -233,93 +227,40 @@ func execute(attachPid int, processArgs []string, conf *config.Config, coreFile 
 		DisconnectChan: disconnectChan,
 		Debugger: debugger.Config{
 			AttachPid:             attachPid,
-			WorkingDir:            workingDir,
-			CoreFile:              coreFile,
-			Foreground:            headless && tty == "",
-			Packages:              dlvArgs,
-			BuildFlags:            buildFlags,
-			ExecuteKind:           kind,
-			TTY:                   tty,
-			Stdin:                 redirects[0],
-			Stdout:                proc.OutputRedirect{Path: redirects[1]},
-			Stderr:                proc.OutputRedirect{Path: redirects[2]},
-			DisableASLR:           disableASLR,
-			AttachWaitFor:         attachWaitFor,
-			AttachWaitForInterval: attachWaitForInterval,
-			AttachWaitForDuration: attachWaitForDuration,
+			。。。
 		},
 	})
 
 	if err := server.Run(); err != nil {
-    ...
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+		。。。
 	}
+  	...
 
-  ...
-
-
+	// debugger frontend: connect to debugger server and init debug session
 	return connect(listener.Addr().String(), clientConn, conf)
 }
 ```
 
-设置调试器前端，连接到服务器：
-
-- 对于远程调试模式，我们需要提供远程服务器的监听地址
-- 对于本地调试模式，这里connect只使用clientConn来读写数据，
-  这里的clientConn是net.Pipe两个端点中的一个。
-
-Well，当连接net.Conn建立好之后就可以启动一个调试会话，然后允许用户在调试会话中输入调试命令并发送给后端处理了。
-
-```go
-func connect(addr string, clientConn net.Conn, conf *config.Config) int {
-	// Create and start a terminal - attach to running instance
-	var client *rpc2.RPCClient
-	if clientConn == nil {
-		if clientConn = netDial(addr); clientConn == nil {
-			return 1 // already logged
-		}
-	}
-	client = rpc2.NewClientFromConn(clientConn)
-  ...
-  // create a debug session for interactive debugging
-	session := debug.New(client, conf)
-	session.InitFile = initFile
-	status, err := session.Run()
-  ...
-	return status
-}
-```
-
-但是我们刚才的 attach 操作的RPC请求是如何通过JSON-RPC发送的呢？
-
 #### 调试器后端初始化并接受请求
 
-调试器后端启动有两种方式：
-1、一种是通过--headless模式启动，net.Listen创建一个TCP Listenr，然后等待入连接请求；
+调试器后端启动，网络初始化方式有两种方式：
+1、一种是通过--headless模式启动，net.Listen创建一个TCPListener or UnixListener，然后等待入连接请求；
 2、一种是本地模式启动，通过preConnectedListener+net.Pipe，来模拟网络监听、连接操作；
 
 see: path-to/tinydbg/cmds/cmd_root.go
 
 ```go
 func execute(attachPid int, processArgs []string, conf *config.Config, coreFile string, kind debugger.ExecuteKind, dlvArgs []string, buildFlags string) int {
-  ...
-
-  // Setup the debugger backend listener 
+  	...
 	var listener net.Listener
-
-	// Make a TCP listener for debugger backend
 	if headless {
 		listener, err = netListen(addr)               // remote debug mode via TCP network
 	} else {
 		listener, clientConn = service.ListenerPipe() // local debug mode via net.Pipe
 	}
-  ...
-	defer listener.Close()
+  	...
 
-  ...
-
-	// Create and start a debugger server
+	// debugger backend: create and start a debugger server
 	server := rpccommon.NewServer(&service.Config{
 		Listener:       listener,
 		ProcessArgs:    processArgs,
@@ -327,30 +268,22 @@ func execute(attachPid int, processArgs []string, conf *config.Config, coreFile 
 		DisconnectChan: disconnectChan,
 		Debugger: debugger.Config{
 			AttachPid:             attachPid,
-			WorkingDir:            workingDir,
-			CoreFile:              coreFile,
-			Foreground:            headless && tty == "",
-			Packages:              dlvArgs,
-			BuildFlags:            buildFlags,
-			ExecuteKind:           kind,
-			TTY:                   tty,
-			Stdin:                 redirects[0],
-			Stdout:                proc.OutputRedirect{Path: redirects[1]},
-			Stderr:                proc.OutputRedirect{Path: redirects[2]},
-			DisableASLR:           disableASLR,
-			AttachWaitFor:         attachWaitFor,
-			AttachWaitForInterval: attachWaitForInterval,
-			AttachWaitForDuration: attachWaitForDuration,
+			...
 		},
 	})
 
+	// debugger backend: run the server
 	if err := server.Run(); err != nil {
-    ...
-		return 1
+		...
 	}
-  ...
-}
 
+	...
+}
+```
+
+在 `server.Run()` 中开始执行后，会创建一个ptracer并attach到目标进程，然后会开始接受入连接请求并处理RPC请求。
+
+```go
 // Run starts a debugger and exposes it with an JSON-RPC server. The debugger
 // itself can be stopped with the `detach` API.
 func (s *ServerImpl) Run() error {
@@ -365,8 +298,10 @@ func (s *ServerImpl) Run() error {
 	s.s2 = rpc2.NewServer(s.config, s.debugger)
 	s.methodMap = make(map[string]*methodType)
 
+	// register RPC methods and relevant handlers
 	registerMethods(s.s2, s.methodMap)
 
+	// accept incoming connections and serves the RPC requests
 	go func() {
 		defer s.listener.Close()
 		for {
@@ -381,8 +316,6 @@ func (s *ServerImpl) Run() error {
 	return nil
 }
 ```
-
-不管那种方式，调试器后端收到入连接请求后，就开始对连接上的交互式调试请求进行处理：`s.serveConnection(c)`。
 
 那么，attach操作是什么时候执行的呢？调试器前端不是应该发送一个attach请求给调试器后台吗？理论上确实可以这么干，但是实际上没必要再多一轮RPC了，试想：
 1、如果是远程调试，--headless启动server时我肯定知道要attach哪个tracee了，哪还需要客户端显示发RPC请求；
@@ -664,11 +597,15 @@ func (dbp *nativeProcess) addThread(tid int, attach bool) (*nativeThread, error)
 
 这样就把目标进程中当前已有、将来可能会有的所有线程全部纳入到调试器管控逻辑中来了，调试器可以将它们作为一个组，控制它们全部执行或者暂停。
 
-#### 调试器后端返回结果给前端
+#### 接受入连接请求并处理请求
 
-对于attach操作，调试器后端一启动的时候就attach了目标进程，这个动作是在调试器后端建立服务层通信之前就已经完成了……所以是不需要通知客户端结果的。
+调试器后端收到入连接请求后，就开始对连接上的交互式调试请求进行处理：`s.serveConnection(c)`。这部分我们在前一节调试会话中，已经详细介绍过了，这里就不再赘述了。
 
-要么一开始调试器后端就失败了，要么一开始就成功了，等调试器后端服务层通信ready后，调试器前端就可以直接发送调试命令进行调试了。
+至此，attach操作执行完成。如果是本地调试模式的话，通过前端提供的调试会话就直接可以开始交互式的调试了；如果是远程调试模式，则还需要通过connect操作与服务端建立连接、创建一个调试会话才能开始调试。
+
+#### attach操作不涉及到RPC
+
+对于attach操作，它是不涉及到前后端之间的JSON-RPC调用的，这个我们已经介绍过了，这里特别提一下。当你想查看attach操作的详细代码时，你可以搜索attachCmd，但是不要在rpc2/client.go中搜索响应的RPC方法，因为没有对应的RPC方法。
 
 ### 执行测试
 
