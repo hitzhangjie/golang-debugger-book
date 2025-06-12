@@ -2,7 +2,7 @@
 
 ### 实现目标
 
-前面的attach、exec、debug、core、connect，这几个命令本质上都是启动一个debugger backend，然后让debugger frontend和debugger backend建立连接的操作。
+后面的attach、exec、debug、core、connect，这几个命令本质上都是启动一个debugger backend，然后让debugger frontend和debugger backend建立连接的操作。
 
 在建立连接之后，debugger frontend就需要建立一个调试会话了，调试会话中我们可以键入调试命令 `godbg> COMMAND [flags] [args]` 进行调试。
 
@@ -22,17 +22,32 @@ OK，你们肯定知道我们移除的原因，我们想最大程度简化我们
 
 <img alt="how debugsession works" src="./assets/how_debugsession_works.png" width="720px" />
 
-1. 第1部分启动一个调试器backend的操作，在前面介绍attach操作时，已经介绍过，这里不赘述；
-2. 第2部分调试会话中执行调试命令的操作，是本节介绍的重点；
+这个时序图介绍了调试期间的两个重要步骤：
+- 第1部分启动一个调试器backend的操作，这部分将在介绍attach操作的实现时进行介绍，本节先不展开；
+- 第2部分调试会话中执行调试命令的操作，这是本小节我们要介绍的重点内容；
 
-简单讲调试会话就是一个交互式调试窗口，允许你输入调试命令，并展示调试结果，如此反复直到结束调试。默认情况下调试会话就是一个交互式的命令行窗口，从stdin读取调试命令，然后在stdout、stderr输出调试结果。除非你想以非交互式的方式进行调试，此时需要指定参数 `--allow-non-terminal-interactive` 并设置正确的IO重定向。
+简单讲调试会话就是一个交互式调试窗口，允许你输入调试命令，并展示调试结果，如此反复直到结束调试。默认情况下调试会话就是一个交互式的命令行窗口，从stdin读取调试命令，然后在stdout、stderr输出调试结果。除非你想以非交互式的方式进行调试，如 `tinydbg debug --allow-non-terminal-interactive` 显示声明非交互式方式并设置正确的IO重定向。
 
 ```bash
+tinydbg help debug
+Compiles your program with optimizations disabled, starts and attaches to it.
+
+By default, with no arguments, Delve will compile the 'main' package in the
+current directory, and begin to debug it. Alternatively you can specify a
+package name and Delve will compile that package instead, and begin a new debug
+session.
+
+Usage:
+  tinydbg debug [package] [flags]
+...
+
 Global Flags:
     --allow-non-terminal-interactive   Allows interactive sessions of Delve that don't have a terminal as stdin, stdout and stderr
+-r, --redirect stringArray             Specifies redirect rules for target process (see 'dlv help redirect')
+	...
 ```
 
-OK，下面我们介绍下这块的调试会话初始化、输入调试命令进行调试的主流程，cornercases我们就跳过了。
+OK，下面我们介绍下这块的调试会话初始化、输入调试命令进行调试的主流程。
 
 ### 代码实现
 
