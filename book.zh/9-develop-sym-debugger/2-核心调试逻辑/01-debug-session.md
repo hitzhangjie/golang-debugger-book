@@ -65,10 +65,23 @@ main.go:main.main
             \--> attachCommand.Run()
                     \--> attachCmd(...)
                             \--> execute(pid, args, conf, "", debugger.ExecutingOther, args, buildFlags)
-                                    \--> client/server communicate via preConnectedListener+net.Pipe
 ```
 
-如果咱们是本地调试，执行的是debug命令，那么建立调试会话的代码路径是：
+在execute函数中，会根据是本地调试还是远程调试，来用不同的方法初始化RPC服务层：
+
+- 本地调试(未指定--headless)：setup client/server communicate via preConnectedListener+net.Pipe
+- 远程调试(指定了--headless): setup client/server communicate via net.TCPListener+net.TCPConn or net.UnixListener+net.UnixConn
+
+如果执行的是exec命令，那么建立调试会话的代码路径是：
+
+```bash
+main.go:main.main
+    \--> cmds.New(false).Execute()
+            \--> execCommand.Run()
+                    \--> execute(0, args, conf, "", debugger.ExecutingExistingFile, args, buildFlags)
+```
+
+如果执行的是debug命令，那么建立调试会话的代码路径是：
 
 ```bash
 main.go:main.main
@@ -76,10 +89,9 @@ main.go:main.main
             \--> debugCommand.Run()
                     \--> debugCmd(...)
                             \--> execute(0, processArgs, conf, "", debugger.ExecutingGeneratedFile, dlvArgs, buildFlags)
-                                    \--> client/server communicate via preConnectedListener+net.Pipe
 ```
 
-如果咱们是是本地调试，执行的是core命令，那么建立调试会话的代码路径是：
+如果执行的是core命令，那么建立调试会话的代码路径是：
 
 ```bash
 main.go:main.main
@@ -87,10 +99,9 @@ main.go:main.main
             \--> coreCommand.Run()
                     \--> coreCmd(...)
                             \--> execute(0, []string{args[0]}, conf, args[1], debugger.ExecutingOther, args, buildFlags)
-                                    \--> client/server communicate via preConnectedListener+net.Pipe
 ```
 
-如果咱们是远程调试，执行的是connect命令，那么建立调试会话的代码路径是：
+如果咱们很明确就是远程调试，执行的是connect命令，那么建立调试会话的代码路径是：
 
 ```bash
 main.go:main.main
@@ -98,7 +109,6 @@ main.go:main.main
             \--> connectCommand.Run()
                     \--> connectCmd(...)
                             \--> connect(addr, nil, conf)
-                                    \--> client/server communicate via net.TCPListener+net.TCPConn or net.UnixListener+net.UnixConn
 ```
 
 这里讲的是调试器前后端如何连接起来，我们还需要看看调试前端如何输出 "godbg> " 以及如何解析命令、解析为本地client方法调用。

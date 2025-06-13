@@ -1,4 +1,7 @@
 {
     "makefile.configureOnOpen": false,
-    "explorer.sortOrder": "mixed"
+    "explorer.sortOrder": "mixed",
+    "files.exclude": {
+        "**/book.en": true
+    }
 }

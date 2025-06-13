@@ -36,6 +36,12 @@ $ cat /proc/sys/kernel/randomize_va_space
 - Shared Libraries: The loader uses mmap to load libraries at random addresses.
 - Executable: If compiled with PIE, the code’s base address is also randomized.
 
+executable地址是如何被随机化的呢? 这里是指代码段(text segment)的加载地址被随机化：
+
+- 如果可执行程序禁用了PIE模式，那么代码段的加载地址 `VirtAddress` 是固定的
+- 如果可执行程序启用了PIE模式，那么 `VirtAddress` 只是一个偏移量，加载器会选择一个随机地址，
+  再加上这个偏移量，最终计算出实际的加载地址。
+
 ### 对调试的影响
 
 我们为什么要介绍ALSR呢？因为它对调试过程还是有影响的。`go build` 构建出来的可执行程序，每次启动后同一个函数的指令地址是固定不变的，但是同一个栈变量的地址在每次启动后却是变化的 …… 我们知道有些读者会对此产生困惑，所以要介绍下。
