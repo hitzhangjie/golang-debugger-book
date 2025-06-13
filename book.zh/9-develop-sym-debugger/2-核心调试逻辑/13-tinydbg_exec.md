@@ -1,6 +1,6 @@
 ## Exec
 
-### 实现目标:O `tinydbg exec ./prog`
+### 实现目标: `tinydbg exec ./prog`
 
 本节介绍exec这个启动调试的命令：`tinydbg exec [executable] [flags]`，exec操作将执行executable对自动attach住对应的进程。在第6章介绍指令级调试器时，我们有演示如何通过exec.Command来指定要启动的程序、启动该程序以及如何在程序启动后自动被ptracer跟踪。如果忘记了这部分内容，可以回去看看6.1, 6.2, 6.3这几个小节。
 
@@ -59,7 +59,6 @@ main.go:main.main
                             \--> server.Run()
                                     \--> debugger, _ := debugger.New(...)
                                             if attach 启动方式: debugger.Attach(...)
-                                            elif exec 启动方式: debugger.Launch(...)
                                             elif core 启动方式：core.OpenCore(...)
                                             else 其他 debuger.Launch(...)
 ```
