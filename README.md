@@ -22,7 +22,7 @@ This project delves into the development of a Go debugger, exploring various asp
 - How do to debug in modern software development
 - And much more
 
-Special thanks to [delve](https://github.com/go-delve/delve) and its author [derek parker](https://twitter.com/derkthedaring?lang=en), contributor [aarzilli](https://github.com/aarzilli), along with all contributors. Their work has been instrumental in my learning journey, and I'm excited to share this knowledge with developers interested in debugging.
+Special thanks to [delve](https://github.com/go-delve/delve) and its author [derek parker](https://twitter.com/derkthedaring?lang=en), maintainer [aarzilli](https://github.com/aarzilli), along with all contributors. Their work has been instrumental in my learning journey, and I'm excited to share this knowledge with developers interested in debugging.
 
 Developing a symbolic debugger requires a deep understanding of:
 
