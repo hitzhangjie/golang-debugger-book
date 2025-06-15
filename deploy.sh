@@ -4,7 +4,7 @@
 deploy=https://github.com/hitzhangjie/debugger101.io
 
 # build the book for Chinese version
-book="book.zh"
+book="book"
 
 # create a temporary folder and be sure to delete them when exit
 tmpdir=$(mktemp -d)

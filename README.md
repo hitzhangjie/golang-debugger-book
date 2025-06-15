@@ -3,7 +3,7 @@
 Ever wondered how to develop a Go debugger? Curious about how debuggers work under the hood? This book provides comprehensive insights into these topics. Read the Chinese version online at: https://www.hitzhangjie.pro/debugger101.io/
 
 > English version available at: https://www.hitzhangjie.pro/debugger101-en.io/
-
+> And the repo: https://github.com/hitzhangjie/golang-debugger-book-en .
 
 <p align="center">
 <img alt="" src="./book/bookcover.jpeg" width="360px" />
