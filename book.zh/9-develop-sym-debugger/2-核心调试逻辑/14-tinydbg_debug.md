@@ -67,6 +67,8 @@ main.go:main.main
                                                 if attach 启动方式: debugger.Attach(...)
                                                 elif core 启动方式：core.OpenCore(...)
                                                 else 其他 debuger.Launch(...)
+                                            \--> c, _ := listener.Accept() 
+                                            \--> serveConnection(conn)
 ```
 
 构建可执行程序的操作如下，这个函数其实是支持对main module和test package执行构建的（isTest），只不过我们的demo tinydbg希望尽可能简化，而tinydbg debug、tinydbg test的不同之处也仅仅在此而已，所以我们demo tinydbg中移除了test命令。

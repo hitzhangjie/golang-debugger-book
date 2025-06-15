@@ -3,5 +3,6 @@
     "explorer.sortOrder": "mixed",
     "files.exclude": {
         "**/book.en": true
-    }
+    },
+    "explorer.sortOrderReverse": false
 }

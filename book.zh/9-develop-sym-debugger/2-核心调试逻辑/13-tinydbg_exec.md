@@ -61,6 +61,8 @@ main.go:main.main
                                             if attach 启动方式: debugger.Attach(...)
                                             elif core 启动方式：core.OpenCore(...)
                                             else 其他 debuger.Launch(...)
+                                    \--> c, _ := listener.Accept() 
+                                    \--> serveConnection(conn)
 ```
 
 由于调试器后端初始化的逻辑我们之前都已经介绍过了，包括网络通信的初始化、debugger的初始化，这里我们直接看最核心的代码就好了。
