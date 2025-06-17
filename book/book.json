@@ -1,6 +1,7 @@
 {
   "plugins": [
-      "md-toc"
+      "md-toc",
+      "github"
   ],
   "pluginsConfig": {
     "intopic-toc": {
@@ -10,6 +11,9 @@
             "en": "In This Article",
             "zh": "本文目录"
         }
+    },
+    "github": {
+        "url": "https://github.com/hitzhangjie/golang-debugger-book"
     }
   }
 }
