@@ -28,7 +28,7 @@
 | godbg debug/exec/attach --headless | 启动调试服务器，允许调试客户端远程连接 (JSON-RPC)      | Y        | Y                     |
 | godbg connect                      | 启动调试客户端，连接远程调试服务器                     | Y        | Y                     |
 | godbg dap                          | 启动调试服务器，且支持DAP协议，允许VSCode等通过DAP集成 | N        | Y                     |
-| godbg tracepoint                   | 跟踪程序执行的函数                                     | bp-based | bp-based + ebpf-based |
+| godbg trace                        | 跟踪程序执行的函数                                     | bp-based | bp-based + ebpf-based |
 | godbg <...> --disable-aslr         | 禁用ASLR地址随机化                                     | N        | Y                     |
 | godbg --backend=gdb/lldb/rr        | 使用其他调试器实现代替native实现                       | N        | Y                     |
 
