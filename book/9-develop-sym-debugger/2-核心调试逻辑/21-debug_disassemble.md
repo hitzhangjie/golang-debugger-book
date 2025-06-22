@@ -141,7 +141,7 @@ func Parse(locStr string) (LocationSpec, error) {
 - 再比如如果是 `FuncLocationSpec` 就需要根据DWARF调试信息中的FDE信息，再找到该函数所包含指令的起始地址
 - ...
 
-所以你看，不同的locspec LocationSpec实现，也各自有不同的转换成内存地址的实现方式，我们会在小节 [24-locspec解析与地址转换](./24-how_locspec_works.md) 介绍不同locspec如何实现向内存地址转换的，这部分还是很重要的，涉及到了很多核心DWARF数据结构的使用。
+所以你看，不同的locspec LocationSpec实现，也各自有不同的转换成内存地址的实现方式，我们会在小节 [20-locspec解析与地址转换](./20-how_locspec_works.md) 介绍不同locspec如何实现向内存地址转换的，这部分还是很重要的，涉及到了很多核心DWARF数据结构的使用。
 
 OK，接下来我们看下反汇编指令的具体实现。
 
@@ -294,6 +294,9 @@ client端发起RPC调用的时候，第一个参数都是 `api.EvalScope`，这�
 - `print <expr>`，打印表达式的值，表达式中可能包含变量名，相同变量名可能在不同函数中、全局函数中定义，自然需要知道是哪个函数定义的，需要这个作用域来进一步确定定义的位置，进而确定变量类型、存储位置；
 - etc.
 
+
+see: tinydbg/service/api/types.go: api.EvalScope
+
 ```go
 // EvalScope is the scope a command should
 // be evaluated in. Describes the goroutine and frame number.
@@ -390,7 +393,7 @@ OK，客户端调用的RPC我们介绍完了，接下来介绍下服务器侧是
 
 **FindLocation**:
 
-server端的FindLocation实现，其实就是前面咱们介绍过的locspec的内容，涉及到客户端输入的locspec的解析，解析成具体的LocationSpec实现之后，再用它来执行查找 `LocationSpec.Find(....)`，拿到找到的指令地址信息[]*api.Location。locspec小节我们也举了几个不同的LocationSpec实现是如何来查找对应的指令地址的。这部分内容我们将在 [24-locspec解析与地址转换](./24-how_locspec_works.md) 进行想介绍，感兴趣的话，你也可以先睹为快。
+server端的FindLocation实现，其实就是前面咱们介绍过的locspec的内容，涉及到客户端输入的locspec的解析，解析成具体的LocationSpec实现之后，再用它来执行查找 `LocationSpec.Find(....)`，拿到找到的指令地址信息[]*api.Location。locspec小节我们也举了几个不同的LocationSpec实现是如何来查找对应的指令地址的。这部分内容我们将在 [20-locspec解析与地址转换](./20-how_locspec_works.md) 进行想介绍，感兴趣的话，你也可以先睹为快。
 
 ```go
 // FindLocation returns concrete location information described by a location expression.
