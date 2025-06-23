@@ -45,7 +45,9 @@ see: tinydbg/pkg/locspec/locations.go，这定义了每个locspec类型必须满
 
 #### 位置类型
 
-将上述位置描述方式，转换为Go中的类型描述，有些file:line方式是通过类型组合的方式来实现的。
+结合前面locspec文法的定义，这了看下每种位置类型的定义，将输入位置字符串解析为不同LocationSpec实现的逻辑我们就省略了。我们将重点放在不同LocationSpec如何将human-redable位置描述转换为内存地址的过程。
+
+ps：这个转换过程当然是在调试器后端实现的，因为转换的过程涉及到“符号层(Symbolic Layer)”、“目标层 (Target Layer)”的操作。
 
 see: tinydbg/pkg/locspec/locations.go
 
