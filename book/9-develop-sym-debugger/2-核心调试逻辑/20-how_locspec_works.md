@@ -1,6 +1,6 @@
 ## locspec解析与地址转换
 
-符号级调试器和指令级调试器相比，最明显的不同之一就是我们可以使用字符串来表示位置信息，如添加断点时、反汇编时可以使用“文件名:行号"、“函数名”来表示目标地址。为了调试时更加便利，我们需要设计一些大家常用、容易记住、容易输入的位置描述方式，这里我们就叫做locationspec，简称locspec了。
+符号级调试器和指令级调试器相比，最明显的不同之一就是我们可以使用字符串来表示位置信息，如添加断点时、反汇编时可以使用"文件名:行号"、"函数名"来表示目标地址。为了调试时更加便利，我们需要设计一些大家常用、容易记住、容易输入的位置描述方式，这里我们就叫做locationspec，简称locspec了。
 
 ### 实现目标：支持locspec解析及地址转换
 
@@ -127,7 +127,7 @@ func Parse(locStr string) (LocationSpec, error) {
 
 locspec的目的是为了将位置描述字符串转换为内存中的地址，所以针对locspec定义了这样一个接口LocationSpec。
 
-locspec主要是在client端调试会话中进行输入，然后RPC传给服务器侧，服务器侧将其解析为具体的LocationSpec实现，之后的最常用操作就是使用 `LocationSpecConcreate.Find(t, args, scope, locStr, ...)` 来将locStr转换为内存地址。
+locspec主要是在client端调试会话中进行输入，然后RPC传给服务器侧，服务器侧将其解析为具体的LocationSpec实现，之后的最常用操作就是使用 `XXXLocationSpec.Find(t, args, scope, locStr, ...)` 来将locStr转换为内存地址。
 
 ```go
 type LocationSpec interface {
@@ -139,7 +139,7 @@ type LocationSpec interface {
 }
 ```
 
-调试器后端和目标进程进行交互，可以读取它的二进制、DWARF、进程等信息，可以将上述输入的“位置描述”字符串精确转换为内存地址。
+调试器后端和目标进程进行交互，可以读取它的二进制、DWARF、进程等信息，可以将上述输入的"位置描述"字符串精确转换为内存地址。
 
 每一种LocationSpec实现结合实际情况实现这样的查询操作Find，如何实现Find操作的呢？每个LocationSpec实现有不同的实现逻辑，比如：
 
@@ -152,26 +152,133 @@ type LocationSpec interface {
 
 我们一起来看几个示例，你就明白就了。
 
-##### FuncLocationSpec
-
 ##### NormalLocationSpec
+
+NormalLocationSpec表示的是 `file:line` 或者 `func:line` 这种类型的位置描述，注意它包含了一个FuncLocationSpec用以支持 `func:line` 这种情况，FuncLocationSpec并没有实现 LocationSpec interface。
+
+OK，我们来看下这个函数是如何实现的。
+
+```go
+// NormalLocationSpec represents a basic location spec.
+// This can be a file:line or func:line.
+type NormalLocationSpec struct {
+	Base       string
+	FuncBase   *FuncLocationSpec
+	LineOffset int
+}
+
+// FuncLocationSpec represents a function in the target program.
+type FuncLocationSpec struct {
+	PackageName           string
+	AbsolutePackage       bool
+	ReceiverName          string
+	PackageOrReceiverName string
+	BaseName              string
+}
+
+// Find will return a list of locations that match the given location spec.
+// This matches each other location spec that does not already have its own spec
+// implemented (such as regex, or addr).
+func (loc *NormalLocationSpec) Find(t *proc.Target, processArgs []string, scope *proc.EvalScope, locStr string, includeNonExecutableLines bool, substitutePathRules [][2]string) ([]api.Location, string, error) {
+	// 如果是file:line描述方式，所有后缀匹配的文件都算是候选文件，我们需要先找到候选的源文件列表
+	// - 但是这里的候选文件可能比较多，所以必须加个数量限制，如果没有开发者想要的候选文件，那就得指定的路径更明确点
+	// - 再一个是源文件路径映射的问题，这里需要根据路径映射规则进行映射，以免匹配不到
+	limit := maxFindLocationCandidates
+	var candidateFiles []string
+	for _, sourceFile := range t.BinInfo().Sources {
+		substFile := sourceFile
+		if len(substitutePathRules) > 0 {
+			substFile = SubstitutePath(sourceFile, substitutePathRules)
+		}
+		if loc.FileMatch(substFile) || (len(processArgs) >= 1 && tryMatchRelativePathByProc(loc.Base, processArgs[0], substFile)) {
+			candidateFiles = append(candidateFiles, sourceFile)
+			if len(candidateFiles) >= limit {
+				break
+			}
+		}
+	}
+	limit -= len(candidateFiles)
+
+	// 如果是func:line描述方式，所有后缀匹配的函数名都算是候选函数，我们也得先找到候选的函数列表
+	// - 这里的候选函数可能也比较多，所以也得加个数量限制，如果没有开发者想要的候选函数，那也得指定的函数名更明确点，
+	//   比如包含包路径、receivertype
+	var candidateFuncs []string
+	if loc.FuncBase != nil && limit > 0 {
+		// 查找最多limit个函数名匹配的函数
+		// - 先查泛型函数 (Go 的泛型在编译时会为不同的类型参数生成不同的具体实现，这些实现可能都对应到同一行源码???)
+		//   how generics works? see: https://github.com/golang/proposal/blob/master/design/generics-implementation-dictionaries-go1.18.md
+		// - 再查其他普通函数
+		candidateFuncs = loc.findFuncCandidates(t.BinInfo(), limit)
+	}
+
+	// 如果没有找到匹配的源文件名、函数名
+	if matching := len(candidateFiles) + len(candidateFuncs); matching == 0 {
+		// 如果没有指定作用域，那么直接返回未找到错误
+		if scope == nil {
+			return nil, "", fmt.Errorf("location %q not found", locStr)
+		}
+		// 注意，file:line, func:line这里的line是可选项，想象下添加断点时，对吧！
+		// 简化下，如果输入了 xxx，但是当做func去查找时没有查到，有可能是少输入了符号* …… 所以当做 *xxx 重新解析下
+		addrSpec := &AddrLocationSpec{AddrExpr: locStr}
+		locs, subst, err := addrSpec.Find(t, processArgs, scope, locStr, includeNonExecutableLines, nil)
+		if err != nil {
+			return nil, "", fmt.Errorf("location %q not found", locStr)
+		}
+		return locs, subst, nil
+	} else if matching > 1 {
+	// 如果找到了多个匹配，调试器不知道在哪里添加断点，需要提示开发者位置有歧义
+		return nil, "", AmbiguousLocationError{Location: locStr, CandidatesString: append(candidateFiles, candidateFuncs...)}
+	}
+
+	var addrs []uint64
+	var err error
+
+	// 如果候选源文件只有1个，下面看下有没有line要求
+	if len(candidateFiles) == 1 {
+		// 行号只能>=0，解析NormalLocationSpec时，LineOffset初始化为-1
+		if loc.LineOffset < 0 {
+			return nil, "", errors.New("Malformed breakpoint location, no line offset specified")
+		}
+		// 通过DWARF行号表查找 file:line 对应的指令地址，
+		addrs, err = proc.FindFileLocation(t, candidateFiles[0], loc.LineOffset)
+	} else { 
+	// 如果候选函数只有1个，下面看下有没有line要求，这个其实要分两步来完成
+	// - 先找到函数入口地址对应的源码行（file:line)
+	// - newLine=line+LineOffset，使用 file:newLine 作为位置，查行号表得到地址
+		addrs, err = proc.FindFunctionLocation(t, candidateFuncs[0], loc.LineOffset)
+	}
+	...
+
+	return []api.Location{addressesToLocation(addrs)}, "", nil
+}
+```
 
 ##### LineLocationSpec
 
-LineLocationSpec描述的是当前源文件的指定行的位置。因此它依赖scope信息。
+LineLocationSpec描述的是当前源文件的指定行的位置，当前源文件位置的确定依赖scope.PC+DWARF行号表，这样先确定当前PC所处的源码位置"文件名：行号"，然后确定新的文件名行号"文件名:loc.Line"。然后再通过行号表将其转换为对应的PC地址。
 
+关于DWARF行号表的设计实现，如果你忘记了相关的细节，可以翻翻 [DWARF行号表](8-dwarf/5-other/2-lineno-table.md)。
 
 ```go
+// LineLocationSpec represents a line number in the current file.
+type LineLocationSpec struct {
+	Line int
+}
+
 // Find will return the location at the given line in the current file.
 func (loc *LineLocationSpec) Find(t *proc.Target, _ []string, scope *proc.EvalScope, _ string, includeNonExecutableLines bool, _ [][2]string) ([]api.Location, string, error) {
+	// 由于需要确定当前执行到的源码行位置，依赖PC，所以参数EvalScope不能为空。
 	if scope == nil {
 		return nil, "", errors.New("could not determine current location (scope is nil)")
 	}
+	// 确定当前执行到的源文件位置，只关心文件名，行号已经重新指定
 	file, _, fn := scope.BinInfo.PCToLine(scope.PC)
 	if fn == nil {
 		return nil, "", errors.New("could not determine current location")
 	}
+	// 确定新的位置file:loc.Line
 	subst := fmt.Sprintf("%s:%d", file, loc.Line)
+	// 查找源文件位置对应的指令地址
 	addrs, err := proc.FindFileLocation(t, file, loc.Line)
 	if includeNonExecutableLines {
 		if _, isCouldNotFindLine := err.(*proc.ErrCouldNotFindLine); isCouldNotFindLine {
@@ -182,17 +289,67 @@ func (loc *LineLocationSpec) Find(t *proc.Target, _ []string, scope *proc.EvalSc
 }
 ```
 
+>注意，同一行源代码，可能对应了多条机器指令，那么该使用哪一个指令地址应该作为该源码行的第一条指令呢？比如用来添加断点时，应该停在哪一条指令处？
+>
+>在行号表中每一行都有一列标识，是否将该行指令当做源码行添加断点时的指令。这个是很重要的，比如Go里面的函数调用是非常特殊的，它不同于C、C++，Go函数调用开始会先检查栈帧大小是否够用，不够用会会执行栈扩容动作，扩容完成再返回原来的函数执行。如果在函>数调用的第一条指令处添加断点，我们会观察到这个函数执行了两次，这很奇怪！所以，对于Go语言调试器，通常要将函数入口处栈检查通过后的第一条指令位置当做断点位置。
+
+但是这并不是 `LocationSpec.Find(...) ([]api.Location, _, error)` 会返回多个位置的理由？上面的问题，DWARF中已经解决了，只需要compiler、linker、debugger开发者注意即可。Find操作返回多个位置的一个情景是，Go Generics，Go泛型函数是通过一种称为"stenciling（蜡印）"的技术，即会为每种泛型参数生成一个函数实例，这多个实例的入口地址自然是不同的，所以这个情景下就存在一个file:line位置存在多个api.Location的可能性。
+
+在介绍NormalLocationSpec查找候选函数名的时候，我们有提到过，会优先搜索泛型函数名，再搜索其他普通函数名，了解即可。
+
 ##### OffsetLocationSpec
+
+当前调试器执行到的源码行file:line，在当前源代码位置，增加一个行偏移量LineOffset，得到新的位置file:line+LineOffset。
+
+```go
+// OffsetLocationSpec represents a location spec that
+// is an offset of the current location (file:line).
+type OffsetLocationSpec struct {
+	Offset int
+}
+
+// Find returns the location after adding the offset amount to the current line number.
+func (loc *OffsetLocationSpec) Find(t *proc.Target, _ []string, scope *proc.EvalScope, _ string, includeNonExecutableLines bool, _ [][2]string) ([]api.Location, string, error) {
+	// 因为要确定当前执行到的源代码位置，依赖PC，所以scope必须有效
+	if scope == nil {
+		return nil, "", errors.New("could not determine current location (scope is nil)")
+	}
+	// 根据PC确定当前执行到的源文件位置 file:line, fn
+	file, line, fn := scope.BinInfo.PCToLine(scope.PC)
+	if loc.Offset == 0 {
+		subst := ""
+		if fn != nil {
+			subst = fmt.Sprintf("%s:%d", file, line)
+		}
+		return []api.Location{{PC: scope.PC}}, subst, nil
+	}
+	if fn == nil {
+		return nil, "", errors.New("could not determine current location")
+	}
+	// 确定新的源文件位置 file:line+LineOffset
+	subst := fmt.Sprintf("%s:%d", file, line+loc.Offset)
+	// 确定新位置对应的指令地址
+	addrs, err := proc.FindFileLocation(t, file, line+loc.Offset)
+	...
+	return []api.Location{addressesToLocation(addrs)}, subst, err
+}
+```
 
 ##### AddrLocationSpec
 
 AddrLocationSpec其实支持了如下几种方式：
 
-- `<address>`
-- `*<address>`
-- `<funcName>`
+- `<address>`，直接指定了一个地址
+- `*<address>`，表达式形式指定了一个地址
+- `<funcName>`，函数本身也算是一个地址？函数序言之后的第一条指令的地址
 
 ```go
+// AddrLocationSpec represents an address when used
+// as a location spec.
+type AddrLocationSpec struct {
+	AddrExpr string
+}
+
 // Find returns the locations specified via the address location spec.
 func (loc *AddrLocationSpec) Find(t *proc.Target, _ []string, scope *proc.EvalScope, locStr string, includeNonExecutableLines bool, _ [][2]string) ([]api.Location, string, error) {
     // locStr 本身包含的是一个地址，如locStr=0x12345678
@@ -219,12 +376,49 @@ func (loc *AddrLocationSpec) Find(t *proc.Target, _ []string, scope *proc.EvalSc
 
 这里分两种情况：本身就是一个地址值，直接字符串转Int64后返回；另一种是一个表达式，`scope.EvalExpression(...)`，表达式结果可以是一个计算出的地址，也可能是一个函数，如果是后者，那么就需要取函数prologue后的第一条指令地址。
 
-ps: scope.EvalExpression的工作原理，我们在前一小节 [19-表达式计算](./19-how_evalexpr_works.md) 中进行了详细介绍。如果你忘记了它是如何工作的，可以翻回去看看。
+ps: scope.EvalExpression的工作原理，我们在前一小节 [19-表达式计算](./19-how_evalexpr_works.md) 中进行了详细介绍。如果你忘记了它是如何工作的，可以翻回去看看。当然这一节并没有对所有类型的表达式进行计算，但是我们已经介绍了读者了解这些的所有必备知识、关键流程，读者可以自行了解。
 
 ##### RegexLocationSpec
+
+通过 `/regexp/` 的格式来配置一个正则表达式，所有函数名与该正则匹配的位置，都会作为候选函数，然后找到这些函数对应的指令地址。
+
+```go
+type RegexLocationSpec struct {
+	FuncRegex string
+}
+
+// Find will search all functions in the target program and filter them via the
+// regex location spec. Only functions matching the regex will be returned.
+func (loc *RegexLocationSpec) Find(t *proc.Target, _ []string, scope *proc.EvalScope, locStr string, includeNonExecutableLines bool, _ [][2]string) ([]api.Location, string, error) {
+	if scope == nil {
+		//TODO(aarzilli): this needs only the list of function we should make it work
+		return nil, "", errors.New("could not determine location (scope is nil)")
+	}
+	funcs := scope.BinInfo.Functions
+	matches, err := regexFilterFuncs(loc.FuncRegex, funcs)
+	if err != nil {
+		return nil, "", err
+	}
+	r := make([]api.Location, 0, len(matches))
+	for i := range matches {
+		addrs, _ := proc.FindFunctionLocation(t, matches[i], 0)
+		if len(addrs) > 0 {
+			r = append(r, addressesToLocation(addrs))
+		}
+	}
+	return r, "", nil
+}
+```
 
 ### 执行测试
 
 略
 
 ### 本文小结
+
+本文详细介绍了符号级调试器中locspec（位置描述符）的解析与地址转换机制。locspec允许开发者使用直观的字符串表示位置信息，如"文件名:行号"、"函数名"、"正则表达式"等，而不需要直接操作内存地址。文章首先定义了locspec的文法规范，支持多种位置描述方式，然后通过具体的Go代码实现展示了如何将位置描述字符串解析为不同的LocationSpec类型（如NormalLocationSpec、LineLocationSpec、OffsetLocationSpec等），并详细说明了每种类型如何通过Find方法将位置描述转换为实际的内存地址。整个实现涉及DWARF调试信息的解析、行号表查找、函数符号匹配等核心调试技术，为调试器提供了用户友好的位置描述方式和位置定位功能。
+
+### 参考文献
+
+1. how go generics works, https://github.com/golang/proposal/blob/master/design/generics-implementation-dictionaries-go1.18.md
+2. 
