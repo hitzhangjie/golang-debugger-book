@@ -151,10 +151,31 @@ OK，接下来我们看看断点命令的执行细节？
 debug_breakpoint.go:breakpointCmd.cmdFn(...), 
 i.e., breakpoint(...)
     \--> _, err := setBreakpoint(t, ctx, false, args)
-            \--> 
+            \--> args := config.Split2PartsBySpace(argstr)
+            \--> parse breakpoint name, locspec and condition
+            \--> locs, substSpec, findLocErr := t.client.FindLocation(ctx.Scope, spec, true, t.substitutePathRules())
+                 `break [name] [locspec]
+            \--> if findLocErr != nil retries following:
+                 1) research locations by removing `if condition`
+                    `break [name] [locspec] [if condition]
+                 2) research locations by checking if suspended breakpoints should be set if:
+                    - plugin.Open called, 
+                    - isErrProcessExited(err),
+                    - or t.client.FollowExecEnabled() true
+            \--> if findLocErr != nil then failed
+            \--> foreach loc in locs do
+                    \--> bp, err := t.client.CreateBreakpointWithExpr(requestedBp, spec, t.substitutePathRules(), false)
+            \--> set breakpoints for function return addresses if
+                 `trace [name] [locspec]`
+                 1) it's a tracepoint 
+                 2) and locspec contains function Name
+                 3) and locs[0].Function != nil 
+                 foreach loc in locs do
+                    \--> if loc.Function == nil then continue
+                    \--> addrs, err := t.client.(*rpc2.RPCClient).FunctionReturnLocations(locs[0].Function.Name())
+                    \--> foreach addr in addrs do
+                            \--> _, err = t.client.CreateBreakpoint(&api.Breakpoint{Addr: addrs[j], TraceReturn: true, Line: -1, LoadArgs: &ShortLoadConfig})
 ```
-
-
 
 **serverside**：
 
