@@ -151,21 +151,46 @@ OK，接下来我们看看断点命令的执行细节？
 debug_breakpoint.go:breakpointCmd.cmdFn(...), 
 i.e., breakpoint(...)
     \--> _, err := setBreakpoint(t, ctx, false, args)
+            
+// step1: for ordinary breakpoints
             \--> args := config.Split2PartsBySpace(argstr)
+                    \-> strings.SplitN(argstr, " ", 2)
             \--> parse breakpoint name, locspec and condition
             \--> locs, substSpec, findLocErr := t.client.FindLocation(ctx.Scope, spec, true, t.substitutePathRules())
-                 `break [name] [locspec]
+                 输入：`break [name] [locspec] [if condition]`, name=name, spec=`[locspec] [if condition]`，会查找失败
+                        然后尝试step2，name=name, spec=locspec，会查找成功
+                 输入：`break [name] [locspec]`, name=name, spec=locspec，会查找成功
+                 输入：`break [locspec] [if condition]`，
+                        1) name="" and spec='locspec if condition'，会查找失败
+                           然后尝试step2，argstr=locspec, then cond=if condition, then name="", spec=locspec, cond=if condition, 会查找成功
+                        2) name=locspec，spec='if condition', 会查找失败
+                           燃烧后尝试step2，argstr=locspec, spec=locspec，会查找成功
+                 输入：`break [locspec]`，spec=locspec，会查找成功
+                 输入：`break [if condition]`，name=if, spec=condition，会失败
+                        重试step2，cond=if condition, argstr=""，then name="", spec="+0", cond=if condition, 会成功!!!
+                        FIXME: Wow! `b if 1==2` succeeds in dlv!!!
+                 输入：`break` ==> `break +0`，spec=+0，会查找成功
+
+// step2: for condition breakpoints and suspended breakpoints
+// - condition breakpoints
             \--> if findLocErr != nil retries following:
-                 1) research locations by removing `if condition`
-                    `break [name] [locspec] [if condition]
-                 2) research locations by checking if suspended breakpoints should be set if:
+                 1) search locations by removing `if condition`
+                 输入：`break [name] [locspec] [if condition]`，前面分析了step1失败后重试step2会成功
+                 输入：`break [locspec] [if condition]`，前面分析了step1失败后重试step2会成功
+                 输入：`break [if condition]`，会失败
+// - suspended breakpoints
+                 2) search locations by checking if suspended breakpoints should be set if:
                     - plugin.Open called, 
-                    - isErrProcessExited(err),
-                    - or t.client.FollowExecEnabled() true
+                    - or isErrProcessExited(err),
+                    - or t.client.FollowExecEnabled()
             \--> if findLocErr != nil then failed
+
+// step3: create breakpoints for locs
             \--> foreach loc in locs do
                     \--> bp, err := t.client.CreateBreakpointWithExpr(requestedBp, spec, t.substitutePathRules(), false)
-            \--> set breakpoints for function return addresses if
+
+// step4: for tracepoints
+            \--> for tracepoint, set breakpoints for function return addresses if
                  `trace [name] [locspec]`
                  1) it's a tracepoint 
                  2) and locspec contains function Name
@@ -176,6 +201,10 @@ i.e., breakpoint(...)
                     \--> foreach addr in addrs do
                             \--> _, err = t.client.CreateBreakpoint(&api.Breakpoint{Addr: addrs[j], TraceReturn: true, Line: -1, LoadArgs: &ShortLoadConfig})
 ```
+
+竟然还有普通断点、条件断点、suspended断点、tracepoints，是不是感觉有点懵？别怕！基础知识部分提到过一些概念，逻辑断点、物理断点、breaklets。我们还没有详细对breaklets进行展开，也没有将什么场景关联什么breaklet。我们需要从一个一个关联场景出发，看看服务器添加断点时会干什么，以及执行到断点时会做什么，或者说它如何影响调试器对目标进程执行、暂停的控制，等我们了解了服务器端的处理逻辑，就会豁然开朗了。
+
+
 
 **serverside**：
 
