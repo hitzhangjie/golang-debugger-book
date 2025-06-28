@@ -4,5 +4,6 @@
     "files.exclude": {
         "**/book.en": true
     },
-    "explorer.sortOrderReverse": false
+    "explorer.sortOrderReverse": false,
+    "editor.detectIndentation": false
 }
