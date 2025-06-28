@@ -232,65 +232,66 @@ rpc2/server.go:CreateBreakpoint
 func (s *RPCServer) CreateBreakpoint(arg CreateBreakpointIn, out *CreateBreakpointOut) error {
     \--> err := api.ValidBreakpointName(arg.Breakpoint.Name)
     \--> createdbp, err := s.debugger.CreateBreakpoint(&arg.Breakpoint, arg.LocExpr, arg.SubstitutePathRules, arg.Suspended)
-            \--> checking: if breakpoints with the same name as requestBp.Name created before
-                 d.findBreakpointByName(requestedBp.Name)
-            \--> checking: if breakpoints with the same requestBp.ID created before
-                 lbp := d.target.LogicalBreakpoints[requestedBp.ID]
-            \--> breakpoint config, initialized based on following order
-                 \--> case requestedBp.TraceReturn, 
-                      setbp.PidAddrs = []proc.PidAddr{{Pid: d.target.Selected.Pid(), Addr: requestedBp.Addr}}
-                 \--> case requestedBp.File != "",
-                      setbp.File = requestBp.File
-                      setbp.Line = requestBp.Line
-                 \--> requestedBp.FunctionName != "",
-                      setbp.FunctionName = requestedBp.FunctionName
-                      setbp.Line = requestedBp.Line
-                 \--> len(requestedBp.Addrs) > 0, 
-                      setbp.PidAddrs = make([]proc.PidAddr, len(requestedBp.Addrs))
-                      then, fill the setbp.PidAddrs with slice of PidAddr{pid,addr}
-                 \--> default, setbp.Addr = requestBp.Addr
-            \--> if locexpr != "", 
-                 \--> setbp.Expr = func(t *proc.Target) []uint64 {...}
-                 \--> setbp.ExprString = locExpr
-            \--> create the logical breakpoint
-                 \--> `id`, allocate a logical breakpoint ID
-                 \--> lbp := &proc.LogicalBreakpoint{LogicalID: id, HitCount: make(map[int64]uint64)}
-                 \--> err = d.target.SetBreakpointEnabled(lbp, true)
-                      \--> if lbp.enabled && !enabled, then 
-                           lbp.enabled = false
-                           err = grp.disableBreakpoint(lbp)
-                      \--> if !lbp.enabled && enabled, then 
-                           lbp.enabled = true
-                           lbp.condSatisfiable = breakpointConditionSatisfiable(grp.LogicalBreakpoints, lbp)
-                           err = grp.enableBreakpoint(lbp)
-                                \--> for p in grp.targets, do: 
-                                        err := enableBreakpointOnTarget(p, lbp)
-                                            \--> addrs, err = FindFileLocation(p, lbp.Set.File, lbp.Set.Line), or 
-                                                addrs, err = FindFunctionLocation(p, lbp.Set.FunctionName, lbp.Set.Line), or 
-                                                filter the PidAddrs with same Pid as p.Pid() among lbp.Set.PidAddrs
-                                            \--> foreach addr in addrs, do:
-                                                    _, err = p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil)
-                                                        \--> t.setBreakpointInternal(logicalID, addr, kind, 0, cond)
-                                                                \--> newBreaklet := &Breaklet{Kind: kind, Cond: cond}
-                                                                \--> f, l, fn := t.BinInfo().PCToLine(addr)
-                                                                \--> hardware debug registers, set watchpoints via writing these registers
-                                                                ...
-                                                                \--> newBreakpoint := &Breakpoint{funcName, watchType, hwidx, file, line, addr}
-                                                                \--> newBreakpoint.Breaklets = append(newBreakpoint.Breaklets, newBreaklet)
-                                                                \--> err := t.proc.WriteBreakpoint(newBreakpoint)
-                                                                \--> setLogicalBreakpoint(newBreakpoint)
-                                                                        \--> if bp.WatchType != 0, then
-                                                                                \--> foreach thead in dbp.threads, do
-                                                                                        err := thread.writeHardwareBreakpoint(bp.Addr, bp.WatchType, bp.HWBreakIndex)
-                                                                                        return err
-                                                                        \--> return dbp.writeSoftwareBreakpoint(dbp.memthread, bp.Addr)
-                                                                                \--> _, err := thread.WriteMemory(addr, dbp.bi.Arch.BreakpointInstruction())
-                                                                                        \--> t.dbp.execPtraceFunc(func() { written, err = sys.PtracePokeData(t.ID, uintptr(addr), data) })
-                                                            
-                                     
-                 \--> return d.convertBreakpoint(lbp)   
-
+    |       \--> checking: if breakpoints with the same name as requestBp.Name created before
+    |            d.findBreakpointByName(requestedBp.Name)
+    |       \--> checking: if breakpoints with the same requestBp.ID created before
+    |            lbp := d.target.LogicalBreakpoints[requestedBp.ID]
+    |       \--> breakpoint config, initialized based on following order
+    |       |    \--> case requestedBp.TraceReturn, 
+    |       |         setbp.PidAddrs = []proc.PidAddr{{Pid: d.target.Selected.Pid(), Addr: requestedBp.Addr}}
+    |       |    \--> case requestedBp.File != "",
+    |       |         setbp.File = requestBp.File
+    |       |         setbp.Line = requestBp.Line
+    |       |    \--> requestedBp.FunctionName != "",
+    |       |         setbp.FunctionName = requestedBp.FunctionName
+    |       |         setbp.Line = requestedBp.Line
+    |       |    \--> len(requestedBp.Addrs) > 0, 
+    |       |         setbp.PidAddrs = make([]proc.PidAddr, len(requestedBp.Addrs))
+    |       |         then, fill the setbp.PidAddrs with slice of PidAddr{pid,addr}
+    |       |    \--> default, setbp.Addr = requestBp.Addr
+    |       \--> if locexpr != "", 
+    |            \--> setbp.Expr = func(t *proc.Target) []uint64 {...}
+    |            \--> setbp.ExprString = locExpr
+    |       \--> create the logical breakpoint
+    |       |    \--> `id`, allocate a logical breakpoint ID
+    |       |    \--> lbp := &proc.LogicalBreakpoint{LogicalID: id, HitCount: make(map[int64]uint64)}
+    |       |    \--> err = d.target.SetBreakpointEnabled(lbp, true)
+    |       |    |    \--> if lbp.enabled && !enabled, then 
+    |       |    |         lbp.enabled = false
+    |       |    |         err = grp.disableBreakpoint(lbp)
+    |       |    |    \--> if !lbp.enabled && enabled, then 
+    |       |    |         lbp.enabled = true
+    |       |    |         lbp.condSatisfiable = breakpointConditionSatisfiable(grp.LogicalBreakpoints, lbp)
+    |       |    |         err = grp.enableBreakpoint(lbp)
+    |       |    \--> return d.convertBreakpoint(lbp)   
     \--> out.Breakpoint = *createdbp
+```
+
+```bash
+err = grp.enableBreakpoint(lbp)
+    \--> for p in grp.targets, do: 
+            err := enableBreakpointOnTarget(p, lbp)
+                \--> addrs, err = FindFileLocation(p, lbp.Set.File, lbp.Set.Line), or 
+                    addrs, err = FindFunctionLocation(p, lbp.Set.FunctionName, lbp.Set.Line), or 
+                    filter the PidAddrs with same Pid as p.Pid() among lbp.Set.PidAddrs
+                \--> foreach addr in addrs, do:
+                        p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil)
+                            \--> t.setBreakpointInternal(logicalID, addr, kind, 0, cond)
+                                    \--> newBreaklet := &Breaklet{Kind: kind, Cond: cond}
+                                    \--> f, l, fn := t.BinInfo().PCToLine(addr)
+                                    \--> hardware debug registers, set watchpoints via writing these registers
+                                    ...
+                                    \--> newBreakpoint := &Breakpoint{funcName, watchType, hwidx, file, line, addr}
+                                    \--> newBreakpoint.Breaklets = append(newBreakpoint.Breaklets, newBreaklet)
+                                    \--> err := t.proc.WriteBreakpoint(newBreakpoint)
+                                    \--> setLogicalBreakpoint(newBreakpoint)
+                                            \--> if bp.WatchType != 0, then
+                                                    \--> foreach thead in dbp.threads, do
+                                                            err := thread.writeHardwareBreakpoint(bp.Addr, bp.WatchType, bp.HWBreakIndex)
+                                                            return err
+                                            \--> return dbp.writeSoftwareBreakpoint(dbp.memthread, bp.Addr)
+                                                    \--> _, err := thread.WriteMemory(addr, dbp.bi.Arch.BreakpointInstruction())
+                                                            \--> t.dbp.execPtraceFunc(func() { written, err = sys.PtracePokeData(t.ID, uintptr(addr), data) })
 ```
 
 #### breakpoints
