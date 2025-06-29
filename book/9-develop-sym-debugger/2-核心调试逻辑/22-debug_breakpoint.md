@@ -1,10 +1,10 @@
 ## Breakpoint
 
-断点是调试器能力的核心功能之一，在介绍指令级调试器时，我们详细介绍了断点的底层工作原理。如果你忘记了0xCC的作用，或者忘记了 `ptrace(PTRACE_PEEKDATA/POKEDATA/PEEKTEXT/POKETEXT, ...)` 是干什么用的，或者忘记了处理器执行到0xCC时会发生什么，或者忘记了内核如何响应SIGTRAP信号，或者忘记了子进程状态变化如何通过SIGCHLD通知到父进程，或者忘记了ptracer调用wait4是用来干什么的 …… 只要这里面有一个问题，你觉得模糊，那我认为，你都应该赶紧翻到 [第6章 动态断点](../../6-develop-inst-debugger/6-breakpoint.md) 小节快速回顾一下。
+断点是调试器能力的核心功能之一，在介绍指令级调试器时，我们详细介绍了断点的底层工作原理。如果你忘记了0xCC的作用，忘记了 `ptrace(PTRACE_PEEKDATA/POKEDATA/PEEKTEXT/POKETEXT, ...)` 是干什么用的，搞不清处理器执行到0xCC时会发生什么，搞不清内核如何响应SIGTRAP信号，搞不清子进程状态变化如何通过SIGCHLD通知到父进程，甚至忘记了ptracer调用wait4是用来干什么的 …… 如果果真如此，那可以细点翻到 [第6章 动态断点](../../6-develop-inst-debugger/6-breakpoint.md) 小节快速回顾一下。
 
 ### 实现目标: `breakpoint` `breakpoints` `clear` `clearall` `toggle`
 
-本节实现目标，我们将把断点操作强相关的几个调试命令，一起进行介绍，就不机械地每个调试命令单独一节内容了。其实还有另外几个 `condition`, `on`, `trace`, `watch`，这几个调试命令虽然也与断点相关，但是相对来说是比较高级点的用法，我们还是单独介绍下，以示重视，也希望在日后调试时能更好地帮助大家调试。
+本节实现目标，我们将把断点操作强相关的几个调试命令，一起进行介绍。另外几个调试命令 `condition`, `on`, `trace`, `watch` 虽然也与断点相关，但是相对来说是比较高级点的用法，我们单独介绍以示重视，也希望在日后调试时能更好地帮助大家调试。
 
 ### 基础知识
 
@@ -14,67 +14,49 @@
 
 #### 应用及挑战
 
-除了用户显示创建的断点 `break <locspec>`，一些调试命令也会主动创建断点。在指令级调试器里，step命令控制单步指令执行，是借助 `ptrace(PTRACE_SINGLESTEP, ...)` 打开了CPU的单步执行模式，这里的单步执行强调的步进一条指令，而非一行源代码。在符号级调试器里，要想实现next、stepin、stepout等操作，我们就需要思考，下一个断点位置应该设置在什么位置。
+除了用户显示创建断点以外，个别调试命令也会主动创建断点。在指令级调试器里，step命令控制单步指令执行，是借助 `ptrace(PTRACE_SINGLESTEP, ...)` 打开了CPU的单步执行模式，这里的单步执行强调的步进一条指令，而非一行源代码。在符号级调试器里，要想实现next、stepin、stepout等操作，我们就需要思考，下一个断点位置应该设置在什么位置。
 
-举几个例子：
-1）next，如果程序只有顺序执行的语句，实现next很简单，从PC找到Line，Line++并且有该源码行有有效的PC，在此处添加断点后，主动continue运行到此处，就ok了；
-2）next，如果程序除了顺序执行的语句，还包括了分支控制、循环控制、跳转、函数调用等逻辑，此时判断下一行待执行源码时，简单地++就是一个错误了，会导致程序不再逐行执行。
+举1个next操作的例子：
 
-那next操作该如何兼顾 1）2）这两个问题呢？DWARF调试信息提供了行号表，尽管我们可以指定任意PC来转换为源码行，但是行号表并不直接描述当前行的下一行是哪个地址。
+- 如果程序只有顺序执行的语句，实现next很简单，从PC确定Line，Line++并且改行包含可执行的指令（不是注释、空行、无执行语句的块结尾等），在此处添加断点后，主动continue运行到此处，就ok了；
+- 如果程序除了顺序执行的语句，还包括了if-else分支控制、switch-case分支控制，以及for循环控制、break、continue操作，此时判断下一行待执行源码时，简单地++就是一个错误了，因为很可能下一行源码是回退到判断控制语句或者break、continue指定的label处。
 
-- 方法一：我们从当前PC开始将以后的指令地址逐个查下对应的行号，只有与当前行不一样时，我们确定可以在这个位置加个断点，但这很低效。
-- 方法二：难道不能借助AST来分析函数体中执行的语句吗？但是这要对Go程序所有分支控制结构编写特殊逻辑，不够简洁，不够优雅。
-- 方法三：还是有更简单暴力的办法的，比如将行号表中属于当前函数范围的所有IsStmt=true的指令，都强加断点。
-  举例, `for i:=0; i<10; i++ {...}` 将至少在i:=0、i<10、i++这3个位置分别设置断点，如果forloop中有其他语句，则至少每个语句有一个断点，就不至于next调试时分支控制逻辑i++和i<10被错误跳过。
+DWARF行号表，使得指定任意PC查询对应源码行成为可能，但不支持直接查询当前PC的下一行源码。那实现上该如何兼顾 1）2）这两个问题呢？
 
-3）类似地stepin、stepout，进入一个函数、退出一个函数，也都需要自动添加类似的断点。这个相对来说比较简单，因为每个函数都有入口地址，但是返回地址就需要通过DWARF CFA进行计算了。
+- 方法一：从当前PC开始顺序扫描后面的指令，直到找到一个PC对应的行号与当前行号不同，就在对应PC处设置断点。可行但要频繁读取内存数据。
+- 方法二：借助AST分析函数体中执行的语句，对上述分支控制、循环控制、跳转等进行识别并处理，next时自动确定下个行号。可行但要做繁琐AST分析，且Go在后续迭代时AST结构会改变。
+- 方法三：有更简单的办法么？next操作时，确定当前函数的指令地址范围，将行号表中属于当前函数范围的所有lineEntry.IsStmt=true的指令地址lineEntry.PC，全部都设置上断点，并且在断点上加上qualifier kind=NextBreakpoint，等当前函数结束后时可以禁用这些断点。
 
-所以你看，在符号级调试器里面，断点的应用是非常广泛的，你可以主动添加，调试命令也会隐式添加。为了实现next、stepin、stepout这类简单操作，就涉及到了指令patch（物理断点）、DWARF行号表、DWARF调用帧信息表的使用。对条件断点的支持，还需要用到AST分析、表达式计算Eval等。
+举例, `for i:=0; i<10; i++ {...}` ，DWARF行号表会在i:=0、i<10、i++这3个操作对应指令位置的lineEntry中设置lineEntry.IsStmt=true，那我们就至少会在这3个位置设置断点，使得forloop循环体next执行过程中，总有机会停到上述i++、i<10这几个分支控制位置，而不是错误地执行到循环体后面位置。
 
-我们一起来学习下断点的相关设计实现。
+除了next操作，类似地stepin、stepout，进入一个函数、退出一个函数，也都需要自动添加类似的断点。这个相对来说比较简单，每个函数都有入口地址、返回地址。函数入口地址，通过函数定义对应的DIE即可确定；函数返回地址，源码中同一个函数多次被调用，返回地址会不同，返回地址的计算需要通过DWARF调用帧信息表CFA进行计算。
+
+另外还涉及到函数内联、泛型函数，同一函数中源码位置在最终程序中可能有多个地址，此时又会出现1个逻辑地址对应多个实际物理地址。
+
+而这期间，我们人为添加的断点，和调试命令隐式添加的断点，会发生重叠，此时这个断点的行为又应该如何。所以这里又涉及到断点重叠后的管理。
+
+我们还可能会将断点调整为1个条件断点，只有满足特定表达式条件时，才会触发，那这里又涉及到AST分析、ast.Expr表达式计算。
+
+总体来看，符号级调试器需要处理的问题，比指令级调试器要多很多、复杂很多。
 
 #### 断点的类型
 
 所以，从这里开始，我们的断点就可以分为两类：1）用户显示创建的断点；2）调试器其他调试命令自动隐式创建的断点。为了区分1）2）两种类型的断点，以及识别是哪种情况下自动隐式创建的断点，我们需要定义一个类型来区分 `BreakpointKind`。
 
 ```go
-// BreakpointKind determines the behavior of delve when the
-// breakpoint is reached.
+// BreakpointKind determines the behavior of debugger when the breakpoint is reached.
 type BreakpointKind uint16
 
 const (
-    // UserBreakpoint is a user set breakpoint
     UserBreakpoint BreakpointKind = (1 << iota)
-    // NextBreakpoint is a breakpoint set by Next, Continue will stop on it and delete it
     NextBreakpoint
-    // NextDeferBreakpoint is a breakpoint set by Next on the first deferred function. 
-    // In addition to check their condition, breakpoints of this kind will also 
-    // check that the function has been called by runtime.gopanic or through runtime.deferreturn.
     NextDeferBreakpoint
-    // StepBreakpoint is a breakpoint set by Step on a CALL instruction,
-    // Continue will set a new breakpoint (of NextBreakpoint kind) on the
-    // destination of CALL, delete this breakpoint and then continue again
     StepBreakpoint
-
-    // WatchOutOfScopeBreakpoint is a breakpoint used to detect when a watched
-    // stack variable goes out of scope.
     WatchOutOfScopeBreakpoint
-
-    // StackResizeBreakpoint is a breakpoint used to detect stack resizes to
-    // adjust the watchpoint of stack variables.
     StackResizeBreakpoint
-
-    // PluginOpenBreakpoint is a breakpoint used to detect that a plugin has
-    // been loaded and we should try to enable suspended breakpoints.
     PluginOpenBreakpoint
-
-    // StepIntoNewProc is a breakpoint used to step into a newly created
-    // goroutine.
     StepIntoNewProcBreakpoint
-
-    // NextInactivatedBreakpoint a NextBreakpoint that has been inactivated, see rangeFrameInactivateNextBreakpoints
     NextInactivatedBreakpoint
-
     StepIntoRangeOverFuncBodyBreakpoint
 
     steppingMask = NextBreakpoint | NextDeferBreakpoint | StepBreakpoint | StepIntoNewProcBreakpoint | NextInactivatedBreakpoint | StepIntoRangeOverFuncBodyBreakpoint
@@ -122,10 +104,10 @@ x86架构提供了4个调试地址寄存器(DR0-DR3)和2个调试控制寄存器
 要设置一个硬件断点,需要:
 
 1. 将断点地址写入某个未使用的DR0-DR3寄存器
-
 2. 在DR7中设置对应的控制位:
+
    - L0-L3位: 启用对应的DR0-DR3断点(置1启用)
-   - G0-G3位: 全局启用对应断点(置1启用) 
+   - G0-G3位: 全局启用对应断点(置1启用)
    - R/W0-R/W3位: 设置断点类型
      - 00: 执行断点
      - 01: 数据写入断点
@@ -135,17 +117,18 @@ x86架构提供了4个调试地址寄存器(DR0-DR3)和2个调试控制寄存器
 当程序执行到断点地址或访问监视的内存时,处理器会产生#DB异常(向量号1),内核捕获该异常并通知调试器。
 
 相比软件断点,硬件断点的优势是:
+
 - 不需要修改程序代码
 - 可以监视数据访问
 - 对于自修改代码更可靠
 
 但缺点是数量有限,只能同时设置4个硬件断点。
 
-### 代码实现
-
 下面我们分别看看这几个调试命令时如何实现的。
 
-#### break | breakpoint
+### 代码实现: `breakpoint`
+
+#### 实现目标
 
 先来看看break支持的操作：
 
@@ -189,11 +172,11 @@ Alternatively you can set a condition on a breakpoint after created by using the
 See also: "help on", "help cond" and "help clear"`,
 ```
 
-ps：我们重写了tinydbg的clientside的断点操作，我们将甚低频使用的参数[name]调整为了选项`--name|-n=<name>`的形式，这样也使得程序中解析断点name, locspec, condition的逻辑大幅简化。
+ps：我们重写了tinydbg的clientside的断点操作，我们将甚低频使用的参数[name]调整为了选项 `--name|-n=<name>`的形式，这样也使得程序中解析断点name, locspec, condition的逻辑大幅简化。
 
 OK，接下来我们看看断点命令的执行细节。
 
-**clientside**:
+#### clientside实现
 
 ```bash
 debug_breakpoint.go:breakpointCmd.cmdFn(...), 
@@ -221,9 +204,7 @@ i.e., breakpoint(...)
 
 竟然还有普通断点、条件断点、suspended断点、tracepoints，是不是感觉有点懵？别怕！基础知识部分提到过一些概念，逻辑断点、物理断点、breaklets。我们还没有详细对breaklets进行展开，也没有将什么场景关联什么breaklet。我们需要从一个一个关联场景出发，看看服务器添加断点时会干什么，以及执行到断点时会做什么，或者说它如何影响调试器对目标进程执行、暂停的控制，等我们了解了服务器端的处理逻辑，就会豁然开朗了。
 
-
-
-**serverside**：
+#### serverside实现
 
 服务器端描述起来可能有点复杂，如前面所属，服务器侧为了应对各种调整，引入了多种层次的抽象和不同实现。我们先整体介绍下流程。
 
@@ -294,11 +275,13 @@ err = grp.enableBreakpoint(lbp)
                                                             \--> t.dbp.execPtraceFunc(func() { written, err = sys.PtracePokeData(t.ID, uintptr(addr), data) })
 ```
 
-#### breakpoints
+这里要理解几个层次
 
-#### clear
+### 代码实现: `breakpoints`
 
-#### clearall
+### 代码实现: `clear`
+
+### 代码实现: `clearall`
 
 ### 执行测试
 
