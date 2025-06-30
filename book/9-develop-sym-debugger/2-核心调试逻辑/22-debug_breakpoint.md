@@ -433,37 +433,86 @@ func (s *RPCServer) CreateBreakpoint(arg CreateBreakpointIn, out *CreateBreakpoi
 3. 如果指定了逻辑断点ID，则检查该ID是否已经被其他逻辑断点使用了。
    ID被使用则返回错误，错误中说明了使用该ID的断点位置信息， proc.BreakpointExistsError{File: lbp.File, Line: lbp.Line}。
 4. 根据请求参数中设置断点的方式，创建断点：
-   - 如果requestBp.TraceReturn=true，说明是tracepoint，此时需要指定requestBp.Addr
-5. xxxx
+   - 如果requestBp.TraceReturn=true，说明是tracepoint请求中还需指定地址requestBp.Addr（函数调用返回地址）
+     setbp.PidAddrs = []proc.PidAddr{{Pid: d.target.Selected.Pid(), Addr: requestedBp.Addr}}
+   - 如果requestBp.File != "", 则使用requestBp.File:requestBp.Line来创建断点
+     setbp.File = requestBp.File, setbp.Line = requestBp.Line
+   - 如果requestedBp.FunctionName != ""，则使用requestBp.FunctionName:requestBp.Line来创建断点
+     setbp.FunctionName = requestBp.FunctionName, setbp.Line = requestBp.Line
+   - 如果 len(requestedBp.Addrs) != 0，则在目标进程的这些地址处添加断点
+     setbp.PidAddrs = []proc.PidAddr{.....}
+   - 其他情况，使用requestBp.Addr来设置断点
+     setbp.PidAddr = []proc.PidAddr{{Pid: d.target.Selected.Pid(), Addr: requestedBp.Addr}}
+5. 如果locExpr != ""，则解析位置表达式得到LocationSpec，setbp.Expr实际上是个函数，执行后返回位置表达式查找到的地址列表
+   setbp.Expr = func(t *proc.Target) []uint64 {...}
+   setbp.ExprString = locExpr
+6. 更新逻辑断点的id，创建一个逻辑断点proc.LogicalBreakpoint{LogicalID: id, ...,Set: setbp, ...,File:...,Line:...,FunctionName:...,}
+7. 设置逻辑断点对应的物理断点：err = d.target.SetBreakpointEnabled(lbp, true)
+8. 将逻辑断点信息转换为api.Breakpoint信息返还给客户端展示
+
+接下来看下 `d.target.SetBreakpointEnabled(lbp, true)`，设置逻辑断点关联的物理断点信息的流程。
 
 ```bash
-err = grp.enableBreakpoint(lbp)
-    \--> for p in grp.targets, do: 
-            err := enableBreakpointOnTarget(p, lbp)
-                \--> addrs, err = FindFileLocation(p, lbp.Set.File, lbp.Set.Line), or 
-                    addrs, err = FindFunctionLocation(p, lbp.Set.FunctionName, lbp.Set.Line), or 
-                    filter the PidAddrs with same Pid as p.Pid() among lbp.Set.PidAddrs
-                \--> foreach addr in addrs, do:
-                        p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil)
-                            \--> t.setBreakpointInternal(logicalID, addr, kind, 0, cond)
-                                    \--> newBreaklet := &Breaklet{Kind: kind, Cond: cond}
-                                    \--> f, l, fn := t.BinInfo().PCToLine(addr)
-                                    \--> hardware debug registers, set watchpoints via writing these registers
-                                    ...
-                                    \--> newBreakpoint := &Breakpoint{funcName, watchType, hwidx, file, line, addr}
-                                    \--> newBreakpoint.Breaklets = append(newBreakpoint.Breaklets, newBreaklet)
-                                    \--> err := t.proc.WriteBreakpoint(newBreakpoint)
-                                    \--> setLogicalBreakpoint(newBreakpoint)
-                                            \--> if bp.WatchType != 0, then
-                                                    \--> foreach thead in dbp.threads, do
-                                                            err := thread.writeHardwareBreakpoint(bp.Addr, bp.WatchType, bp.HWBreakIndex)
-                                                            return err
-                                            \--> return dbp.writeSoftwareBreakpoint(dbp.memthread, bp.Addr)
-                                                    \--> _, err := thread.WriteMemory(addr, dbp.bi.Arch.BreakpointInstruction())
-                                                            \--> t.dbp.execPtraceFunc(func() { written, err = sys.PtracePokeData(t.ID, uintptr(addr), data) })
+err = d.target.SetBreakpointEnabled(lbp, true)
+    \-->  err = grp.enableBreakpoint(lbp)
+            \--> for target in grp.targets, do: 
+                    err := enableBreakpointOnTarget(target, lbp)
+                    |   \--> addrs, err = FindFileLocation(t, lbp.Set.File, lbp.Set.Line), or 
+                    |        addrs, err = FindFunctionLocation(t, lbp.Set.FunctionName, lbp.Set.Line), or 
+                    |        filter the lbp.Set.PidAddrs if lbp.Set.PidAddrs[i].Pid == t.Pid(), or
+                    |        runs lbp.Set.Expr() to find the address list
+                    |   \--> foreach addr in addrs, do:
+                    |           p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil)
+                    |           |    \--> t.setBreakpointInternal(logicalID, addr, kind, 0, cond)
+                    |           |    |       \--> newBreaklet := &Breaklet{LogicalID: logicalID, Kind: kind, Cond: cond}
+                    |           |    |
+                    |           |    |       \--> if breakpoint existed at `addr`, then
+                    |           |    |               check this newBreaklet can overlap:
+                    |           |    |               1) if no, return BreakpointExistsError{bp.File, bp.Line, bp.Addr}; 
+                    |           |    |               2)if yes, bp.Breaklets = append(bp.Breaklets, newBreaklet), 
+                    |           |    |               3) then `setLogicalBreakpoint(bp)`, and return
+                    |           |    |       \--> else breakpoint not existed at `addr`, create a new breakpoint, so go on
+                    |           |    |
+                    |           |    |       \--> f, l, fn := t.BinInfo().PCToLine(addr)
+                    |           |    |       
+                    |           |    |       \--> if it's watchtype: set hardware debug registers
+                    |           |    |       ...
+                    |           |    |       \--> newBreakpoint := &Breakpoint{funcName, watchType, hwidx, file, line, addr}
+                    |           |    |       \--> newBreakpoint.Breaklets = append(newBreakpoint.Breaklets, newBreaklet)
+                    |           |    |       \--> err := t.proc.WriteBreakpoint(newBreakpoint)
+                    |           |    |       |       \--> if bp.WatchType != 0, then
+                    |           |    |       |               for each thread in dbp.threads, do
+                    |           |    |       |                    err := thread.writeHardwareBreakpoint(bp.Addr, bp.WatchType, bp.HWBreakIndex)
+                    |           |    |       |               return nil
+                    |           |    |       |       \--> _, err := dbp.memthread.ReadMemory(bp.OriginalData, bp.Addr)
+                    |           |    |       |       \--> return dbp.writeSoftwareBreakpoint(dbp.memthread, bp.Addr)
+                    |           |    |       |               \--> _, err := thread.WriteMemory(addr, dbp.bi.Arch.BreakpointInstruction())
+                    |           |    |       |                       \--> t.dbp.execPtraceFunc(func() { written, err = sys.PtracePokeData(t.ID, uintptr(addr), data) })
+                    |           |    |       \--> newBreakpoint.Breaklets = append(newBreakpoint.Breaklets, newBreaklet)
+                    |           |    |       \--> setLogicalBreakpoint(newBreakpoint)
 ```
 
+那么`setLogicalBreakpoint(newBreakpoint)`又具体做了什么呢？
 
+```go
+setLogicalBreakpoint(newBreakpoint)
+    \--> if bp.WatchType != 0, then
+            \--> foreach thead in dbp.threads, do
+                    err := thread.writeHardwareBreakpoint(bp.Addr, bp.WatchType, bp.HWBreakIndex)
+                    return err
+    \--> return dbp.writeSoftwareBreakpoint(dbp.memthread, bp.Addr)
+            \--> _, err := thread.WriteMemory(addr, dbp.bi.Arch.BreakpointInstruction())
+                    \--> t.dbp.execPtraceFunc(func() { written, err = sys.PtracePokeData(t.ID, uintptr(addr), data) })
+```
+
+是不是感觉有点混乱？是！
+
+主要是明确这几点：
+
+- 这个逻辑断点对进程组grp中的所有进程都生效 `grp.enableBreakpoint(lbp) -> enableBreakpointOnTarget(target, lbp)`；
+- 这个逻辑断点位置，可能对应着多个机器指令地址，`FindFileLocation(...), or FindFunctionLocation, or filter from lbp.Set.PidAddrs, or runs lbp.Set.Expr() to find address`
+- 每个找到的机器指令地址处都需要添加物理断点 `p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil) -> t.setBreakpointInternal(logicalID, addr, kind, 0, cond)`
+- 物理断点
 
 ### 代码实现: `breakpoints`
 
