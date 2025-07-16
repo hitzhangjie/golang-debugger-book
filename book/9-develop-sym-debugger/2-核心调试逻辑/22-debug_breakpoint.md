@@ -551,21 +551,33 @@ func (s *RPCServer) CreateBreakpoint(arg CreateBreakpointIn, out *CreateBreakpoi
 2. 开始创建断点，如果指定了name，检查下这个名字是否已经被其他逻辑断点使用了。
    名字被使用则返回错误。
 3. 如果指定了逻辑断点ID，则检查该ID是否已经被其他逻辑断点使用了。
-   ID被使用则返回错误，错误中说明了使用该ID的断点位置信息， proc.BreakpointExistsError{File: lbp.File, Line: lbp.Line}。
+   ID被使用则返回错误，错误中说明了使用该ID的断点位置信息， `proc.BreakpointExistsError{File: lbp.File, Line: lbp.Line}`。
 4. 根据请求参数中设置断点的方式，创建断点：
    - 如果requestBp.TraceReturn=true，说明是tracepoint请求中还需指定地址requestBp.Addr（函数调用返回地址）
-     setbp.PidAddrs = []proc.PidAddr{{Pid: d.target.Selected.Pid(), Addr: requestedBp.Addr}}
+     ```
+     setbp.PidAddrs = []proc.PidAddr{ {Pid: d.target.Selected.Pid(), Addr: requestedBp.Addr} }
+     ```
    - 如果requestBp.File != "", 则使用requestBp.File:requestBp.Line来创建断点
+     ```
      setbp.File = requestBp.File, setbp.Line = requestBp.Line
+     ```
    - 如果requestedBp.FunctionName != ""，则使用requestBp.FunctionName:requestBp.Line来创建断点
+     ```
      setbp.FunctionName = requestBp.FunctionName, setbp.Line = requestBp.Line
+     ```
    - 如果 len(requestedBp.Addrs) != 0，则在目标进程的这些地址处添加断点
+     ```
      setbp.PidAddrs = []proc.PidAddr{.....}
+     ```
    - 其他情况，使用requestBp.Addr来设置断点
-     setbp.PidAddr = []proc.PidAddr{{Pid: d.target.Selected.Pid(), Addr: requestedBp.Addr}}
+     ```
+     setbp.PidAddr = []proc.PidAddr{ {Pid: d.target.Selected.Pid(), Addr: requestedBp.Addr} }
+     ```
 5. 如果locExpr != ""，则解析位置表达式得到LocationSpec，setbp.Expr实际上是个函数，执行后返回位置表达式查找到的地址列表
+   ```
    setbp.Expr = func(t *proc.Target) []uint64 {...}
    setbp.ExprString = locExpr
+   ```
 6. 更新逻辑断点的id，创建一个逻辑断点proc.LogicalBreakpoint{LogicalID: id, ...,Set: setbp, ...,File:...,Line:...,FunctionName:...,}
 7. 设置逻辑断点对应的物理断点：err = d.target.SetBreakpointEnabled(lbp, true)
 8. 将逻辑断点信息转换为api.Breakpoint信息返还给客户端展示
