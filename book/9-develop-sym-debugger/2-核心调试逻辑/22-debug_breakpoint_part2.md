@@ -276,6 +276,125 @@ setLogicalBreakpoint(newBreakpoint)
 - 每个找到的机器指令地址处都需要添加物理断点 `p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil) -> t.setBreakpointInternal(logicalID, addr, kind, 0, cond)`
 - 物理断点
 
+#### 关键拆解
+
+- **逻辑断点全局共享，统一管理**：所有断点都是逻辑断点，在 TargetGroup 级别统一管理，避免重复设置
+
+  ```go
+  // 在 TargetGroup 中
+  LogicalBreakpoints map[int]*LogicalBreakpoint
+  ```
+
+  当在进程P1的线程T1上设置断点时，创建的是一个逻辑断点。这个逻辑断点会被自动应用到所有相关的进程和线程，这离不开下面的自动断点传播机制。
+
+- **自动断点传播机制，调试便利**：新进程、新线程自动继承现有的断点
+
+  当新进程或线程加入调试组时，断点会自动传播：
+
+  ```go
+  func (grp *TargetGroup) addTarget(p ProcessInternal, pid int, currentThread Thread, path string, stopReason StopReason, cmdline string) (*Target, error) {
+    ...
+    t, err := grp.newTarget(p, pid, currentThread, path, cmdline)
+    ...
+    // 共享逻辑断点
+    t.Breakpoints().Logical = grp.LogicalBreakpoints  
+
+    // 自动为新目标启用所有现有的逻辑断点
+    for _, lbp := range grp.LogicalBreakpoints {
+        if lbp.LogicalID < 0 {
+            continue
+        }
+        // 在新目标上启用断点
+        err := enableBreakpointOnTarget(t, lbp)  
+        ...
+    }
+    ...
+  }
+
+  func enableBreakpointOnTarget(p *Target, lbp *LogicalBreakpoint) error {
+    // 根据断点类型决定在哪些地址设置物理断点
+    switch {
+    case lbp.Set.File != "":
+        // 文件行断点：在所有匹配的地址设置
+        addrs, err = FindFileLocation(p, lbp.Set.File, lbp.Set.Line)
+    case lbp.Set.FunctionName != "":
+        // 函数断点：在函数入口设置
+        addrs, err = FindFunctionLocation(p, lbp.Set.FunctionName, lbp.Set.Line)
+    case len(lbp.Set.PidAddrs) > 0:
+        // 指定进程指定地址处添加断点：过滤出目标进程为p的逻辑断点进行设置
+        for _, pidAddr := range lbp.Set.PidAddrs {
+            if pidAddr.Pid == p.Pid() {
+                addrs = append(addrs, pidAddr.Addr)
+            }
+        }
+    }
+
+    // 在每个地址设置物理断点
+    for _, addr := range addrs {
+        _, err = p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil)
+    }
+  }
+  ```
+
+- **断点状态同步，全局共享**：断点命中计数等信息在逻辑断点级别维护，所有进程、线程共享
+
+  ```go
+  // 逻辑断点：用户概念上的断点
+  type LogicalBreakpoint struct {
+    LogicalID    int
+    Set          SetBreakpoint            // 断点设置信息
+    enabled      bool
+    HitCount     map[int64]uint64         // 命中计数
+    TotalHitCount uint64
+    // ...
+  }
+  ```
+
+- **断点启用策略，控制灵活**：通过 follow-exec 和正则表达式控制断点传播范围
+
+  如果打开了followExec模式，并且followExecRegexp不空，此时就会检查子进程执行的cmdline是否匹配，如果匹配就会自动追踪并进行断点传播。
+
+  ```bash
+  target follow-exec -on              // 打开follow-exec模式
+  target follow-exec -on "myapp.*"    // 打开follow-exec模式，但是只跟踪cmdline匹配myapp.*的子进程
+  target follow-exec -off             // 关闭follow-exec模式
+  ```
+
+  处理逻辑详见：
+
+  ```go
+  type TargetGroup struct {
+    followExecEnabled bool        // 是否启用 follow-exec
+    followExecRegex   *regexp.Regexp  // 正则表达式过滤器
+    // ...
+  }
+
+  func (grp *TargetGroup) addTarget(p ProcessInternal, pid int, currentThread Thread, path string, stopReason StopReason, cmdline string) (*Target, error) {
+    logger := logflags.LogDebuggerLogger()
+    if len(grp.targets) > 0 {
+        // 检查是否启用 follow-exec
+        if !grp.followExecEnabled {
+            logger.Debugf("Detaching from child target (follow-exec disabled) %d %q", pid, cmdline)
+            return nil, nil  // 不跟踪子进程
+        }
+
+        // 检查正则表达式过滤
+        if grp.followExecRegex != nil && !grp.followExecRegex.MatchString(cmdline) {
+            logger.Debugf("Detaching from child target (follow-exec regex not matched) %d %q", pid, cmdline)
+            return nil, nil  // 不跟踪不匹配的进程
+        }
+    }
+
+    // 新进程被添加到调试组，所有现有断点会自动应用
+    t.Breakpoints().Logical = grp.LogicalBreakpoints
+    for _, lbp := range grp.LogicalBreakpoints {
+        err := enableBreakpointOnTarget(t, lbp)  // 在新进程中设置断点
+    }
+  }
+  ```
+
+OK，接下来我们将在下一小节看下 `breakpoint` 命令在clientside、serverside分别是如何实现的。
+
 ### 代码实现: `breakpoints`
 
 ### 代码实现: `clear`

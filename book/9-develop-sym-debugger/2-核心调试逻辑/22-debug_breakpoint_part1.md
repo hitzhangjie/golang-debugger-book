@@ -381,15 +381,15 @@ Linux内核的异常处理程序执行时，会生成SIGTRAP信号发送给trace
 
 #### Stop Mode
 
-当进程执行期间命中断点时，是只让命中断点的线程停下来，还是让其内部的所有线程都停下来？这其实就是主流调试器采用的两种控制模式：All-stop Mode 和 Non-stop Mode。尽管调试器设计者决定选择哪种实现方式，但是从实践来看，当触发断点时能够默认暂停整个进程中的所有活动（All-stop Mode），对调试来说是更便利的，开发者可以有更多时间去观察。
+当进程执行期间命中断点时，是只让命中断点的线程停下来，还是让其内部的所有线程都停下来？这其实就是主流调试器采用的两种控制模式：All-stop Mode 和 Non-stop Mode。但是从实践来看，当触发断点时能够默认暂停整个进程中的所有活动（All-stop Mode），对调试来说是更便利的，开发者可以有更多时间去观察。
 
-ps：默认暂停整个进程中的所有活动比较便利，但是也要同时伴之以提供恢复某个特定进程、线程的执行，这在调试某几个线程找时间的并发执行、交互逻辑时，是有价值的。
+ps：默认暂停整个进程中的所有活动比较便利，但是也要同时伴之以提供恢复某个特定进程、线程的执行，这在调试某几个有协作关系、并发执行的线程时，是非常有价值的。
 
 ##### All-stop Mode
 
-当一个线程命中断点时，主流调试器（如 GDB, LLDB, Delve, Visual Studio Debugger 等）的默认行为是暂停整个进程，也就是暂停所有其他线程。这种模式通常被称为 "All-Stop Mode"。
+当一个线程命中断点时，主流调试器 (如 GDB, LLDB, Delve, Visual Studio Debugger 等) 的默认行为是暂停整个进程，也就是暂停所有其他线程。这种模式通常被称为 "All-Stop Mode"。
 
-为什么这是默认行为？主要原因是为了保证调试会话的一致性和可预测性：
+为什么更倾向于将All-stop Mode作为默认行为？主要原因是为了保证调试会话的一致性和可预测性：
 
 1. 冻结状态：当您在某个断点停下来时，您希望检查的是程序在“那一个瞬间”的完整状态。如果其他线程继续运行，它们可能会修改内存、改变变量值、释放资源等。这样一来，您在调试器中看到的数据可能在您查看它的下一秒就失效了，这会让调试变得几乎不可能。
 2. 避免数据竞争：让其他线程继续运行会引入新的、仅在调试时才会出现的竞态条件（Race Condition），或者掩盖掉您正在试图寻找的那个竞态条件。
@@ -404,154 +404,59 @@ ps：默认暂停整个进程中的所有活动比较便利，但是也要同时
 
 ##### Non-stop Mode
 
-虽然“All-Stop”是默认且最常用的模式，但现代调试器也支持另一种高级模式，称为 "Non-Stop Mode"。
+虽然“All-stop”是默认且最常用的模式，但现代调试器也支持另一种高级模式，称为 "Non-stop Mode"。
 
-在 Non-Stop 模式下，当一个线程命中断点时，只有该线程被暂停，其他线程可以继续运行。调试器可以独立地控制每一个线程的执行（暂停、继续、单步等）。
+在 Non-stop 模式下，当一个线程命中断点时，只有该线程被暂停，其他线程可以继续运行。调试器可以独立地控制每一个线程的执行（暂停、继续、单步等）。
 
-什么时候会使用 Non-Stop 模式？这通常用于一些特殊的、复杂的调试场景：
+什么时候会使用 Non-stop 模式？这通常用于一些特殊的、复杂的调试场景：
+
 
 - 实时系统：比如一个线程负责UI响应，您不希望因为调试后台工作线程而导致整个界面卡死。
 - 监控程序：一个线程可能需要持续地响应心跳或处理网络请求，暂停它会导致连接超时。
 - 分析复杂的并发问题：您可能想观察当一个线程被“卡住”时，其他线程的行为模式。
 
-在 GDB 中，你可以通过 `set non-stop on/off` 命令来切换这两种模式。但毫无疑问，**Non-Stop 模式对调试者的心智负担远大于 All-Stop 模式**。
+在 GDB 中，你可以通过 `set non-stop on/off` 命令来切换这两种模式。但毫无疑问，Non-stop 模式对调试者的心智负担远大于 All-stop 模式。
 
-ps：后续可以看到为更好地对进程组内的多个进程、同一个进程内的线程进行启停操作，tinydbg在类型系统设计上的一些精心设计。
+ps：后续可以看到tinydbg的一些设计，为同时启停进程组内的多个进程、同一个进程内的多个线程，提供了支持。
 
 ### Put it Together
 
-OK，上面这些统筹起来，就设计出了tinydbg这种断点管理的层次结构，这也是现代调试器的常规做法：
+OK，上面这些统筹起来，就是现代调试器断点管理的层次结构，tinydbg的实现也借鉴了类似的设计。
 
 ```bash
-TargetGroup (调试器级别, debugger.Debugger.target)
-├── LogicalBreakpoints map[int]*LogicalBreakpoint  // 全局逻辑断点
-└── targets []proc.Target (多个目标进程)
-    ├── Target 1 (进程P1,包含多个threads)
+TargetGroup (调试器跟踪的进程组 debugger.Debugger.target)
+├── LogicalBreakpoints map[int]*LogicalBreakpoint  // 调试器维护的全局逻辑断点
+└── targets []proc.Target (进程组中的多个进程)
+    ├── Target 1 (进程P1, 包含多个threads)
     │   └── BreakpointMap (每个进程的断点映射)
     │       ├── M map[uint64]*Breakpoint           // 物理断点（按地址索引）
-    |       |                 ├── []*Breaklet      // 每个物理断点又包含了一系列的Breaklet，每个Breaklet有自己的Kind,Cond,etc.
+    |       |                 ├── []*Breaklet      // 每个物理断点又包含了一系列的Breaklet，
+    |       |                                         每个Breaklet有自己的Kind,Cond,etc.
     │       └── Logical map[int]*LogicalBreakpoint // 逻辑断点（共享引用）
-    └── Target 2 (进程P2，包含多个threads)
-        └── BreakpointMap
-            ├── M map[uint64]*Breakpoint
-            └── Logical map[int]*LogicalBreakpoint
+    └── Target 2 (进程P2, 包含多个threads)
+        └── BreakpointMap (每个进程的断点映射)
+            ├── M map[uint64]*Breakpoint           // 物理断点（按地址索引）
+            |                 ├── []*Breaklet      // 每个物理断点又包含了一系列的Breaklet，
+            |                                         每个Breaklet有自己的Kind,Cond,etc.            
+            └── Logical map[int]*LogicalBreakpoint // 逻辑断点（共享引用）
 ```
 
-- **逻辑断点全局共享，统一管理**：所有断点都是逻辑断点，在 TargetGroup 级别统一管理，避免重复设置
+tinydbg，它做到了这些方面：
 
-  ```go
-  // 在 TargetGroup 中
-  LogicalBreakpoints map[int]*LogicalBreakpoint
-  ```
+- **跟踪进程组的多进程与多线程**: 支持跟踪进程组中的多进程、多线程，并支持对它们的启停等进行统一管理；
+- **逻辑断点与物理断点层次区分**：1个逻辑断点可以对应多个物理断点，同1个物理断点处允许存在多个断点在此处重叠；
+- **逻辑断点全局共享，统一管理**：所有断点都是逻辑断点，在 TargetGroup 级别统一管理；
+    也因此，逻辑断点状态也做到了全局共享，如断点命中计数等信息在逻辑断点级别维护，所有进程、线程共享；
+- **自动断点传播机制，调试便利**：新进程、新线程自动继承现有的断点；
+    也允许通过 follow-exec 和正则表达式控制断点传播范围，如子进程cmdline匹配正则时才继承断点；
+- **断点实现灵活，基于软件&硬件**：根据调试场景及当时状态，选择适用的软件&硬件断点方案；
+- **手动创建&隐式创建完美协作**：通过breaklets解决调试人员手动创建的断点、其他调试命令隐式创建的断点重叠的问题；
+- **Stop-all Mode并支持切换**：在Stop-all Mode这种更直观的场景上，支持threads/goroutines切换，更好适应并发调试场景；
 
-  这意味着，当在进程P1的线程T1上设置断点时，创建的是一个逻辑断点。这个逻辑断点会被自动应用到所有相关的进程和线程，这离不开下面的自动传播机制。
-- **自动断点传播机制，调试便利**：新进程、新线程自动继承现有的断点
-
-  当新进程或线程加入调试组时，断点会自动传播：
-
-  ```go
-  func (grp *TargetGroup) addTarget(p ProcessInternal, pid int, currentThread Thread, path string, stopReason StopReason, cmdline string) (*Target, error) {
-    ...
-    t, err := grp.newTarget(p, pid, currentThread, path, cmdline)
-    ...
-    t.Breakpoints().Logical = grp.LogicalBreakpoints  // 共享逻辑断点
-
-    // 自动为新目标启用所有现有的逻辑断点
-    for _, lbp := range grp.LogicalBreakpoints {
-        if lbp.LogicalID < 0 {
-            continue
-        }
-        err := enableBreakpointOnTarget(t, lbp)  // 在新目标上启用断点
-        // ...
-    }
-    // ...
-  }
-
-  func enableBreakpointOnTarget(p *Target, lbp *LogicalBreakpoint) error {
-    // 根据断点类型决定在哪些地址设置物理断点
-    switch {
-    case lbp.Set.File != "":
-        // 文件行断点：在所有匹配的地址设置
-        addrs, err = FindFileLocation(p, lbp.Set.File, lbp.Set.Line)
-    case lbp.Set.FunctionName != "":
-        // 函数断点：在函数入口设置
-        addrs, err = FindFunctionLocation(p, lbp.Set.FunctionName, lbp.Set.Line)
-    case len(lbp.Set.PidAddrs) > 0:
-        // 特定进程地址断点：只在指定进程设置
-        for _, pidAddr := range lbp.Set.PidAddrs {
-            if pidAddr.Pid == p.Pid() {
-                addrs = append(addrs, pidAddr.Addr)
-            }
-        }
-    }
-
-    // 在每个地址设置物理断点
-    for _, addr := range addrs {
-        _, err = p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil)
-    }
-  }
-  ```
-- 状态同步，全局共享：断点命中计数等信息在逻辑断点级别维护
-
-  ```go
-  // 逻辑断点：用户概念上的断点
-  type LogicalBreakpoint struct {
-    LogicalID    int
-    Set          SetBreakpoint            // 断点设置信息
-    enabled      bool
-    HitCount     map[int64]uint64         // 命中计数
-    TotalHitCount uint64
-    // ...
-  }
-  ```
-- 断点启用策略，控制灵活：通过 follow-exec 和正则表达式控制断点传播范围
-
-  如果打开了followExec模式，并且followExecRegexp不空，此时就会检查子进程执行的cmdline是否匹配，如果匹配就会自动追踪并进行断点传播。
-
-  ```bash
-  target follow-exec -on              // 打开follow-exec模式
-  target follow-exec -on "myapp.*"    // 打开follow-exec模式，但是只跟踪cmdline匹配myapp.*的子进程
-  target follow-exec -off             // 关闭follow-exec模式
-
-  ```
-
-  处理逻辑详见：
-
-  ```go
-  type TargetGroup struct {
-    followExecEnabled bool        // 是否启用 follow-exec
-    followExecRegex   *regexp.Regexp  // 正则表达式过滤器
-    // ...
-  }
-
-  func (grp *TargetGroup) addTarget(p ProcessInternal, pid int, currentThread Thread, path string, stopReason StopReason, cmdline string) (*Target, error) {
-    logger := logflags.LogDebuggerLogger()
-    if len(grp.targets) > 0 {
-        // 检查是否启用 follow-exec
-        if !grp.followExecEnabled {
-            logger.Debugf("Detaching from child target (follow-exec disabled) %d %q", pid, cmdline)
-            return nil, nil  // 不跟踪子进程
-        }
-
-        // 检查正则表达式过滤
-        if grp.followExecRegex != nil && !grp.followExecRegex.MatchString(cmdline) {
-            logger.Debugf("Detaching from child target (follow-exec regex not matched) %d %q", pid, cmdline)
-            return nil, nil  // 不跟踪不匹配的进程
-        }
-    }
-
-    // 新进程被添加到调试组，所有现有断点会自动应用
-    t.Breakpoints().Logical = grp.LogicalBreakpoints
-    for _, lbp := range grp.LogicalBreakpoints {
-        err := enableBreakpointOnTarget(t, lbp)  // 在新进程中设置断点
-    }
-  }
-  ```
-
-OK，接下来我们将在下一小节看下 `breakpoint` 命令在clientside、serverside分别是如何实现的。
+这使得它成为了一个非常实用的Go调试器，它也成为了现代调试器设计实现的典型代表，致敬 go-delve/delve 的贡献者们。
 
 ### 本文总结
 
-本文围绕现代调试器（以 go-delve/delve 为例）中断点的精细化管理展开，系统梳理了逻辑断点、物理断点、Breaklet 等多层次断点抽象，以及它们在支持泛型、内联、断点重叠等复杂场景下的作用。我们还介绍了断点的自动传播机制、断点启用策略（如 follow-exec 及正则过滤），以及 next/stepin/stepout 等调试命令背后的断点自动管理思路。通过这些机制，调试器能够在多进程、多线程、复杂控制流下，实现灵活、精准且高效的断点控制，极大提升了调试体验。
+本文围绕现代调试器（以 go-delve/delve 为例）中断点的精细化管理展开，系统梳理了逻辑断点、物理断点、Breaklet 等多层次断点抽象，以及它们在支持泛型、内联、断点重叠等复杂场景下的作用。我们还介绍了多进程多线程调试时的断点的自动传播机制、断点启用策略（如 follow-exec 及正则过滤）、Stop-all与Non-stop Mode，以及 next/stepin/stepout 等调试命令背后的隐式断点管理。通过这些机制，调试器能够在多进程、多线程、复杂控制流下，实现灵活、精准且高效的断点控制，极大提升了调试的便利性。
 
-需要注意的是，本文主要聚焦于断点管理的原理和设计思想，尚未深入到具体的实现细节和源码分析。下一小节我们将结合实际代码，进一步剖析关键断点操作和典型调试场景的具体实现方式，帮助读者将理论与实践相结合，更好地理解和掌握现代调试器的断点管理能力。
+本文主要聚焦于断点管理的原理和设计思想，尚未深入到具体的实现细节和源码分析。下一小节我们进一步剖析实现断点的一些关键操作，将原理与实践相结合，更好地理解和掌握现代调试器的断点管理。
