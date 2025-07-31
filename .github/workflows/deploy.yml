@@ -14,6 +14,8 @@ jobs:
       uses: actions/checkout@v4
       
     - name: Build and Deploy GitBook
+      env:
+        DEPLOY_TOKEN: 
       run: |
         # 创建临时目录
         tmpdir=$(mktemp -d)
@@ -21,17 +23,17 @@ jobs:
         
         # 清理函数
         cleanup() {
-          rm -rf "$tmpdir"
-          rm -rf "$builddir"
+          rm -rf "$tmpdir" 2>/dev/null || true
+          rm -rf "$builddir" 2>/dev/null || true
         }
         trap cleanup EXIT
         
         echo "🚀 Starting GitBook build and deployment..."
         
-        # 克隆目标仓库
+        # 克隆目标仓库（使用带token的HTTPS URL）
         echo "📥 Cloning target repository..."
-        git clone --depth 1 https://github.com/hitzhangjie/debugger101.io $tmpdir
-        
+        git clone --depth 1 https://${{ secrets.DEPLOY_TOKEN }}@github.com/hitzhangjie/debugger101.io $tmpdir
+
         # 使用Docker构建GitBook
         echo "🔨 Building GitBook with Docker..."
         docker run --name gitbook --rm \
@@ -47,10 +49,12 @@ jobs:
         # 提交更改
         echo "💾 Committing changes..."
         cd $tmpdir
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
+        git config --local user.name "hitzhangjie"
+        git config --local user.email "hit.zhangjie@gmail.com"
         git add .
         git commit -m "Auto-deploy: $(date)"
+        # 使用 URL 重写方式推送，避免写入凭证文件
+        git remote set-url origin https://${{ secrets.DEPLOY_TOKEN }}@github.com/hitzhangjie/debugger101.io
         git push -f -u origin master
         cd -
         
