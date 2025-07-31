@@ -1,0 +1,57 @@
+name: Auto Deploy GitBook
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout source code
+      uses: actions/checkout@v4
+      
+    - name: Build and Deploy GitBook
+      run: |
+        # 创建临时目录
+        tmpdir=$(mktemp -d)
+        builddir=$(mktemp -d)
+        
+        # 清理函数
+        cleanup() {
+          rm -rf "$tmpdir"
+          rm -rf "$builddir"
+        }
+        trap cleanup EXIT
+        
+        echo "🚀 Starting GitBook build and deployment..."
+        
+        # 克隆目标仓库
+        echo "📥 Cloning target repository..."
+        git clone --depth 1 https://github.com/hitzhangjie/debugger101.io $tmpdir
+        
+        # 使用Docker构建GitBook
+        echo "🔨 Building GitBook with Docker..."
+        docker run --name gitbook --rm \
+          -v ${PWD}:/root/gitbook \
+          -v $builddir:$builddir \
+          hitzhangjie/gitbook-cli:latest \
+          bash -c "cd book && gitbook install && cd - && gitbook build book $builddir"
+        
+        # 复制构建结果到目标目录
+        echo "📋 Copying build results..."
+        cp -rf $builddir/* $tmpdir/
+        
+        # 提交更改
+        echo "💾 Committing changes..."
+        cd $tmpdir
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add .
+        git commit -m "Auto-deploy: $(date)"
+        git push -f -u origin master
+        cd -
+        
+        echo "✅ Deployment completed successfully!" 
