@@ -14,8 +14,6 @@ jobs:
       uses: actions/checkout@v4
       
     - name: Build and Deploy GitBook
-      env:
-        DEPLOY_TOKEN: 
       run: |
         # 创建临时目录
         tmpdir=$(mktemp -d)

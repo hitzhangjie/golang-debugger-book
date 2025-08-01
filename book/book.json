@@ -1,7 +1,8 @@
 {
   "plugins": [
       "md-toc",
-      "github"
+      "github",
+      "splitter"
   ],
   "pluginsConfig": {
     "intopic-toc": {
