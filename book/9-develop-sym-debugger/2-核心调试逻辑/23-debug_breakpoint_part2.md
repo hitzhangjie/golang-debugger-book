@@ -4,9 +4,9 @@
 
 ### 实现目标: 添加+执行到断点
 
-本节实现目标，重点是介绍添加断点命令 `breakpoint` 的设计实现，以及执行到断点后调试器的相关处理逻辑。前一节介绍了现代调试器断点的层次化、精细化管理，引入了一些必要的设计及抽象，实现是也会相对更复杂。调试器中断点强相关的调试命令有多个，为了保证内容更聚焦、更便于阅读理解，本节仅介绍添加断点命令 `breakpoint` 以及 程序执行到断点后的相关处理逻辑。
+本节实现目标，重点是介绍添加断点命令 `breakpoint` 的设计实现，以及执行到断点后调试器的相关处理逻辑。前一节介绍了现代调试器断点的层次化、精细化管理，引入了一些必要的设计及抽象，实现也会相对更复杂。调试器中有多个与断点机制强相关的调试命令，为了保证内容更聚焦、更便于阅读理解，本节仅介绍添加断点命令 `breakpoint` 以及 程序执行到断点后的处理逻辑。这也是断点相关设计实现中最核心的内容，理解了这部分内容后，再去理解其他调试命令就简单了，我们将在后续小节中介绍。
 
-这也是断点相关设计实现中最核心的内容，理解了这部分内容后，再去理解其他的调试命令都是水到渠成的事情。这些剩下的调试命令，我们将在后续断点相关的其他小结进行介绍：
+断点以及与断点机制相关的调试命令设计及实现，内容组织上我是这么规划的：
 
 - part1：介绍现代调试器断点的层次化、精细化管理；
 - part2：breakpoint命令添加断点，以及执行到断点后的处理逻辑；
@@ -22,11 +22,11 @@ OK，接下来我们看下 `breakpoint` 命令在clientside、serverside分别�
 
 先来看看break支持的操作, `break [--name|-n=name] [locspec] [if <condition>]`:
 
-- `--name|-n=name` 可以指定断点名字，如果调试任务比较重，涉及到大量断点，能给断点命名非常有用，它比id更易于辨识使用；
+- `--name|-n=name` 可以指定断点名字，如果调试任务比较重，涉及到大量断点，能给断点命名非常有用，它比id、断点位置更易于辨识使用；
 - `[locspec]` 前面介绍过的所有受支持的 `locspec`写法，`break` 命令都予以了支持，这将使得添加断点非常方便；
 - `[if condition]` 添加断点时还可以直接指定断点激活条件 `if <condition>`，这里的condition是任意bool类型表达式。
 
-ps：如果断点创建时未指定条件，后续也可以使用 `condition <breakpoint> <boolexpr>` 为已有断点指定条件。
+ps：如果断点创建时未指定激活条件，后续也可以使用 `condition <breakpoint> <boolexpr>` 为已有断点指定激活条件。
 
 ```bash
 (tinydbg) help break
@@ -49,12 +49,11 @@ Finally, you can assign a condition to the newly created breakpoint by using the
 	break main.go:55 if i == 5
 
 Alternatively you can set a condition on a breakpoint after created by using the 'on' command.
-
 ```
 
-ps：我们重写了tinydbg的clientside的断点操作，我们将相对低频使用的参数[name]调整为了选项 `--name|-n=<name>`的形式，这样也使得程序中解析断点name, locspec, condition的逻辑大幅简化。
+ps：tinydbg重写了go-delve/delve的clientside的断点操作，我们将相对低频使用的参数[name]调整为了选项 `--name|-n=<name>` 的形式，这样也使得程序中解析断点name, locspec, condition的逻辑大幅简化。原来go-delve/delve中的breakpoint命令的参数、选项、条件解析逻辑，可读性欠佳，不太适合作为教程示例给大家介绍。
 
-OK，接下来我们看看断点命令的执行细节。
+OK，接下来我们看看tinydbg中添加断点时，clientside、serverside的设计实现。
 
 #### clientside 实现
 
@@ -71,7 +70,7 @@ i.e., breakpoint(...)
             \--> if findLocErr != nil && shouldAskToSuspendBreakpoint(t)
             |    如果没找到，询问是否要添加suspended断点，后续会激活
             |       bp, err := t.client.CreateBreakpointWithExpr(requestedBp, spec, t.substitutePathRules(), true)
-            |       return nil, nil
+            |       return nil, err 
             |    if findLocErr != nil 
             |       return nil, findLocErr
             |
@@ -80,6 +79,9 @@ i.e., breakpoint(...)
             |
             \--> foreach loc in locs do
             |    对于每个找到的地址，创建断点
+            |       requestBp.Addr = loc.PC; 
+            |       requestedBp.Addrs = loc.PCs;
+            |       requestedBp.AddrPid = loc.PCPids
             |       bp, err := t.client.CreateBreakpointWithExpr(requestedBp, spec, t.substitutePathRules(), false)
             |
             \--> if it is a tracepoint, set breakpoints for return addresses, then
@@ -100,10 +102,10 @@ i.e., breakpoint(...)
 1. 解析输入字符串，得到断点名name、位置描述spec、条件cond；
 2. 然后请求服务器返回位置描述spec对应的指令地址列表；
 3. 如果服务器查找spec失败，至少说明spec对应的位置当前没有指令数据。此时询问是否要尝试添加suspended断点，等后续指令加载后或者进程启动后就可以激活断点；如果服务器查找spec失败，也不需要添加suspended断点，那么返回失败。
-4. 如果服务器查找spec失败，则将服务器返回的每个指令地址处都请求添加断点；
+4. 如果服务器查找spec成功，则将服务器返回的每个指令地址处([]api.Location)都请求添加断点；
 5. 如果当前添加的是tracepoint，并且解析出的位置描述spec中还匹配了一些函数，tracepoint因为要观察func的进入、退出时状态，所以这里请求服务器返回匹配函数的返回地址列表，然后返回地址处也添加断点。
 
-通过clientside添加断点的处理过程，我们可以粗略看出，这里处理了普通断点、条件断点、suspended断点、tracepoints 。读者朋友可以关注，clientside发起的RPC操作时不同断点情况下的请求参数设置的差异。
+通过clientside添加断点的处理过程，我们可以粗略看出，这里处理了普通断点、条件断点、suspended断点、tracepoints 。读者朋友可以关注，clientside添加不同类型断点时用到的RPC以及RPC参数设置的差异。
 
 > ps:  创建断点相关的几个RPC协议设计，给人感觉非常繁琐、冗余、不精炼。
 >
@@ -125,7 +127,7 @@ i.e., breakpoint(...)
 
 #### serverside 实现
 
-服务器端描述起来可能有点复杂，如前面所属，服务器侧为了应对各种调整，引入了多种层次的抽象和不同实现。前面介绍了断点层次化管理机制，这部分信息对于理解serverside处理流程非常重要。
+服务器端描述起来可能有点复杂，服务器侧为了应对各种调整，引入了多种层次的抽象和不同实现。前面介绍了断点层次化管理机制，这部分信息对于理解serverside处理流程非常重要。
 
 OK，假定读者朋友们已经理解了上述内容，现在我们整体介绍下serverside添加断点的处理流程。
 
@@ -135,36 +137,41 @@ func (s *RPCServer) CreateBreakpoint(arg CreateBreakpointIn, out *CreateBreakpoi
     \--> err := api.ValidBreakpointName(arg.Breakpoint.Name)
     \--> createdbp, err := s.debugger.CreateBreakpoint(&arg.Breakpoint, arg.LocExpr, arg.SubstitutePathRules, arg.Suspended)
     |       \--> checking: if breakpoints with the same name as requestBp.Name created before
-    |            d.findBreakpointByName(requestedBp.Name)
+    |       |              if created before, return error
+    |       |    d.findBreakpointByName(requestedBp.Name)
     |       \--> checking: if breakpoints with the same requestBp.ID created before
-    |            lbp := d.target.LogicalBreakpoints[requestedBp.ID]
+    |       |              if created before, return error
+    |       |    lbp := d.target.LogicalBreakpoints[requestedBp.ID]
     |       \--> breakpoint config, initialized based on following order
     |       |    \--> case requestedBp.TraceReturn, 
-    |       |         setbp.PidAddrs = []proc.PidAddr{{Pid: d.target.Selected.Pid(), Addr: requestedBp.Addr}}
+    |       |    |    bpcfg.PidAddrs = []proc.PidAddr{{Pid: d.target.Selected.Pid(), Addr: requestedBp.Addr}}
     |       |    \--> case requestedBp.File != "",
-    |       |         setbp.File = requestBp.File
-    |       |         setbp.Line = requestBp.Line
+    |       |    |    bpcfg.File = requestBp.File
+    |       |    |    bpcfg.Line = requestBp.Line
     |       |    \--> requestedBp.FunctionName != "",
-    |       |         setbp.FunctionName = requestedBp.FunctionName
-    |       |         setbp.Line = requestedBp.Line
+    |       |    |    bpcfg.FunctionName = requestedBp.FunctionName
+    |       |    |    bpcfg.Line = requestedBp.Line
     |       |    \--> len(requestedBp.Addrs) > 0, 
-    |       |         setbp.PidAddrs = make([]proc.PidAddr, len(requestedBp.Addrs))
-    |       |         then, fill the setbp.PidAddrs with slice of PidAddr{pid,addr}
-    |       |    \--> default, setbp.Addr = requestBp.Addr
+    |       |    |    bpcfg.PidAddrs = make([]proc.PidAddr, len(requestedBp.Addrs))
+    |       |    |    then, fill the bpcfg.PidAddrs with slice of PidAddr{pid,addr}
+    |       |    \--> default, bpcfg.Addr = requestBp.Addr
     |       \--> if locexpr != "", 
-    |            \--> setbp.Expr = func(t *proc.Target) []uint64 {...}
-    |            \--> setbp.ExprString = locExpr
+    |       |    \--> bpcfg.Expr = func(t *proc.Target) []uint64 {...}
+    |       |    \--> bpcfg.ExprString = locExpr
     |       \--> create the logical breakpoint
     |       |    \--> `id`, allocate a logical breakpoint ID
     |       |    \--> lbp := &proc.LogicalBreakpoint{LogicalID: id, HitCount: make(map[int64]uint64)}
+    |       |    \--> d.copyLogicalBreakpointInfo(lbp, requestedBp)
+    |       |    |    copy requestedBp.X to lbp.X
+    |       |    |    d.target.ChangeBreakpointCondition(lbp, requested.Cond, requested.HitCond, requested.HitCondPerG)
     |       |    \--> err = d.target.SetBreakpointEnabled(lbp, true)
     |       |    |    \--> if lbp.enabled && !enabled, then 
-    |       |    |         lbp.enabled = false
-    |       |    |         err = grp.disableBreakpoint(lbp)
+    |       |    |    |    lbp.enabled = false
+    |       |    |    |    err = grp.disableBreakpoint(lbp)
     |       |    |    \--> if !lbp.enabled && enabled, then 
-    |       |    |         lbp.enabled = true
-    |       |    |         lbp.condSatisfiable = breakpointConditionSatisfiable(grp.LogicalBreakpoints, lbp)
-    |       |    |         err = grp.enableBreakpoint(lbp)
+    |       |    |    |    lbp.enabled = true
+    |       |    |    |    lbp.condSatisfiable = breakpointConditionSatisfiable(grp.LogicalBreakpoints, lbp)
+    |       |    |    |    err = grp.enableBreakpoint(lbp)
     |       |    \--> return d.convertBreakpoint(lbp)   
     \--> out.Breakpoint = *createdbp
 ```
@@ -180,34 +187,35 @@ func (s *RPCServer) CreateBreakpoint(arg CreateBreakpointIn, out *CreateBreakpoi
 4. 根据请求参数中设置断点的方式，创建断点：
    - 如果requestBp.TraceReturn=true，说明是tracepoint请求中还需指定地址requestBp.Addr（函数调用返回地址）
      ```
-     setbp.PidAddrs = []proc.PidAddr{ {Pid: d.target.Selected.Pid(), Addr: requestedBp.Addr} }
+     bpcfg.PidAddrs = []proc.PidAddr{ {Pid: d.target.Selected.Pid(), Addr: requestedBp.Addr} }
      ```
    - 如果requestBp.File != "", 则使用requestBp.File:requestBp.Line来创建断点
      ```
-     setbp.File = requestBp.File, setbp.Line = requestBp.Line
+     bpcfg.File = requestBp.File, bpcfg.Line = requestBp.Line
      ```
    - 如果requestedBp.FunctionName != ""，则使用requestBp.FunctionName:requestBp.Line来创建断点
      ```
-     setbp.FunctionName = requestBp.FunctionName, setbp.Line = requestBp.Line
+     bpcfg.FunctionName = requestBp.FunctionName, bpcfg.Line = requestBp.Line
      ```
    - 如果 len(requestedBp.Addrs) != 0，则在目标进程的这些地址处添加断点
      ```
-     setbp.PidAddrs = []proc.PidAddr{.....}
+     bpcfg.PidAddrs = []proc.PidAddr{.....}
      ```
    - 其他情况，使用requestBp.Addr来设置断点
      ```
-     setbp.PidAddr = []proc.PidAddr{ {Pid: d.target.Selected.Pid(), Addr: requestedBp.Addr} }
+     bpcfg.PidAddr = []proc.PidAddr{ {Pid: d.target.Selected.Pid(), Addr: requestedBp.Addr} }
      ```
-5. 如果locExpr != ""，则解析位置表达式得到LocationSpec，setbp.Expr实际上是个函数，执行后返回位置表达式查找到的地址列表
+5. 如果locExpr != ""，则解析位置表达式得到LocationSpec，bpcfg.Expr实际上是个函数，执行后返回位置表达式查找到的地址列表
    ```
-   setbp.Expr = func(t *proc.Target) []uint64 {...}
-   setbp.ExprString = locExpr
+   bpcfg.Expr = func(t *proc.Target) []uint64 {...}
+   bpcfg.ExprString = locExpr
    ```
 6. 更新逻辑断点的id，创建一个逻辑断点proc.LogicalBreakpoint{LogicalID: id, ...,Set: setbp, ...,File:...,Line:...,FunctionName:...,}
-7. 设置逻辑断点对应的物理断点：err = d.target.SetBreakpointEnabled(lbp, true)
-8. 将逻辑断点信息转换为api.Breakpoint信息返还给客户端展示
+7. 设置逻辑断点的字段值，并更新其断点条件，copyLogicalBreakpointInfo->ChangeBreakpointCondition
+8. 设置逻辑断点对应的物理断点：err = d.target.SetBreakpointEnabled(lbp, true)
+9. 将逻辑断点信息转换为api.Breakpoint信息返还给客户端展示
 
-接下来看下 `d.target.SetBreakpointEnabled(lbp, true)`，设置逻辑断点关联的物理断点信息的流程。
+接下来看下 `d.target.SetBreakpointEnabled(lbp, true)`，设置逻辑断点的流程，从逻辑断点到物理断点、breaklets，一起看看：
 
 ```bash
 err = d.target.SetBreakpointEnabled(lbp, true)
@@ -222,56 +230,46 @@ err = d.target.SetBreakpointEnabled(lbp, true)
                     |           p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil)
                     |           |    \--> t.setBreakpointInternal(logicalID, addr, kind, 0, cond)
                     |           |    |       \--> newBreaklet := &Breaklet{LogicalID: logicalID, Kind: kind, Cond: cond}
-                    |           |    |
+                    |           |    |       |
                     |           |    |       \--> if breakpoint existed at `addr`, then
-                    |           |    |               check this newBreaklet can overlap:
-                    |           |    |               1) if no, return BreakpointExistsError{bp.File, bp.Line, bp.Addr}; 
-                    |           |    |               2)if yes, bp.Breaklets = append(bp.Breaklets, newBreaklet), 
-                    |           |    |               3) then `setLogicalBreakpoint(bp)`, and return
-                    |           |    |       \--> else breakpoint not existed at `addr`, create a new breakpoint, so go on
-                    |           |    |
+                    |           |    |       |       check this newBreaklet can overlap:
+                    |           |    |       |       1) if no, return BreakpointExistsError{bp.File, bp.Line, bp.Addr}; 
+                    |           |    |       |       2) if yes, bp.Breaklets = append(bp.Breaklets, newBreaklet), 
+                    |           |    |       |       3) then `setLogicalBreakpoint(bp)`, and return
+                    |           |    |       \--> else breakpoint not existed at `addr`, 
+                    |           |    |       |       create a new breakpoint, so go on
+                    |           |    |       |
                     |           |    |       \--> f, l, fn := t.BinInfo().PCToLine(addr)
-                    |           |    |   
-                    |           |    |       \--> if it's watchtype: set hardware debug registers
-                    |           |    |       ...
+                    |           |    |       |
+                    |           |    |       \--> if it is watchtype: set hardware debug registers
+                    |           |    |       |    ...
                     |           |    |       \--> newBreakpoint := &Breakpoint{funcName, watchType, hwidx, file, line, addr}
                     |           |    |       \--> newBreakpoint.Breaklets = append(newBreakpoint.Breaklets, newBreaklet)
                     |           |    |       \--> err := t.proc.WriteBreakpoint(newBreakpoint)
                     |           |    |       |       \--> if bp.WatchType != 0, then
-                    |           |    |       |               for each thread in dbp.threads, do
-                    |           |    |       |                    err := thread.writeHardwareBreakpoint(bp.Addr, bp.WatchType, bp.HWBreakIndex)
-                    |           |    |       |               return nil
+                    |           |    |       |       |       watchtype要设置硬件断点，使用处理器自身调试器寄存器的话，这部分可以先不动
+                    |           |    |       |       |       for each thread in dbp.threads, do
+                    |           |    |       |       |            err := thread.writeHardwareBreakpoint(bp.Addr, bp.WatchType, bp.HWBreakIndex)
+                    |           |    |       |       |       return nil
                     |           |    |       |       \--> _, err := dbp.memthread.ReadMemory(bp.OriginalData, bp.Addr)
-                    |           |    |       |       \--> return dbp.writeSoftwareBreakpoint(dbp.memthread, bp.Addr)
-                    |           |    |       |               \--> _, err := thread.WriteMemory(addr, dbp.bi.Arch.BreakpointInstruction())
-                    |           |    |       |                       \--> t.dbp.execPtraceFunc(func() { written, err = sys.PtracePokeData(t.ID, uintptr(addr), data) })
+                    |           |    |       |       |       其他断点类型，就要通过0xCC这种调试指令来完成
+                    |           |    |       |       |    return dbp.writeSoftwareBreakpoint(dbp.memthread, bp.Addr)
+                    |           |    |       |       |       \--> _, err := thread.WriteMemory(addr, dbp.bi.Arch.BreakpointInstruction())
+                    |           |    |       |       |               \--> t.dbp.execPtraceFunc(func() { written, err = sys.PtracePokeData(t.ID, uintptr(addr), data) })
                     |           |    |       \--> newBreakpoint.Breaklets = append(newBreakpoint.Breaklets, newBreaklet)
                     |           |    |       \--> setLogicalBreakpoint(newBreakpoint)
 ```
 
-那么 `setLogicalBreakpoint(newBreakpoint)`又具体做了什么呢？
+那么 `setLogicalBreakpoint(newBreakpoint)`又具体做了什么呢？它主要更新逻辑断点中的一些字段信息。
 
-```go
-setLogicalBreakpoint(newBreakpoint)
-    \--> if bp.WatchType != 0, then
-            \--> foreach thead in dbp.threads, do
-                    err := thread.writeHardwareBreakpoint(bp.Addr, bp.WatchType, bp.HWBreakIndex)
-                    return err
-    \--> return dbp.writeSoftwareBreakpoint(dbp.memthread, bp.Addr)
-            \--> _, err := thread.WriteMemory(addr, dbp.bi.Arch.BreakpointInstruction())
-                    \--> t.dbp.execPtraceFunc(func() { written, err = sys.PtracePokeData(t.ID, uintptr(addr), data) })
-```
+> ps: 是不是感觉有点混乱？主要是明确这几点：
+>
+> - 这个逻辑断点对进程组grp中的所有进程都生效 `grp.enableBreakpoint(lbp) -> enableBreakpointOnTarget(target, lbp)`；
+> - 这个逻辑断点位置，可能对应着多个机器指令地址，`FindFileLocation(...), or FindFunctionLocation, or filter from lbp.Set.PidAddrs, or runs lbp.Set.Expr() to find address`
+> - 每个找到的机器指令地址处都需要添加物理断点 `p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil) -> t.setBreakpointInternal(logicalID, addr, kind, 0, cond)`
+> - 最后更新物理断点、逻辑断点内的一些字段信息；
 
-是不是感觉有点混乱？是！
-
-主要是明确这几点：
-
-- 这个逻辑断点对进程组grp中的所有进程都生效 `grp.enableBreakpoint(lbp) -> enableBreakpointOnTarget(target, lbp)`；
-- 这个逻辑断点位置，可能对应着多个机器指令地址，`FindFileLocation(...), or FindFunctionLocation, or filter from lbp.Set.PidAddrs, or runs lbp.Set.Expr() to find address`
-- 每个找到的机器指令地址处都需要添加物理断点 `p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil) -> t.setBreakpointInternal(logicalID, addr, kind, 0, cond)`
-- 物理断点
-
-#### 关键拆解
+#### 其他关键拆解
 
 - **逻辑断点全局共享，统一管理**：所有断点都是逻辑断点，在 TargetGroup 级别统一管理，避免重复设置
 
@@ -397,5 +395,3 @@ OK，接下来我们将在下一小节看下 `breakpoint` 命令在clientside、
 ### 本文总结
 
 本节深入介绍了tinydbg调试器中 `breakpoint` 命令的实现机制，从客户端到服务器端的完整处理流程。客户端通过解析用户输入的断点参数（名称、位置描述、条件），向服务器请求对应的指令地址列表，并支持创建普通断点、条件断点、suspended断点和tracepoints等多种类型。服务器端采用层次化的断点管理架构，通过逻辑断点（LogicalBreakpoint）统一管理用户概念上的断点，通过物理断点（Breakpoint）在具体指令地址处实现断点功能，并通过自动断点传播机制确保新进程和线程能够继承现有断点。这种设计不仅提高了断点管理的效率，还支持复杂的多进程调试场景，为现代调试器提供了强大而灵活的断点功能。
-
-
