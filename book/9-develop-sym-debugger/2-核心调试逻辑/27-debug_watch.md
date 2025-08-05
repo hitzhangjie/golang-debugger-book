@@ -1,5 +1,7 @@
 ## watchpoint
 
+watch，监视对某个变量或者内存地址处的读写操作，是借助硬件断点对特定地址的数据读写、指令执行来实现的；
+
 本文我们介绍下watchpoint的设计及实现，详细解释一下watchpoint的实现原理，以及它与普通断点breakpoint的区别。
 
 ### 实现目标 `watch -r|-w|-rw`
