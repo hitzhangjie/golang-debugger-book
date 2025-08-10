@@ -55,7 +55,7 @@ ps：tinydbg重写了go-delve/delve的clientside的断点操作，我们将相�
 
 OK，接下来我们看看tinydbg中添加断点时，clientside、serverside的设计实现。
 
-#### clientside 实现
+#### clientside 核心代码
 
 ```bash
 debug_breakpoint.go:breakpointCmd.cmdFn(...), 
@@ -125,7 +125,7 @@ i.e., breakpoint(...)
 
 接下来我们看看服务器收到serverside的添加断点请求时是如何进行处理的。
 
-#### serverside 实现
+#### serverside 核心代码
 
 服务器端描述起来可能有点复杂，服务器侧为了应对各种调整，引入了多种层次的抽象和不同实现。前面介绍了断点层次化管理机制，这部分信息对于理解serverside处理流程非常重要。
 
@@ -223,9 +223,9 @@ err = d.target.SetBreakpointEnabled(lbp, true)
             \--> for target in grp.targets, do: 
                     err := enableBreakpointOnTarget(target, lbp)
                     |   \--> addrs, err = FindFileLocation(t, lbp.Set.File, lbp.Set.Line), or 
-                    |        addrs, err = FindFunctionLocation(t, lbp.Set.FunctionName, lbp.Set.Line), or 
-                    |        filter the lbp.Set.PidAddrs if lbp.Set.PidAddrs[i].Pid == t.Pid(), or
-                    |        runs lbp.Set.Expr() to find the address list
+                    |   |    addrs, err = FindFunctionLocation(t, lbp.Set.FunctionName, lbp.Set.Line), or 
+                    |   |    filter the lbp.Set.PidAddrs if lbp.Set.PidAddrs[i].Pid == t.Pid(), or
+                    |   |    runs lbp.Set.Expr() to find the address list
                     |   \--> foreach addr in addrs, do:
                     |           p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil)
                     |           |    \--> t.setBreakpointInternal(logicalID, addr, kind, 0, cond)
@@ -258,104 +258,81 @@ err = d.target.SetBreakpointEnabled(lbp, true)
                     |           |    |       |       |               \--> t.dbp.execPtraceFunc(func() { written, err = sys.PtracePokeData(t.ID, uintptr(addr), data) })
                     |           |    |       \--> newBreakpoint.Breaklets = append(newBreakpoint.Breaklets, newBreaklet)
                     |           |    |       \--> setLogicalBreakpoint(newBreakpoint)
+                    |           |    |            更新逻辑断点/物理断点中个别相关的字段
 ```
 
-那么 `setLogicalBreakpoint(newBreakpoint)`又具体做了什么呢？它主要更新逻辑断点中的一些字段信息。
+看完clientside实现、serverside实现的核心代码路径，这里的逻辑还是比较清晰的吧。主要是明确这几点：
 
-> ps: 是不是感觉有点混乱？主要是明确这几点：
->
-> - 这个逻辑断点对进程组grp中的所有进程都生效 `grp.enableBreakpoint(lbp) -> enableBreakpointOnTarget(target, lbp)`；
-> - 这个逻辑断点位置，可能对应着多个机器指令地址，`FindFileLocation(...), or FindFunctionLocation, or filter from lbp.Set.PidAddrs, or runs lbp.Set.Expr() to find address`
-> - 每个找到的机器指令地址处都需要添加物理断点 `p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil) -> t.setBreakpointInternal(logicalID, addr, kind, 0, cond)`
-> - 最后更新物理断点、逻辑断点内的一些字段信息；
+- 这个逻辑断点对进程组grp中的所有进程都生效 `grp.enableBreakpoint(lbp) -> for target in grp.targets -> enableBreakpointOnTarget(target, lbp)`；
+- 这个逻辑断点位置，可能对应着多个机器指令地址，`FindFileLocation(...), or FindFunctionLocation, or filter from lbp.Set.PidAddrs, or runs lbp.Set.Expr() to find address`
+- 每个找到的机器指令地址处都需要添加物理断点 `p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil) -> t.setBreakpointInternal(logicalID, addr, kind, 0, cond)`
 
-#### 其他关键拆解
+#### serverside 断点传播机制
 
-- **逻辑断点全局共享，统一管理**：所有断点都是逻辑断点，在 TargetGroup 级别统一管理，避免重复设置
+符号级调试场景下“断点”通常指的是逻辑断点，逻辑断点在TargetGroup层次进行统一管理，当有新进程、新线程创建，加入TargetGroup时会自动继承TargetGroup中记录的断点。
 
-  ```go
-  // 在 TargetGroup 中
-  LogicalBreakpoints map[int]*LogicalBreakpoint
-  ```
+这就是我们提到的，当新进程或新线程加入调试组时，断点会自动传播：
 
-  当在进程P1的线程T1上设置断点时，创建的是一个逻辑断点。这个逻辑断点会被自动应用到所有相关的进程和线程，这离不开下面的自动断点传播机制。
+```go
+func (grp *TargetGroup) addTarget(p ProcessInternal, pid int, currentThread Thread, path string, stopReason StopReason, cmdline string) (*Target, error) {
+  ...
+  t, err := grp.newTarget(p, pid, currentThread, path, cmdline)
+  ...
+  // 共享逻辑断点
+  t.Breakpoints().Logical = grp.LogicalBreakpoints  
 
-- **自动断点传播机制，调试便利**：新进程、新线程自动继承现有的断点
+  // 自动为新目标启用所有现有的逻辑断点
+  for _, lbp := range grp.LogicalBreakpoints {
+      if lbp.LogicalID < 0 {
+          continue
+      }
+      // 在新目标上启用断点
+      err := enableBreakpointOnTarget(t, lbp)  
+      ...
+  }
+  ...
+}
 
-  当新进程或线程加入调试组时，断点会自动传播：
-
-  ```go
-  func (grp *TargetGroup) addTarget(p ProcessInternal, pid int, currentThread Thread, path string, stopReason StopReason, cmdline string) (*Target, error) {
-    ...
-    t, err := grp.newTarget(p, pid, currentThread, path, cmdline)
-    ...
-    // 共享逻辑断点
-    t.Breakpoints().Logical = grp.LogicalBreakpoints  
-
-    // 自动为新目标启用所有现有的逻辑断点
-    for _, lbp := range grp.LogicalBreakpoints {
-        if lbp.LogicalID < 0 {
-            continue
-        }
-        // 在新目标上启用断点
-        err := enableBreakpointOnTarget(t, lbp)  
-        ...
-    }
-    ...
+func enableBreakpointOnTarget(p *Target, lbp *LogicalBreakpoint) error {
+  // 根据断点类型决定在哪些地址设置物理断点
+  switch {
+  case lbp.Set.File != "":
+      // 文件行断点：在所有匹配的地址设置
+      addrs, err = FindFileLocation(p, lbp.Set.File, lbp.Set.Line)
+  case lbp.Set.FunctionName != "":
+      // 函数断点：在函数入口设置
+      addrs, err = FindFunctionLocation(p, lbp.Set.FunctionName, lbp.Set.Line)
+  case len(lbp.Set.PidAddrs) > 0:
+      // 指定进程指定地址处添加断点：过滤出目标进程为p的逻辑断点进行设置
+      for _, pidAddr := range lbp.Set.PidAddrs {
+          if pidAddr.Pid == p.Pid() {
+              addrs = append(addrs, pidAddr.Addr)
+          }
+      }
   }
 
-  func enableBreakpointOnTarget(p *Target, lbp *LogicalBreakpoint) error {
-    // 根据断点类型决定在哪些地址设置物理断点
-    switch {
-    case lbp.Set.File != "":
-        // 文件行断点：在所有匹配的地址设置
-        addrs, err = FindFileLocation(p, lbp.Set.File, lbp.Set.Line)
-    case lbp.Set.FunctionName != "":
-        // 函数断点：在函数入口设置
-        addrs, err = FindFunctionLocation(p, lbp.Set.FunctionName, lbp.Set.Line)
-    case len(lbp.Set.PidAddrs) > 0:
-        // 指定进程指定地址处添加断点：过滤出目标进程为p的逻辑断点进行设置
-        for _, pidAddr := range lbp.Set.PidAddrs {
-            if pidAddr.Pid == p.Pid() {
-                addrs = append(addrs, pidAddr.Addr)
-            }
-        }
-    }
-
-    // 在每个地址设置物理断点
-    for _, addr := range addrs {
-        _, err = p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil)
-    }
+  // 在每个地址设置物理断点
+  for _, addr := range addrs {
+      _, err = p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil)
   }
-  ```
+}
+```
 
-- **断点状态同步，全局共享**：断点命中计数等信息在逻辑断点级别维护，所有进程、线程共享
+#### serverside 断点传播策略
 
-  ```go
-  // 逻辑断点：用户概念上的断点
-  type LogicalBreakpoint struct {
-    LogicalID    int
-    Set          SetBreakpoint            // 断点设置信息
-    enabled      bool
-    HitCount     map[int64]uint64         // 命中计数
-    TotalHitCount uint64
-    // ...
-  }
-  ```
+通过 follow-exec 和正则表达式控制断点传播范围。
 
-- **断点启用策略，控制灵活**：通过 follow-exec 和正则表达式控制断点传播范围
+如果打开了followExec模式，并且followExecRegexp不空，此时就会检查子进程执行的cmdline是否匹配，如果匹配就会自动追踪并进行断点传播。
 
-  如果打开了followExec模式，并且followExecRegexp不空，此时就会检查子进程执行的cmdline是否匹配，如果匹配就会自动追踪并进行断点传播。
-
-  ```bash
+```bash
   target follow-exec -on              // 打开follow-exec模式
   target follow-exec -on "myapp.*"    // 打开follow-exec模式，但是只跟踪cmdline匹配myapp.*的子进程
   target follow-exec -off             // 关闭follow-exec模式
-  ```
+```
 
-  处理逻辑详见：
+处理逻辑详见：
 
-  ```go
+```go
   type TargetGroup struct {
     followExecEnabled bool        // 是否启用 follow-exec
     followExecRegex   *regexp.Regexp  // 正则表达式过滤器
@@ -384,9 +361,57 @@ err = d.target.SetBreakpointEnabled(lbp, true)
         err := enableBreakpointOnTarget(t, lbp)  // 在新进程中设置断点
     }
   }
-  ```
+```
 
-OK，接下来我们将在下一小节看下 `breakpoint` 命令在clientside、serverside分别是如何实现的。
+#### serverside 断点状态共享
+
+前面也曾提到过，逻辑断点统一在TargetGroup层次进行维护，断点的命中计数等信息也逻辑断点级别维护，所有进程、线程共享。
+
+```go
+// TargetGroup represents a group of target processes being debugged that
+// will be resumed and stopped simultaneously...
+type TargetGroup struct {
+	procgrp ProcessGroup
+	targets           []*Target
+	...
+	LogicalBreakpoints map[int]*LogicalBreakpoint
+	...
+}
+
+// 逻辑断点：用户概念上的断点
+type LogicalBreakpoint struct {
+  LogicalID    int
+  Set          SetBreakpoint            // 断点设置信息
+  enabled      bool
+  HitCount     map[int64]uint64         // 命中计数
+  TotalHitCount uint64
+  // ...
+}
+```
+
+#### serverside 断点命中处理
+
+当成功添加完断点之后，clientside就可以执行继续执行continue命令，serverside收到请求后会恢复TargetGroup的执行，TargetGroup包含了一个进程组中的多个进程，而每个进程又包括了多个线程，那这里的continue是恢复所有的进程、线程的执行吗？当某个进程的个别线程命中断点停止执行后，其他进程、其他线程又如何处理呢？前一节介绍断点精细化管理时提到了Stop Mode分为All-stop Mode和None-stop Mode，我们一起来看下tinydbg中实现时是如何实现的。
+
+All-stop Mode, 首先联想下 [tinydbg attach](./11-tinydbg-atach.md) 的实现，调试器attach目标进程时，会尝试跟踪跟目标进程下的所有线程。
+
+```
+func Attach(pid int, waitFor *proc.WaitFor) (*proc.TargetGroup, error) {
+    \-> dbp.execPtraceFunc(func() { err = ptraceAttach(dbp.pid) })
+    |   _, _, err = dbp.wait(dbp.pid, 0)
+    \-> tgt, err := dbp.initialize(findExecutable("", dbp.pid))
+            \-> cmdline, err := dbp.initializeBasic()
+                    \-> cmdline, err := initialize(dbp)
+                    \-> if err := dbp.updateThreadList(); err != nil {
+                            \-> foreach `tid` in /proc/<pid>/task/*
+                                    \-> if _, err := dbp.addThread(tid, tid != dbp.pid); err != nil {
+                                            \-> sys.PtraceAttach(tid) 
+```
+
+假定我们Attach了之后再添加断点，现在我们理解添加断点的处理过程了，为了让程序执行到断点，我们可以执行continue操作，下面简单介绍下tinydbg如何处理continue命令。
+
+
+
 
 ### 执行测试
 
