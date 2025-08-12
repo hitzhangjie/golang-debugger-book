@@ -32,7 +32,7 @@ ps：如果断点创建时未指定激活条件，后续也可以使用 `conditi
 (tinydbg) help break
 Sets a breakpoint.
 
-	break [--name|-n=name] [locspec] [if <condition>]
+    break [--name|-n=name] [locspec] [if <condition>]
 
 Locspec is a location specifier in the form of:
 
@@ -43,10 +43,10 @@ Locspec is a location specifier in the form of:
 If locspec is omitted a breakpoint will be set on the current line.
 
 If you would like to assign a name to the breakpoint you can do so with the form:
-	break -n mybpname main.go:4
+    break -n mybpname main.go:4
 
 Finally, you can assign a condition to the newly created breakpoint by using the 'if' postfix form, like so:
-	break main.go:55 if i == 5
+    break main.go:55 if i == 5
 
 Alternatively you can set a condition on a breakpoint after created by using the 'on' command.
 ```
@@ -371,11 +371,11 @@ func enableBreakpointOnTarget(p *Target, lbp *LogicalBreakpoint) error {
 // TargetGroup represents a group of target processes being debugged that
 // will be resumed and stopped simultaneously...
 type TargetGroup struct {
-	procgrp ProcessGroup
-	targets           []*Target
-	...
-	LogicalBreakpoints map[int]*LogicalBreakpoint
-	...
+    procgrp ProcessGroup
+    targets           []*Target
+    ...
+    LogicalBreakpoints map[int]*LogicalBreakpoint
+    ...
 }
 
 // 逻辑断点：用户概念上的断点
@@ -410,7 +410,44 @@ func Attach(pid int, waitFor *proc.WaitFor) (*proc.TargetGroup, error) {
 
 假定我们Attach了之后再添加断点，现在我们理解添加断点的处理过程了，为了让程序执行到断点，我们可以执行continue操作，下面简单介绍下tinydbg如何处理continue命令。
 
+clientside:
 
+```go
+continueCmd.cmdFn()
+    \-> c.cont(t *Session, ctx callContext, args string)
+            \-> stateChan := t.client.Continue()
+                    \-> for {
+                    \->    out := new(CommandOut)
+                    \->    err := c.call("Command", &api.DebuggerCommand{Name: api.Continue, ReturnInfoLoadConfig: c.retValLoadCfg}, &out)
+                    \->
+                    \->    // record current state
+                    \->    state := out.State
+                    \->    ch <- &state
+                    \->      
+                    \->    // breakpoint (including normal breakpoint and bp-based tracepoint)
+                    \->    isbreakpoint := false
+                    \->    // tracepoint (bp-based tracepoints, exclude normal breakpoint)
+                    \->    istracepoint := true
+                    \->    for i := range state.Threads {
+                    \->       if state.Threads[i].Breakpoint != nil {
+                    \->           isbreakpoint = true
+                    \->           istracepoint = istracepoint && (state.Threads[i].Breakpoint.Tracepoint || state.Threads[i].Breakpoint.TraceReturn)
+                    \->      }
+                    \->    }
+                    \->
+                    \->    // return if:
+                    \->    // - !isbreakpoint: doesn't encounter any breakpoint, i.e, target exit or other cases
+                    \->    // - !isbreakpoint || !istracepoint: encounter one normal breakpoint, not tracepoint
+                    \->    if !isbreakpoint || !istracepoint {
+                    \->        close(ch)
+                    \->        return
+                    \->    }
+                    \-> }
+            \-> for state := range stateChan { printcontext(t, state); }
+            \-> printPos(t, state.CurrentThread, printPosShowArrow)
+```
+
+serverside:
 
 
 ### 执行测试
