@@ -389,7 +389,7 @@ type LogicalBreakpoint struct {
 }
 ```
 
-#### serverside 断点命中处理
+#### serverside 执行到断点处
 
 当成功添加完断点之后，clientside就可以执行继续执行continue命令，serverside收到请求后会恢复TargetGroup的执行，TargetGroup包含了一个进程组中的多个进程，而每个进程又包括了多个线程，那这里的continue是恢复所有的进程、线程的执行吗？当某个进程的个别线程命中断点停止执行后，其他进程、其他线程又如何处理呢？前一节介绍断点精细化管理时提到了Stop Mode分为All-stop Mode和None-stop Mode，我们一起来看下tinydbg中实现时是如何实现的。
 
@@ -449,6 +449,104 @@ continueCmd.cmdFn()
 
 serverside:
 
+```go
+func (d *Debugger) Command(command *api.DebuggerCommand, resumeNotify chan struct{}, clientStatusCh chan struct{}) (state *api.DebuggerState, err error) {
+    ...
+    switch command.Name {
+    case api.Continue:
+        err = d.target.Continue()
+    ...
+    }
+    ...
+}
+```
+
+而 d.target.Continue() 具体做了哪些处理呢？
+
+```go
+func (grp *TargetGroup) Continue() error
+    ...
+    \-> trapthread, stopReason, contOnceErr := grp.procgrp.ContinueOnce(grp.cctx)
+            \-> for {
+            |       err := procgrp.resume()
+            |       |    \-> foreach dbp in procgrop.procs
+            |       |    |       \-> foreach thread in dbp.threads
+            |       |    |       |       \-> procgrp.stepInstruction(thread)
+            |       |    |       |       |       \-> if bp := t.CurrentBreakpoint.Breakpoint; bp is a hardware bp {
+            |       |    |       |       |       |       t.clearHardwareBreakpoint(bp.Addr, bp.WatchType, bp.HWBreakIndex)
+            |       |    |       |       |       |       defer func() { err = t.writeHardwareBreakpoint(bp.Addr, bp.WatchType, bp.HWBreakIndex); }()
+            |       |    |       |       |       |   }
+            |       |    |       |       |       \-> if bp, ok := t.dbp.FindBreakpoint(pc, false); ok means bp is software breakpoint {
+            |       |    |       |       |       |       err = t.clearSoftwareBreakpoint(bp)
+            |       |    |       |       |       |       defer func() { err = t.dbp.writeSoftwareBreakpoint(t, bp.Addr); }
+            |       |    |       |       |       |   }
+            |       |    |       |       |       \-> err = procgrp.singleStep(t)
+            |       |    |       |       |       |      for {
+            |       |    |       |       |       |          t.dbp.execPtraceFunc(func() { err = ptraceSingleStep(t.ID, sig) })
+            |       |    |       |       |       |          wpid, status, err := t.dbp.waitFast(t.ID)
+            |       |    |       |       |       |              \-> wpid, err := sys.Wait4(pid, &s, sys.WALL, nil)
+            |       |    |       |       |       |                  ps: Since Linux 4.7, the __WALL flag is automatically implied if the child is being ptraced,
+            |       |    |       |       |       |                      so debugger can know the all children (created by clone or non-clone) state changed.
+            |       |    |       |       |       |          if t.ID== wpid { return nil }
+            |       |    |       |       |       |      }
+            |       |    \-> foreach dbp in procgrop.procs
+            |       |    |       \-> foreach thread in dbp.threads
+            |       |    |       |       \-> thread.resume()
+            |       |    |       |       |       \-> sig := t.os.delayedSignal
+            |       |    |       |       |       \-> return t.resumeWithSig(sig)
+            |       |    |       |       |       |       \-> t.os.running = true
+            |       |    |       |       |       |       \-> t.dbp.execPtraceFunc(func() { err = ptraceCont(t.ID, sig) })
+            |   }
+```
+
+可以看到clientside每执行一次continue命令，服务器确实会让跟踪的所有暂停的进程、线程全部恢复执行。既然已经恢复执行了，接下来任意一个被跟踪的进程中的线程都可能会命中断点（可能是硬件断点，也可能是软件断点）。
+
+那么不禁要问，当命中断点后，debugger是如何进行处理的呢？
+
+#### serverside 断点命中处理
+
+```go
+func (grp *TargetGroup) Continue() error
+    ...
+    \-> trapthread, stopReason, contOnceErr := grp.procgrp.ContinueOnce(grp.cctx)
+            \-> for {
+            *       err := procgrp.resume()
+            |       ps: so far, all targets have been resumed to running
+            |
+            *       trapthread, err := trapWait(procgrp, -1)
+            |           \-> return trapWaitInternal(procgrp, pid, 0)
+            |       if err != nil { return nil, proc.StopUnknown, err }
+            |       ps: handles many events like child exit, cloned, non-cloned, 
+            |           and processing delayed signals including SIGTRAP, etc.
+            |
+            *       trapthread, err = procgrp.stop(cctx, trapthread)
+            |           \-> for dbp in procgrp.procs {
+            |           |       for thread in dbp.threads {
+            |           |           if thread running {
+            |           |               thread.stop()
+            |           |                   \-> err = sys.Tgkill(t.dbp.pid, t.ID, sys.SIGSTOP)
+            |           |                       ps: SIGSTOP will causes target thread stop, which can be resumed by sending SIGCONT. 
+            |           |                           And SIGSTOP cannot be caught.
+            |           |           }
+            |           |       }    
+            |           |   }
+            |       if err != nil { return nil, proc.StopUnknown, err }
+            |       ps: All-stop mode, if we found one thread hit the breakpoint (or traced after thread cloned, non-cloned, etc),
+            |           we stop all running threads.
+            |
+            *       dbp := procgrp.procForThread(trapthread.ID)
+            |       dbp.memthread = trapthreads
+            |       ps: here refresh other processes' threads' memthread to the one, which is the 1st thread.os.setbp == true.
+            |           When reading memory, we uses this memthread pid as ptrace(PTRACE_PEEK/POKE_DATA/TEXT, ...) operations.
+            |
+            |       return trapthread, proc.StopUnknown, nil
+            |   }
+    \-> TODO check the states ...
+```            
+
+截止到这里，我们就知道了continue操作会先全部恢复执行，然后每当遇到一个被跟踪的线程状态发生变化，就会尝试stop所有进程、线程的执行，并更新memthread的线程，然后接下来就是因为SIGTRAP等状态发生变化的线程的内存、寄存器等状态。
+
+TODO here！
 
 ### 执行测试
 
