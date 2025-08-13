@@ -389,7 +389,8 @@ type LogicalBreakpoint struct {
 }
 ```
 
-#### serverside 执行到断点处
+### 代码实现：continue
+#### 我们从Attach开始
 
 当成功添加完断点之后，clientside就可以执行继续执行continue命令，serverside收到请求后会恢复TargetGroup的执行，TargetGroup包含了一个进程组中的多个进程，而每个进程又包括了多个线程，那这里的continue是恢复所有的进程、线程的执行吗？当某个进程的个别线程命中断点停止执行后，其他进程、其他线程又如何处理呢？前一节介绍断点精细化管理时提到了Stop Mode分为All-stop Mode和None-stop Mode，我们一起来看下tinydbg中实现时是如何实现的。
 
@@ -410,7 +411,7 @@ func Attach(pid int, waitFor *proc.WaitFor) (*proc.TargetGroup, error) {
 
 假定我们Attach了之后再添加断点，现在我们理解添加断点的处理过程了，为了让程序执行到断点，我们可以执行continue操作，下面简单介绍下tinydbg如何处理continue命令。
 
-clientside:
+#### clientside 核心代码
 
 ```go
 continueCmd.cmdFn()
@@ -447,7 +448,7 @@ continueCmd.cmdFn()
             \-> printPos(t, state.CurrentThread, printPosShowArrow)
 ```
 
-serverside:
+#### serverside resume all
 
 ```go
 func (d *Debugger) Command(command *api.DebuggerCommand, resumeNotify chan struct{}, clientStatusCh chan struct{}) (state *api.DebuggerState, err error) {
@@ -503,50 +504,105 @@ func (grp *TargetGroup) Continue() error
 
 那么不禁要问，当命中断点后，debugger是如何进行处理的呢？
 
-#### serverside 断点命中处理
+#### serverside stop all
 
 ```go
 func (grp *TargetGroup) Continue() error
     ...
     \-> trapthread, stopReason, contOnceErr := grp.procgrp.ContinueOnce(grp.cctx)
-            \-> for {
-            *       err := procgrp.resume()
-            |       ps: so far, all targets have been resumed to running
-            |
-            *       trapthread, err := trapWait(procgrp, -1)
-            |           \-> return trapWaitInternal(procgrp, pid, 0)
-            |       if err != nil { return nil, proc.StopUnknown, err }
-            |       ps: handles many events like child exit, cloned, non-cloned, 
-            |           and processing delayed signals including SIGTRAP, etc.
-            |
-            *       trapthread, err = procgrp.stop(cctx, trapthread)
-            |           \-> for dbp in procgrp.procs {
-            |           |       for thread in dbp.threads {
-            |           |           if thread running {
-            |           |               thread.stop()
-            |           |                   \-> err = sys.Tgkill(t.dbp.pid, t.ID, sys.SIGSTOP)
-            |           |                       ps: SIGSTOP will causes target thread stop, which can be resumed by sending SIGCONT. 
-            |           |                           And SIGSTOP cannot be caught.
-            |           |           }
-            |           |       }    
-            |           |   }
-            |       if err != nil { return nil, proc.StopUnknown, err }
-            |       ps: All-stop mode, if we found one thread hit the breakpoint (or traced after thread cloned, non-cloned, etc),
-            |           we stop all running threads.
-            |
-            *       dbp := procgrp.procForThread(trapthread.ID)
-            |       dbp.memthread = trapthreads
-            |       ps: here refresh other processes' threads' memthread to the one, which is the 1st thread.os.setbp == true.
-            |           When reading memory, we uses this memthread pid as ptrace(PTRACE_PEEK/POKE_DATA/TEXT, ...) operations.
-            |
-            |       return trapthread, proc.StopUnknown, nil
-            |   }
-    \-> TODO check the states ...
-```            
+    |       \-> for {
+    |       *       err := procgrp.resume()
+    |       |       ps: so far, all targets have been resumed to running
+    |       |
+    |       *       trapthread, err := trapWait(procgrp, -1)
+    |       |           \-> return trapWaitInternal(procgrp, pid, 0)
+    |       |       if err != nil { return nil, proc.StopUnknown, err }
+    |       |       ps: handles many events like child exit, cloned, non-cloned, 
+    |       |           and processing delayed signals including SIGTRAP, etc.
+    |       |
+    |       *       trapthread, err = procgrp.stop(cctx, trapthread)
+    |       |           \-> for dbp in procgrp.procs {
+    |       |           |       for thread in dbp.threads {
+    |       |           |           if thread running {
+    |       |           |               thread.stop()
+    |       |           |                   \-> err = sys.Tgkill(t.dbp.pid, t.ID, sys.SIGSTOP)
+    |       |           |                       ps: SIGSTOP will causes target thread stop, which can be resumed by sending SIGCONT. 
+    |       |           |                           And SIGSTOP cannot be caught.
+    |       |           |           }
+    |       |           |       }    
+    |       |           |   }
+    |       |       if err != nil { return nil, proc.StopUnknown, err }
+    |       |       ps: All-stop mode, if we found one thread hit the breakpoint (or traced after thread cloned, non-cloned, etc),
+    |       |           we stop all running threads.
+    |       |
+    |       *       dbp := procgrp.procForThread(trapthread.ID)
+    |       |       dbp.memthread = trapthread
+    |       |       ps: here refresh other processes' threads' memthread to the one, which is the 1st thread.os.setbp == true.
+    |       |           When reading memory, we uses this memthread pid as ptrace(PTRACE_PEEK/POKE_DATA/TEXT, ...) operations.
+    |       |
+    |       |       return trapthread, proc.StopUnknown, nil
+    |       |   }
+    \-> series of state checking and clearing actions ... we skip them
+```
 
-截止到这里，我们就知道了continue操作会先全部恢复执行，然后每当遇到一个被跟踪的线程状态发生变化，就会尝试stop所有进程、线程的执行，并更新memthread的线程，然后接下来就是因为SIGTRAP等状态发生变化的线程的内存、寄存器等状态。
+continue操作会先全部恢复执行，然后每当遇到一个被跟踪的线程状态发生变化，就会尝试stop所有进程、线程的执行，并更新它们memthread的线程为当前trapthread，所有线程都停下来之后，如果想读取、修改内存数据、线程硬件上下文信息的时候，就可以通过ptrace来操作了。
 
-TODO here！
+#### serverside return state
+
+```go
+func (d *Debugger) Command(command *api.DebuggerCommand, resumeNotify chan struct{}, clientStatusCh chan struct{}) (state *api.DebuggerState, err error) {
+    ...
+    switch command.Name {
+    case api.Continue:
+        err = d.target.Continue()
+    ...
+    }
+    ...
+    state, stateErr := d.state(api.LoadConfigToProc(command.ReturnInfoLoadConfig), withBreakpointInfo)
+    ...
+    for _, th := range state.Threads {
+        if th.Breakpoint != nil && th.Breakpoint.TraceReturn {
+            for _, v := range th.BreakpointInfo.Arguments {
+                if (v.Flags & api.VariableReturnArgument) != 0 {
+                    th.ReturnValues = append(th.ReturnValues, v)
+                }
+            }
+        }
+    }
+    ...
+    return state, err
+}
+
+// Command interrupts, continues and steps through the program.
+func (s *RPCServer) Command(command api.DebuggerCommand, cb service.RPCCallback) {
+    st, err := s.debugger.Command(&command, cb.SetupDoneChan(), cb.DisconnectChan())
+    if err != nil {
+        cb.Return(nil, err)
+        return
+    }
+    var out CommandOut
+    out.State = *st
+    cb.Return(out, nil)
+}
+
+func (cb *RPCCallback) Return(out interface{}, err error) {
+    ...
+    cb.s.sendResponse(cb.sending, &cb.req, &resp, out, cb.codec, errmsg)
+}
+```
+
+最后，调试器将当前的被调试进程的状态信息 `state *api.DebuggerState` 返回给clientside，clientside则完成状态信息的打印：
+
+```go
+continueCmd.cmdFn()
+    \-> c.cont(t *Session, ctx callContext, args string)
+            \-> stateChan := t.client.Continue()
+            ...
+            \-> for state := range stateChan { printcontext(t, state); }
+            \-> printPos(t, state.CurrentThread, printPosShowArrow)
+```
+
+在这之后，就可以在调试器会话中继续输入其他调试命令，如 print vars，eval expr等等，继续执行其他调试操作了。
 
 ### 执行测试
 
@@ -554,4 +610,4 @@ TODO here！
 
 ### 本文总结
 
-本节深入介绍了tinydbg调试器中 `breakpoint` 命令的实现机制，从客户端到服务器端的完整处理流程。客户端通过解析用户输入的断点参数（名称、位置描述、条件），向服务器请求对应的指令地址列表，并支持创建普通断点、条件断点、suspended断点和tracepoints等多种类型。服务器端采用层次化的断点管理架构，通过逻辑断点（LogicalBreakpoint）统一管理用户概念上的断点，通过物理断点（Breakpoint）在具体指令地址处实现断点功能，并通过自动断点传播机制确保新进程和线程能够继承现有断点。这种设计不仅提高了断点管理的效率，还支持复杂的多进程调试场景，为现代调试器提供了强大而灵活的断点功能。
+本节详细介绍了 tinydbg 调试器中 `breakpoint` 命令的实现机制，以及 `continue` 命令如何驱动程序执行并在断点处停下的完整流程。我们从客户端如何解析断点参数（名称、位置、条件）并与服务器交互，讲到服务器端如何查找指令地址、创建和管理逻辑断点与物理断点，并支持包括普通断点、条件断点、suspended 断点、tracepoint 等多种类型。服务器端采用层次化的断点管理架构，逻辑断点统一管理断点的状态和命中信息，物理断点则具体作用于指令地址，并通过自动断点传播机制保证新进程、新线程能够继承现有断点。随后，`continue` 命令会恢复所有目标进程和线程的执行，遇到断点时根据 all-stop/none-stop 模式进行调度和状态同步，最终将调试状态返回给客户端。整体设计不仅提升了断点管理的灵活性和效率，也为多进程、多线程复杂调试场景提供了坚实的基础。通过本节内容，读者可以系统理解现代调试器断点添加、传播与命中后的核心实现逻辑。
