@@ -106,8 +106,10 @@
 
 以Linux系统调用为例，调试器进程（tracer）可以通过 `ptrace(PTRACE_ATTACH…)` attach到一个被调试进程（tracee），然后操作系统内核会给tracee进程发送一个信号SIGSTOP，tracee进程就会停下来，tracer进程就可以通过 `waitpid(pid)`来等待tracee停止事件。当tracer进程感知到tracee进程停止执行之后，tracer进程就可以进一步通过 `ptrace`系统调用、配合其他ptrace参数 `PTRACE_GETREGS、PTRACE_SETREGS、PTRACE_PEEKDATA、PTRACE_POKEDATA等`来读写寄存器、内存数据、设置断点，通过PTRACE_SINGLESTEP、PTRACE_CONT等控制代码的执行等。
 
-ps: 对与进程、线程的表示，建议了解下操作系统进程控制块PCB的概念以及Linux下taskstruct、GDT、LDT相关的知识。
-
+> **扩展阅读1**：
+> 对与进程、线程的表示，建议了解下操作系统进程控制块PCB的概念以及Linux下taskstruct、GDT、LDT相关的知识。
+>
+> **扩展阅读2**：
 > Linux平台对SIGSTOP信号的处理，可以参考：[How does SIGSTOP work in Linux kernel?](https://stackoverflow.com/questions/31946854/how-does-sigstop-work-in-linux-kernel)
 
 > **ps：简单提下内存保护模式的实现，这样有助于理解为什么现在调试器一般通过操作系统系统调用来实现，比如Linux ptrace。**
