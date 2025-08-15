@@ -38,8 +38,8 @@ Hi，我是张杰，目前就职于腾讯（深圳）科技有限公司，后台
 
 本书对应的示例代码，您可以通过以下两种方式获得：
 
-1. [**golang-debugger-lessons**](https://github.com/hitzhangjie/golang-debugger-lessons)，读者可以按照章节对应关系来查看示例代码，目录 [**/0-godbg**](https://github.com/hitzhangjie/golang-debugger-lessons) 中提供了一个相对完整的go语言符号级调试器实现。
-2. [**godbg**](https://github.com/hitzhangjie/godbg)，迁移自上述配套示例代码中的/0-godbg，读者如果希望快速体验完整功能，也可以直接体验该项目或查看源码；
+1. [**golang-debugger-lessons**](https://github.com/hitzhangjie/golang-debugger-lessons)，读者可以按照章节对应关系来查看示例代码，目录；
+2. [**godbg-debugger-lessons/0-godbg**](https://github.com/hitzhangjie/godbg)，该submodule提供了一个功能相对完整的“指令级”调试器，供读者体验功能、了解整体代码组织；
 
    > ps: 项目中提供了vscode的devcontainer配置，采用的是centos+go1.13。如果您升级go版本则可能导致程序出现问题，比如go1.14引入抢占问题，意味着调试器必须解决抢占问题，这可能导致调试器工作不符合预期。
    >
@@ -47,12 +47,12 @@ Hi，我是张杰，目前就职于腾讯（深圳）科技有限公司，后台
    >
    > 强烈建议您先试用提供的开发容器进行测试、学习，当您掌握了一些基础之后，再按需升级go版本不迟。
    >
-3. [**hitzhangjie/delve**](https://github.com/hitzhangjie/tinydbg)，该项目由go-delve/delve裁剪而来，为了方便讲述与符号级调试器最核心的部分，项目中剔除了与linux/amd64无关的一些扩展实现。本书有关符号级调试器实现部分会借鉴此项目中的代码。
+3. [**hitzhangjie/tinydbg**](https://github.com/hitzhangjie/tinydbg)，该项目由go-delve/delve裁剪而来，剔除了与linux/amd64无关的扩展，裁剪了部分不常用功能，优化了部分设计实现，以方便作为教学示例来讲述与符号级调试器最核心的原理、实现细节。
 
 ## 1.5 联系方式
 
 如果您有任何建议，请提[Issues](https://github.com/hitzhangjie/golang-debugger-book/issues)，或邮件联系 `hit.zhangjie@gmail.com`，标题中注明来意 `GoDebugger交流`。
 
-希望该书及相关示例，能顺利完成，也算是我磨练心性、自我提高的一种方式，如果能对大家确实起到帮助的作用那是再好不过了。
+希望该书及相关示例，能顺利完成，也算是我磨练心性、自我提高的一种方式，如果能对大家确实起到帮助的作用那是再好不过了。借此机会，我也想向 go-delve/delve 的维护人员 [derekparker](https://github.com/derekparker)、[aarzilli](https://github.com/aarzilli) 以及其他贡献者致以诚挚的敬意，没有你们多年来的贡献、沉淀，我也没有什么好学习总结分享的。
 
-如果喜欢本书，别忘了 [Star](https://github.com/hitzhangjie/golang-debugger-book) 一下对作者予以支持 :)
+如果喜欢本书，请点个 [Star](https://github.com/hitzhangjie/golang-debugger-book) 对作者予以支持 :)
