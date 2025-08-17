@@ -117,6 +117,7 @@
     * [9.3.107 支持用户偏好配置](9-develop-sym-debugger/3-高级功能扩展/107-howto_customize_tinydbg.md)
     * [9.3.108 支持多客户端调试模式](9-develop-sym-debugger/3-高级功能扩展/108-howto_accept_multiclient.md)
     * [9.3.109 支持调试活动记录本](9-develop-sym-debugger/3-高级功能扩展/109-howto_transcript_debugging.md)
+    * [9.3.110 如何实现确定性调试](9-develop-sym-debugger/3-高级功能扩展/110-howto_debug_deterministically.md)
 * [10 主流调试技术解析](10-extras/README.md)
   * [10.1 调试器发展历程](10-extras/1-development-of-debugger.md)
   * [10.2 日志系统展历程](10-extras/2-development-of-logging.md)
