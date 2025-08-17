@@ -1,14 +1,12 @@
 ## Attach进程
 
-### 实现目标：`godbg attach -p <pid>`
+### 实现目标：`godbg attach <pid>`
 
-如果进程已经在运行了，如果要对其进行调试需要将进程挂住(attach)，让其停下来等待调试器对其进行控制。
+如果进程已经在运行了，要对其进行调试需要先通过attach操作跟踪进程，待其停止执行后，再执行查看修改数据、控制程序执行的操作。常见的调试器如dlv、gdb等都支持传递pid参数来对运行中的进程进行跟踪调试。
 
-常见的调试器如dlv、gdb等都支持通过参数 `-p pid` 的形式来传递目标进程号来对运行中的进程进行调试。
+本节我们将实现程序 `godbg attach <pid>` 子命令。
 
-我们将实现程序godbg，它支持子命令 ``attach -p <pid>``，如果目标进程存在，godbg将attach到目标进程，此时目标进程会暂停执行。然后我们让godbg休眠几秒钟，再detach目标进程，目标进程会恢复执行。
-
-> ps: 这里休眠的几秒钟，用户可以先将其假想成一系列的调试操作，如设置断点、检查进程寄存器、检查内存等等，后面小节中我们将支持这些能力。
+本节示例代码中，godbg将attach到目标进程，此时目标进程会暂停执行。然后我们让godbg休眠几秒钟（我们假定这几秒钟内执行了一些调试动作，如添加断点、执行到断点、查看变量等，然后调试完后结束调试），再detach目标进程，目标进程会恢复执行。
 
 ### 基础知识
 
@@ -18,23 +16,98 @@
 
 tracee，指的是被调试的线程，而不是进程。对于一个多线程程序而言，可能要跟踪（trace）部分或者全部的线程以方便调试，没有被跟踪的线程将会继续执行，而被跟踪的线程则受调试器控制。甚至同一个被调试进程中的不同线程，可以由不同的tracer来控制。
 
+注：
+
+- 同一个线程只允许被一个调试器跟踪调试，如果希望启动多个独立的调试器实例对目标线程进行跟踪，操作系统会检测到该线程已经被某个调试器进程跟踪调试中，会拒绝其他调试器实例的ptrace请求。
+
+- 在分离式调试器架构下，也就是说只允许1个debugger backend实例attach被调试线程，但是我们可以启动多个debugger frontend来同时进行并发调试，这部分在第9章允许multiclient访问debugger backend时有介绍。
+
 #### tracer
 
 tracer，指的是向tracee发送调试控制命令的调试器进程，准确地说，也是线程。
 
-一旦tracer和tracee建立了联系之后，tracer就可以给tracee发送各种调试命令。
+有时会使用术语ptrace link，实际上是指tracer通过ptrace系统调用（如PTRACE_ATTACH）成功跟踪了tracee，此后tracer就可以向tracee发送各种调试命令。需要注意的是，建立跟踪关系后，tracee期望后续所有的ptrace请求都来自同一个tracer线程，否则会被内核拒绝或行为未定义。因此，调试器（debugger backend）实现时要注意，attach后后续对该tracee的所有ptrace操作都要在该ptrace link对应的tracer线程发起。
 
-#### ptrace
+这也意味着，同一个线程只允许被同一个调试器（debugger backend）实例跟踪调试。关于这点，我们可以通过如下操作对此进行验证。
+
+#### ptrace link
+
+实际上ptrace_link是一个linux内核函数，顾名思义，它指的就是tracer attach到tracee后建立了跟踪关系。ptrace link一旦建立后，tracee就只允许接收来自link另一端的tracer的ptrace请求。关于这点，我们可以验证下。
+
+**1）验证1：多个调试器实例attach同一个线程**
+
+shell 1中先启动一个预先写好的go程序，它执行for循环：
+
+```bash
+$ ./goforloop
+```
+
+shell 2中通过godbg attach到该goforloop进程，attach成功：
+
+```bash
+$ godbg attach `pidof goforloop`
+```
+
+shell 3中通过godbg再次attach到该goforloop进程，attach报权限失败：
+
+```bash
+$ godbg attach `pidof goforloop`
+Error: process 31060 attached error: operation not permitted
+```
+
+**2) 验证2：attach成功后通过其他线程发送ptrace请求**
+
+这样也是不被允许的，读者如果感兴趣，可以自行注释掉godbg中的 `runtime.LockOSThread()` 调用，然后重编godbg进行调试活动，执行期间就会收到相关的权限报错信息 No Such Process。
+
+**3）内核中执行ptrace操作时，内核会进行这样的校验**
+
+file: ./kernel/ptrace.c
+
+```c
+SYSCALL_DEFINE4(ptrace, long, request, long, pid, unsigned long, addr,
+        unsigned long, data)
+{
+    ...
+    ret = ptrace_check_attach(child, request == PTRACE_KILL ||
+                  request == PTRACE_INTERRUPT);
+    if (ret < 0)
+        goto out_put_task_struct;
+    ...
+out_put_task_struct:
+    put_task_struct(child);
+}
+
+static int ptrace_check_attach(struct task_struct *child, bool ignore_state)
+{
+    int ret = -ESRCH;   // no such process
+    ...
+    if (child->ptrace && child->parent == current) {
+        WARN_ON(child->state == __TASK_TRACED);
+        /*
+         * child->sighand can't be NULL, release_task()
+         * does ptrace_unlink() before __exit_signal().
+         */
+        if (ignore_state || ptrace_freeze_traced(child))
+            ret = 0;
+    }
+    ...
+    return ret
+}
+```
+
+如果后续ptrace请求来自非ptrace link建立时的tracer，那么ptrace_check_attach操作就会返回错误码 `-ESRCH`。
+
+#### syscall `ptrace`
 
 我们的调试器示例是基于Linux平台编写的，调试能力依赖于Linux ptrace。
 
 通常，如果调试器也是多线程程序，就要注意ptrace的约束，当tracer、tracee建立了跟踪关系后，tracee（被跟踪线程）后续接收到的多个调试命令应该来自同一个tracer（跟踪线程），意味着调试器实现时要将发送调试命令给tracee的task绑定到特定线程上。更具体地讲，这里的task可以是goroutine。
 
-所以，在我们参考dlv等调试器的实现时会发现，发送调试命令的goroutine通常会调用 `runtime.LockOSThread()`来绑定一个线程，专门用来向attached tracee发送调试指令（也就是各种ptrace操作）。
+所以，在我们参考dlv等调试器的实现时会发现，发送调试命令的goroutine通常会调用 `runtime.LockOSThread()` 来绑定一个线程，专门用来向attached tracee发送调试指令（也就是各种ptrace操作）。
 
 > runtime.LockOSThread()，该函数的作用是将调用该函数的goroutine绑定到该操作系统线程上，意味着该操作系统线程只会用来执行该goroutine上的操作，除非该goroutine调用了runtime.UnLockOSThread()解除这种绑定关系，否则该线程不会用来调度其他goroutine。调用这个函数的goroutine也只能在当前线程上执行，不会被调度器迁移到其他线程。see:
 >
-> ```
+> ```go
 > package runtime // import "runtime"
 >
 > func LockOSThread()
@@ -56,23 +129,23 @@ tracer，指的是向tracee发送调试控制命令的调试器进程，准确�
 当我们调用了attach之后，attach返回时，tracee有可能还没有停下来，这个时候需要通过wait方法来等待tracee停下来，并获取tracee的状态信息。当结束调试时，可以通过detach操作，让tracee恢复执行。
 
 > 下面是man手册关于ptrace操作attach、detach的说明，下面要用到：
-
-    **PTRACE_ATTACH**
-    *Attach to the process specified in pid, making it a tracee of*
-    *the calling process.  The tracee is sent a SIGSTOP, but will*
-    *not necessarily have stopped by the completion of this call;*
-
-> *use waitpid(2) to wait for the tracee to stop.  See the "At‐*
-> *taching and detaching" subsection for additional information.*
-
-    **PTRACE_DETACH**
-    *Restart the stopped tracee as for PTRACE_CONT, but first de‐*
-    *tach from it.  Under Linux, a tracee can be detached in this*
-    *way regardless of which method was used to initiate tracing.*
+>
+> **PTRACE_ATTACH**  
+> Attach to the process specified in pid, making it a tracee of
+> the calling process.  The tracee is sent a SIGSTOP, but will
+> not necessarily have stopped by the completion of this call;
+>
+> use waitpid(2) to wait for the tracee to stop.  See the "At‐
+> taching and detaching" subsection for additional information.
+>
+> **PTRACE_DETACH**  
+> Restart the stopped tracee as for PTRACE_CONT, but first de‐
+> tach from it.  Under Linux, a tracee can be detached in this
+> way regardless of which method was used to initiate tracing.
 
 ### 代码实现
 
-**src详见：golang-debugger-lessons/2_process_attach**
+src详见：golang-debugger-lessons/2_process_attach。
 
 file: main.go
 
@@ -80,20 +153,20 @@ file: main.go
 package main
 
 import (
-	"fmt"
-	"os"
-	"os/exec"
-	"runtime"
-	"strconv"
-	"syscall"
-	"time"
+    "fmt"
+    "os"
+    "os/exec"
+    "runtime"
+    "strconv"
+    "syscall"
+    "time"
 )
 
 const (
-	usage = "Usage: go run main.go exec <path/to/prog>"
+    usage = "Usage: go run main.go exec <path/to/prog>"
 
-	cmdExec   = "exec"
-	cmdAttach = "attach"
+    cmdExec   = "exec"
+    cmdAttach = "attach"
 )
 
 func main() {
@@ -104,79 +177,79 @@ func main() {
     // 
     // ps: 如果恰好不是，可能需要对tracee的状态显示进行更复杂的处理，需要考虑信号？
     // 目前看系统调用传递的参数是这样。
-	runtime.LockOSThread()
+    runtime.LockOSThread()
 
-	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "%s\n\n", usage)
-		os.Exit(1)
-	}
-	cmd := os.Args[1]
+    if len(os.Args) < 3 {
+        fmt.Fprintf(os.Stderr, "%s\n\n", usage)
+        os.Exit(1)
+    }
+    cmd := os.Args[1]
 
-	switch cmd {
-	case cmdExec:
-		prog := os.Args[2]
+    switch cmd {
+    case cmdExec:
+        prog := os.Args[2]
 
-		// run prog
-		progCmd := exec.Command(prog)
-		buf, err := progCmd.CombinedOutput()
+        // run prog
+        progCmd := exec.Command(prog)
+        buf, err := progCmd.CombinedOutput()
 
-		fmt.Fprintf(os.Stdout, "tracee pid: %d\n", progCmd.Process.Pid)
+        fmt.Fprintf(os.Stdout, "tracee pid: %d\n", progCmd.Process.Pid)
 
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s exec error: %v, \n\n%s\n\n", err, string(buf))
-			os.Exit(1)
-		}
-		fmt.Fprintf(os.Stdout, "%s\n", string(buf))
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "%s exec error: %v, \n\n%s\n\n", err, string(buf))
+            os.Exit(1)
+        }
+        fmt.Fprintf(os.Stdout, "%s\n", string(buf))
 
-	case cmdAttach:
-		pid, err := strconv.ParseInt(os.Args[2], 10, 64)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s invalid pid\n\n", os.Args[2])
-			os.Exit(1)
-		}
+    case cmdAttach:
+        pid, err := strconv.ParseInt(os.Args[2], 10, 64)
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "%s invalid pid\n\n", os.Args[2])
+            os.Exit(1)
+        }
 
-		// check pid
-		if !checkPid(int(pid)) {
-			fmt.Fprintf(os.Stderr, "process %d not existed\n\n", pid)
-			os.Exit(1)
-		}
+        // check pid
+        if !checkPid(int(pid)) {
+            fmt.Fprintf(os.Stderr, "process %d not existed\n\n", pid)
+            os.Exit(1)
+        }
 
-		// attach
-		err = syscall.PtraceAttach(int(pid))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "process %d attach error: %v\n\n", pid, err)
-			os.Exit(1)
-		}
-		fmt.Fprintf(os.Stdout, "process %d attach succ\n\n", pid)
+        // attach
+        err = syscall.PtraceAttach(int(pid))
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "process %d attach error: %v\n\n", pid, err)
+            os.Exit(1)
+        }
+        fmt.Fprintf(os.Stdout, "process %d attach succ\n\n", pid)
 
-		// wait
-		var (
-			status syscall.WaitStatus
-			rusage syscall.Rusage
-		)
-		_, err = syscall.Wait4(int(pid), &status, syscall.WSTOPPED, &rusage)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "process %d wait error: %v\n\n", pid, err)
-			os.Exit(1)
-		}
-		fmt.Fprintf(os.Stdout, "process %d wait succ, status:%v, rusage:%v\n\n", pid, status, rusage)
+        // wait
+        var (
+            status syscall.WaitStatus
+            rusage syscall.Rusage
+        )
+        _, err = syscall.Wait4(int(pid), &status, syscall.WSTOPPED, &rusage)
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "process %d wait error: %v\n\n", pid, err)
+            os.Exit(1)
+        }
+        fmt.Fprintf(os.Stdout, "process %d wait succ, status:%v, rusage:%v\n\n", pid, status, rusage)
 
-		// detach
-		fmt.Printf("we're doing some debugging...\n")
-		time.Sleep(time.Second * 10)
+        // detach
+        fmt.Printf("we're doing some debugging...\n")
+        time.Sleep(time.Second * 10)
 
-		// MUST: call runtime.LockOSThread() first
-		err = syscall.PtraceDetach(int(pid))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "process %d detach error: %v\n\n", pid, err)
-			os.Exit(1)
-		}
-		fmt.Fprintf(os.Stdout, "process %d detach succ\n\n", pid)
+        // MUST: call runtime.LockOSThread() first
+        err = syscall.PtraceDetach(int(pid))
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "process %d detach error: %v\n\n", pid, err)
+            os.Exit(1)
+        }
+        fmt.Fprintf(os.Stdout, "process %d detach succ\n\n", pid)
 
-	default:
-		fmt.Fprintf(os.Stderr, "%s unknown cmd\n\n", cmd)
-		os.Exit(1)
-	}
+    default:
+        fmt.Fprintf(os.Stderr, "%s unknown cmd\n\n", cmd)
+        os.Exit(1)
+    }
 
 }
 
@@ -185,30 +258,30 @@ func main() {
 // On Unix systems, os.FindProcess always succeeds and returns a Process for
 // the given pid, regardless of whether the process exists.
 func checkPid(pid int) bool {
-	out, err := exec.Command("kill", "-s", "0", strconv.Itoa(pid)).CombinedOutput()
-	if err != nil {
-		panic(err)
-	}
+    out, err := exec.Command("kill", "-s", "0", strconv.Itoa(pid)).CombinedOutput()
+    if err != nil {
+        panic(err)
+    }
 
-	// output error message, means pid is invalid
-	if string(out) != "" {
-		return false
-	}
+    // output error message, means pid is invalid
+    if string(out) != "" {
+        return false
+    }
 
-	return true
+    return true
 }
 ```
 
 这里的程序逻辑也比较简单：
 
-- 程序运行时，首先检查命令行参数，
-  - `godbg attach <pid>`，至少有3个参数，如果参数数量不对，直接报错退出；
-  - 接下来校验第2个参数，如果是无效的subcmd，也直接报错退出；
-  - 如果是attach，那么pid参数应该是个整数，如果不是也直接退出；
-- 参数正常情况下，开始尝试attach到tracee；
-- attach之后，tracee并不一定立即就会停下来，需要wait来获取其状态变化情况；
-- 等tracee停下来之后，我们休眠10s钟，仿佛自己正在干些调试操作一样；
-- 10s钟之后，tracer尝试detach tracee，让tracee继续恢复执行。
+1. 程序运行时，首先检查命令行参数，  
+    - `godbg attach <pid>`，至少有3个参数，如果参数数量不对，直接报错退出；
+    - 接下来校验第2个参数，如果是无效的subcmd，也直接报错退出；
+    - 如果是attach，那么pid参数应该是个整数，如果不是也直接退出；
+2. 参数正常情况下，开始校验pid进程是否存在，存在则开始尝试attach到tracee，建立ptrace link；
+3. attach之后，tracee并不一定立即就会停下来，需要wait来获取其状态变化情况；
+4. 等tracee停下来之后，我们休眠10s钟，假定此时自己正在干些调试操作一样；
+5. 10s钟之后，tracer尝试detach tracee，解除ptrace link，让tracee继续恢复执行。
 
 我们在Linux平台上实现时，需要考虑Linux平台本身的问题，具体包括：
 
@@ -289,13 +362,47 @@ process 1311 detach succ
 
 ### 问题探讨
 
-为了让读者能快速掌握核心调试原理，示例里我们有意简化了示例，如被调试进程是一个单线程程序，如果是一个多线程程序结果会不会不一样呢？会，而且我们要做一些特殊的处理。我们在这里进一步讨论下。
+为了让读者能快速掌握核心调试原理，示例里我们有意简化了示例，如被调试进程是一个单线程程序，如果是一个多线程程序结果会不会不一样呢？会!
+
+#### 问题：如何绑定goroutine与thread？
+
+发送ptrace attach请求的线程，与被调试线程二者之间建立了ptrace link，它们的角色分别为tracer、tracee，后续tracee期望收到的所有ptrace请求都来自这个tracer。因为这个原因，天然就是多线程的go程序就需要保证，后续发送ptrace请求的goroutine必须始终如一执行在同一个线程上。
+
+`runtime.LockOSThread()` 就是为了向go运行时传达这种限制，给我把当前goroutine固定在当前thread上调度:
+
+```go
+// LockOSThread wires the calling goroutine to its current operating system thread.
+// The calling goroutine will always execute in that thread,
+// and no other goroutine will execute in it,
+// until the calling goroutine has made as many calls to
+// [UnlockOSThread] as to LockOSThread.
+// If the calling goroutine exits without unlocking the thread,
+// the thread will be terminated.
+//
+// All init functions are run on the startup thread. Calling LockOSThread
+// from an init function will cause the main function to be invoked on
+// that thread.
+//
+// A goroutine should call LockOSThread before calling OS services or
+// non-Go library functions that depend on per-thread state.
+//
+//go:nosplit
+func LockOSThread() {
+    ...
+}
+```
+
+当goroutine中调用该函数后：
+
+1. 调用该函数的goroutine只能被go运行时调度执行在当前线程四大行；
+2. 且不允许进其他goroutine被调度在当前线程上；
+3. 当调用该函数的goroutine退出时，存在调度绑定关系的线程也会被销毁。
+
+调试器中必须调用该函数，才能符合linux内核对ptrace请求的合法性校验，否则会遇到错误 `-ESRCH (No Such Process)`。
 
 #### 问题：多线程程序attach后仍在运行？
 
-有读者可能会自己开发一个go程序作为被调试程序，期间可能会遇到多线程给调试带来的一些困惑，这里也提一下。
-
-假如我使用下面的go程序做为被调试程序：
+假如我使用下面的go程序做为被调试程序，结果发现执行了 `godbg attach <pid>`之后程序还在执行，这是为什么呢？
 
 ```go
 import (
@@ -311,43 +418,53 @@ func main() {
 }
 ```
 
-结果发现执行了 `godbg attach <pid>`之后程序还在执行，这是为什么呢？
-
 因为go程序天然是多线程程序，sysmon、gc等等都可能会用到独立线程，我们attach时只是简单的attach了pid对应进程的某一个线程，其他的线程仍然是没有被调试跟踪的，是可以正常执行的。
 
 那我们ptrace时指定了pid到底attach了哪一个线程呢？**这个pid对应的线程难道不是执行main.main的线程吗？先回答读者问题：没错，还真不一定是！**
 
-**go程序中函数main.main是由main goroutine来执行的，但是main goroutine并没有和main thread存在任何默认的绑定关系**。所以认为main.main一定运行在pid对应的线程之上是错误的！
+附录《go runtime: go程序启动流程》中对go程序的启动流程做了分析，可以帮读者朋友打消这里runtime.main、main.main 在 main goroutine、main thread 中执行细节的一些疑虑。**go程序中函数main.main是由main goroutine来执行的，但是main goroutine并没有和main thread存在任何默认的绑定关系 (main)**。所以认为main.main一定运行在参数pid对应的主线程上是错误的 （没有上述提及的runtime.LockOSThread()的绑定操作）！
 
-> ps：附录《go runtime: go程序启动流程》中对go程序的启动流程做了分析，可以帮读者朋友打消这里main.main、main goroutine、main thread的一些疑虑。
+在Linux下，线程其实是通过轻量级进程（LWP）来实现的，这里的ptrace参数pid实际上是线程对应的LWP的进程id。只对进程pid进行ptrace attach操作，作用是，这个pid对应的线程会被调试跟踪，对于天然就是多线程的go进程而言，其他线程并没有被处理，它们可能正在执行，或者被其他的tracers跟踪，都是有可能的。
 
-在Linux下，线程其实是通过轻量级进程（LWP）来实现的，这里的ptrace参数pid实际上是线程对应的LWP的进程id。只对进程pid进行ptrace attach操作，结果是将只有这个进程pid对应的线程会被调试跟踪。
 
-**在调试场景中，tracee指的是一个线程，而非一个进程包含的所有线程**，尽管我们有时候为了描述方便，在术语上会选择倾向于使用进程。
-
-> 一个多线程的进程，其实是可以理解成一个包含了多个线程的线程组，线程组中的线程在创建的时候都通过系统调用clone+参数CLONE_THREAD来创建，来保证所有新创建的线程拥有相同的pid，类似clone+CLONE_PARENT使得克隆出的所有子进程都有相同的父进程id一样。
->
-> golang里面通过clone系统调用以及如下选项来创建线程：
->
-> ```go
->
-> cloneFlags = _CLONE_VM | /* share memory */
-> 	_CLONE_FS | /* share cwd, etc */
-> 	_CLONE_FILES | /* share fd table */
-> 	_CLONE_SIGHAND | /* share sig handler table */
-> 	_CLONE_SYSVSEM | /* share SysV semaphore undo lists (see issue #20763) */
-> 	_CLONE_THREAD /* revisit - okay for now */
-> ```
->
-> 关于clone选项的更多作用，您可以通过查看man手册 `man 2 clone`来了解。
-
-pid标识的线程（或LWP）与发送ptrace请求的线程（或LWP）二者之间建立ptrace link，它们的角色分别为tracee、tracer，后续tracee期望收到的所有ptrace请求都来自这个tracer。因为这个原因，天然就是多线程的go程序就需要保证实际发送ptrace请求的goroutine必须执行在同一个线程上。
 
 被调试进程中如果有其他线程，仍然是可以运行的，这就是为什么我们某些读者发现有时候被调试程序仍然在不停输出，因为tracer并没有在main.main内部设置断点，执行该函数的main goroutine可能由其他未被trace的线程执行，所以仍然可以看到程序不停输出。
 
+#### 问题：go进程中线程是如何创建出来的？
+
+一个多线程程序，程序可以通过执行 “**系统调用clone+选项CLONE_THREAD**” 来创建新线程，新线程的pid `os.Getpid()` 和 从属的进程拥有相同的pid。
+
+对于go语言，go运行时在初始化时、后续执行期间需要创建新线程时，会通过 `runtime.newosproc` -> `clone+cloneFlags` 来创建线程：
+
+```go
+cloneFlags = _CLONE_VM | /* share memory */
+  _CLONE_FS | /* share cwd, etc */
+  _CLONE_FILES | /* share fd table */
+  _CLONE_SIGHAND | /* share sig handler table */
+  _CLONE_SYSVSEM | /* share SysV semaphore undo lists (see issue #20763) */
+  _CLONE_THREAD /* revisit - okay for now */
+
+func newosproc(mp *m) {
+    stk := unsafe.Pointer(mp.g0.stack.hi)
+    ...
+    ret := retryOnEAGAIN(func() int32 {
+        r := clone(cloneFlags, stk, unsafe.Pointer(mp), unsafe.Pointer(mp.g0), unsafe.Pointer(abi.FuncPCABI0(mstart)))
+        // clone returns positive TID, negative errno.
+        // We don't care about the TID.
+        if r >= 0 {
+            return 0
+        }
+        return -r
+    })
+    ...
+}
+```
+
+>ps: 关于clone选项的更多作用，您可以通过查看man手册 `man 2 clone`来了解。
+
 #### 问题：想让执行main.main的线程停下来？
 
-如果想让被调试进程停止执行，调试器需要枚举进程中包含的线程并对它们逐一进行ptrace attach操作。具体到Linux，可以列出 `/proc/<pid>/task`下的所有线程（或LWP）的pid，逐个执行ptrace attach。
+如果想让被调试进程停止执行，调试器需要枚举进程中包含的线程并对它们逐一进行ptrace attach操作。具体到Linux，可以列出 `/proc/<pid>/task`下的所有线程的pid (LWP的pid，而非进程内线程编号tid)，然后逐个执行ptrace attach。
 
 我们将在后续过程中进一步完善attach命令，使其也能胜任多线程环境下的调试工作。
 
@@ -466,3 +583,7 @@ man 2 waitpid
 >
 > - WIFSTOPPED: returns true if the child process was stopped by delivery of a signal; this is possible only if the call was done using WUNTRACED or when the child is being traced (see ptrace(2)).
 > - ... blabla
+
+### 本节小结
+
+attach操作是调试器执行调试操作的第一步，这里我们除了介绍如何attach进程，还详细解释了ptrace link的概念以及限制，并从内核层面解释了这种限制，以及我们使用go语言这种原生多线程程序情况下如何解决这个问题。我们还结合go语言启动流程，解释了一些go开发者不太了解的GMP调度问题（比如main.main不一定运行在main thread），并进一步说明了为什么attach go进程后main.main中的循环仍然在执行。此外，我们还介绍了如何判断进程是否是多线程程序，以及如何枚举进程中的线程LWP pid等操作。通过这些内容，我们解释了一些非常有价值的基础问题，为后续深入理解调试器的实现和原理打下了坚实的基础。
