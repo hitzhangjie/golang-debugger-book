@@ -140,7 +140,7 @@ Prefix with number to repeat command N times (f.ex: 3x)
 
 如果读者进一步了解下rafare2的详细功能，它功能之强大一定会让你感到惊叹。
 
-ps: 如果读者想了解radare2的使用，可以先看下我之前写过的一偏实践文章：[monkey patching in golang](hitzhangjie.pro/blog/2020-08-23-monkey_patching_in_go/)，描述了指令patch技术在golang mock测试中 的应用，以及如何借助radare2来演示指令patching的过程。
+ps: 如果读者想了解radare2的使用，可以先看下我之前写过的一偏实践文章：[monkey patching in golang](https://www.hitzhangjie.pro/blog/2020-08-23-monkey_patching_in_go/)，描述了指令patch技术在golang mock测试中 的应用，以及如何借助radare2来演示指令patching的过程。
 
 #### 有限的指令级调试支持
 
