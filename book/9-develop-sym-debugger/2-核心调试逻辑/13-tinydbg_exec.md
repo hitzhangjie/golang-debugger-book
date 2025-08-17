@@ -157,7 +157,7 @@ func forkAndExecInChild1(...) {
 
 略
 
-### 本文总结
+### 本节小结
 
 本文介绍了tinydbg exec命令的实现细节。exec命令用于启动一个新进程并对其进行调试，主要通过设置进程的SysProcAttr.Ptrace=true来实现。当新进程启动时，go运行时会自动调用PTRACE_TRACEME使子进程进入被跟踪状态。调试器等待子进程启动完成后，会将其所有线程纳入管控。这样就完成了exec操作的目标层逻辑，为后续的调试会话做好了准备。
 

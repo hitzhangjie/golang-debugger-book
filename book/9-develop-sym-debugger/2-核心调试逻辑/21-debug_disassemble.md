@@ -661,7 +661,7 @@ func disasmPrint(dv api.AsmInstructions, out io.Writer, showHeader bool) {
 
 略。
 
-### 本文总结
+### 本节小结
 
 我们详细介绍了tinydbg中的反汇编操作的实现，前后端分离式架构下调试器前后端之间的服务层通信，不同位置描述locspec的解析，调试器根据locspec对应的LocationSpec实现将locspec转换为指令地址，然后读取内存指令数据、反汇编，将反汇编后的指令数据返回给客户端、客户端打印显示出来。这个完整的过程我们已经全部介绍到了，相信大家对这块的理解也更深入了。
 

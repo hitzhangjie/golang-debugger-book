@@ -227,6 +227,6 @@ tinydbg> trace main.*
 
 trace命令使用`ListFunctions`并将`FollowCalls`设置为大于0,以查找可能被匹配函数调用的所有函数,从而实现全面的函数调用跟踪。 
 
-### 本文总结
+### 本节小结
 
 本文介绍了ListFunctions的设计实现，它通过正则表达式来对函数名进行过滤，并通过广度优先搜索+反汇编代码并分析CALL指令来查找函数的调用关系。相比使用AST分析，这种方式可以更好地应对内联优化带来的影响，这种方式相比分析源码也更加便利、高效。在tinydbg中ListFunctions主要服务于funcs和trace两个调试命令：1）funcs用于列出匹配模式的函数，2）trace用于在这些函数上设置跟踪点，并获取其参数。本文只讲述了如何ListFunctions，在 `tinydbg trace` 小节我们将进一步介绍如何获取跟踪到的函数的入参列表、返回值列表。

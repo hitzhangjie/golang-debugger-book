@@ -289,6 +289,6 @@ TEXT main.loop(SB) /home/zhangjie/debugger101/golang-debugger-lessons/testdata/l
 
 至此，通过这个实例演示了如何设置寄存器值，我们将在 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 中实现godbg> `set reg value` 命令来修改寄存器值。
 
-### 本文小结
+### 本节小结
 
 本节我们也介绍了如何修改寄存器的值，也通过具体实例演示了通过修改寄存器来篡改函数返回值的案例，当然你如果对栈帧构成了解的够细致，结合读写寄存器、内存操作，也可以修改函数调用参数、返回地址。

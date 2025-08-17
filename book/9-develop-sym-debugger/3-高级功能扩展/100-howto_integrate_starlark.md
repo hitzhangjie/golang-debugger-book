@@ -467,7 +467,7 @@ Debug session completed.
 
 tinydbg暂时保留了go-delve/delve中的starlark实现，pkg/terminal/starlark.go + pkg/terminal/starlark_test.go 一共300行代码，starbind/ 下有近3000行代码，不过这部分代码是通过脚本自动生成的。由于这部分代码相对来说比较独立，不像ebpf-based tracing那样影响到很多地方，所以我们暂时保留这部分代码。上述测试用的源码、star脚本，您可以在路径 tinydbg/examples/starlark_demo 找到。
 
-### 本文总结
+### 本节小结
 
 我在学习bazelbuild时了解到starlark这门语言，在学习go-delve/delve时进一步了解了它。如果我们正在编写一个工具或者分析型工具，希望通过暴漏我们的底层能力，以让用户自由发挥他们的创造性用途，比如类似go-delve/delve希望用户可以按需执行自动化调试，我们其实可以将starlark解释器引擎集成到我们的程序中，然后通过一点胶水代码打通starlark与我们的程序，使得starlark解释器调用starlark函数来执行我们程序中定义的函数。这无疑会释放我们程序的底层能力，允许使用者在底层能力开放程度受控的情况下进一步去发挥、去挖掘。
 

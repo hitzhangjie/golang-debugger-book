@@ -113,6 +113,6 @@ func (d *Debugger) Functions(filter string, followCalls int) ([]string, error) {
 
 上述代码是展示了如何为智能体增加多方智能，并不是不可能的。
 
-### 本文总结
+### 本节小结
 
 本节介绍了调试器命令 `godbg> funcs <expr>` 的实现。该命令通过JSON-RPC调用远程的ListFunctions过程，支持正则表达式过滤函数名，并可设置函数调用跟踪深度。实现展示了调试器前后端的关键代码处理逻辑。

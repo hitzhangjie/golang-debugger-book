@@ -96,6 +96,6 @@ eBPF跟踪的基本实现步骤如下:
 1. [观测Go函数调用：go-ftrace](https://www.hitzhangjie.pro/blog/2023-09-25-%E8%A7%82%E6%B5%8Bgo%E5%87%BD%E6%95%B0%E8%B0%83%E7%94%A8go-ftrace/)
 2. [观测Go函数调用：go-ftrace 设计实现](https://www.hitzhangjie.pro/blog/2023-12-12-%E8%A7%82%E6%B5%8Bgo%E5%87%BD%E6%95%B0%E8%B0%83%E7%94%A8go-ftrace%E8%AE%BE%E8%AE%A1%E5%AE%9E%E7%8E%B0/)
 
-### 本文总结
+### 本节小结
 
 本文介绍了如何使用eBPF技术来实现程序跟踪，详细讲解了eBPF跟踪的基本流程，包括编写eBPF程序、加载到内核、数据收集处理以及结果展示等关键步骤。特别指出了在跟踪Go程序时面临的特殊挑战 - 由于Go的GMP调度模型，传统的基于线程的跟踪方案并不适用。文章分析了这一问题的本质，并介绍了正确的解决方案：通过获取goroutine ID来实现准确的函数调用跟踪。同时也介绍了几个成功实现Go程序eBPF跟踪的开源工具，为读者提供了进一步学习和实践的参考。

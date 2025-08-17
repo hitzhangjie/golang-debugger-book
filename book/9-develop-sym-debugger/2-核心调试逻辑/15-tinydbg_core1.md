@@ -368,7 +368,7 @@ ELF核心转储文件通常不会包含节头表。Linux内核在生成核心转
 
 自定义的调试工具也可以生成一些定制化的信息，比如可以读取环境变量信息，读取 `/proc/<pid>/cmdline` 读取进程相关的启动参数，执行 `go version -m /proc/<pid>/exe`，记录下其中的go buildid、vcs.branch、vcs.version，以及go编译器版本。将这些信息记录下来，这在拿到core文件进行离线分析时，这些信息也有助于确定找到匹配的构建产物、构建环境、代码版本，也有助于排查问题。
 
-### 本文小结
+### 本节小结
 
 本文介绍了Linux系统中core dump文件的大致信息构成，并对core dump生成实践也进行了介绍，比如Linux内核、gdb、lldb调试器的做法，在了解了这些之后，我们可以开始介绍我们的tinydbg的调试会话命令 `tinydbg> dump [output]` 以及对core文件调试命令 `tinydbg core [executable] [core]` 了，继续吧。
 

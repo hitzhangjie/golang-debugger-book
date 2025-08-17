@@ -416,7 +416,7 @@ func (loc *RegexLocationSpec) Find(t *proc.Target, _ []string, scope *proc.EvalS
 
 略
 
-### 本文小结
+### 本节小结
 
 本文详细介绍了符号级调试器中locspec（位置描述符）的解析与地址转换机制。locspec允许开发者使用直观的字符串表示位置信息，如"文件名:行号"、"函数名"、"正则表达式"等，而不需要直接操作内存地址。文章首先定义了locspec的文法规范，支持多种位置描述方式，然后通过具体的Go代码实现展示了如何将位置描述字符串解析为不同的LocationSpec类型（如NormalLocationSpec、LineLocationSpec、OffsetLocationSpec等），并详细说明了每种类型如何通过Find方法将位置描述转换为实际的内存地址。整个实现涉及DWARF调试信息的解析、行号表查找、函数符号匹配等核心调试技术，为调试器提供了用户友好的位置描述方式和位置定位功能。
 

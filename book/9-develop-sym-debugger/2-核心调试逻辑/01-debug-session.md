@@ -700,7 +700,7 @@ func (c *RPCClient) ListPackageVariables(filter string, cfg api.LoadConfig) ([]a
 
 OK! 就介绍到这里。
 
-### 本文总结
+### 本节小结
 
 这个小节我们对tinydbg调试器会话进行了非常详细的介绍，我们介绍了裁剪go-delve/delve过程中移除的一些特性，以让tinydbg尽可能保持代码精简，方便读者朋友们学习。我们介绍了tinydbg启动前后端以及调试会话工作期间，整个的一个交互时序，前后端的一些关键操作以及Linux内核介入的一些关键处理。然后，我们介绍了调试器会话中键入一个调试器命令开始，调试器前端如何解析并转入JSON—RPC发起对调试器后端RPC方法的调用、调试器后端的收包、处理、返回结果，我们甚至还介绍了标准库JSON-RPC的工作过程。
 
