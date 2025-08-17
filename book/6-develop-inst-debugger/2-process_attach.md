@@ -464,9 +464,26 @@ func newosproc(mp *m) {
 
 #### 问题：想让执行main.main的线程停下来？
 
-如果想让被调试进程停止执行，调试器需要枚举进程中包含的线程并对它们逐一进行ptrace attach操作。具体到Linux，可以列出 `/proc/<pid>/task`下的所有线程的pid (LWP的pid，而非进程内线程编号tid)，然后逐个执行ptrace attach。
+如果想让被调试进程停止执行，调试器需要枚举进程中包含的线程并对它们逐一进行ptrace attach操作。具体到Linux，可以列出 `/proc/<pid>/task`下的所有线程的pid (LWP的pid，而非进程内线程编号tid)。
 
-我们将在后续过程中进一步完善attach命令，使其也能胜任多线程环境下的调试工作。
+```go
+func (p *DebuggedProcess) loadThreadList() ([]int, error) {
+    threadIDs := []int{}
+
+    tids, _ := filepath.Glob(fmt.Sprintf("/proc/%d/task/*", p.Process.Pid))
+    for _, tidpath := range tids {
+        tidstr := filepath.Base(tidpath)
+        tid, err := strconv.Atoi(tidstr)
+        if err != nil {
+            return nil, err
+        }
+        threadIDs = append(threadIDs, tid)
+    }
+    return threadIDs, nil
+}
+```
+
+当拿到进程内所有线程时，对每个线程逐个执行ptrace attach就可以了。
 
 #### 问题：如何判断进程是否是多线程程序？
 

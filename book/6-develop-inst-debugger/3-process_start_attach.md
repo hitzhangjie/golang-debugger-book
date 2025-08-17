@@ -67,19 +67,19 @@ int main()
 ```c
 // ptrace系统调用实现
 SYSCALL_DEFINE4(ptrace, long, request, long, pid, unsigned long, addr,
-		unsigned long, data)
+        unsigned long, data)
 {
-	...
+    ...
 
-	if (request == PTRACE_TRACEME) {
-		ret = ptrace_traceme();
-		...
-		goto out;
-	}
-	...
+    if (request == PTRACE_TRACEME) {
+        ret = ptrace_traceme();
+        ...
+        goto out;
+    }
+    ...
   
  out:
-	return ret;
+    return ret;
 }
 
 /**
@@ -88,17 +88,17 @@ SYSCALL_DEFINE4(ptrace, long, request, long, pid, unsigned long, addr,
  */
 static int ptrace_traceme(void)
 {
-	...
-	/* Are we already being traced? */
-	if (!current->ptrace) {
-		...
-		if (!ret && !(current->real_parent->flags & PF_EXITING)) {
-			current->ptrace = PT_PTRACED;
-			...
-		}
-	}
-	...
-	return ret;
+    ...
+    /* Are we already being traced? */
+    if (!current->ptrace) {
+        ...
+        if (!ret && !(current->real_parent->flags & PF_EXITING)) {
+            current->ptrace = PT_PTRACED;
+            ...
+        }
+    }
+    ...
+    return ret;
 }
 ```
 
@@ -132,24 +132,24 @@ c语言库函数中，常见的exec族函数包括execl、execlp、execle、exec
 ```c
 static int exec_binprm(struct linux_binprm *bprm)
 {
-	pid_t old_pid, old_vpid;
-	int ret;
+    pid_t old_pid, old_vpid;
+    int ret;
 
-	/* Need to fetch pid before load_binary changes it */
-	old_pid = current->pid;
-	rcu_read_lock();
-	old_vpid = task_pid_nr_ns(current, task_active_pid_ns(current->parent));
-	rcu_read_unlock();
+    /* Need to fetch pid before load_binary changes it */
+    old_pid = current->pid;
+    rcu_read_lock();
+    old_vpid = task_pid_nr_ns(current, task_active_pid_ns(current->parent));
+    rcu_read_unlock();
 
-	ret = search_binary_handler(bprm);
-	if (ret >= 0) {
-		audit_bprm(bprm);
-		trace_sched_process_exec(current, old_pid, bprm);
-		ptrace_event(PTRACE_EVENT_EXEC, old_vpid);
-		proc_exec_connector(current);
-	}
+    ret = search_binary_handler(bprm);
+    if (ret >= 0) {
+        audit_bprm(bprm);
+        trace_sched_process_exec(current, old_pid, bprm);
+        ptrace_event(PTRACE_EVENT_EXEC, old_vpid);
+        proc_exec_connector(current);
+    }
 
-	return ret;
+    return ret;
 }
 ```
 
@@ -160,8 +160,8 @@ static int exec_binprm(struct linux_binprm *bprm)
 ```c
 /**
  * ptrace_event - possibly stop for a ptrace event notification
- * @event:	%PTRACE_EVENT_* value to report
- * @message:	value for %PTRACE_GETEVENTMSG to return
+ * @event:  %PTRACE_EVENT_* value to report
+ * @message:    value for %PTRACE_GETEVENTMSG to return
  *
  * Check whether @event is enabled and, if so, report @event and @message
  * to the ptrace parent.
@@ -170,14 +170,14 @@ static int exec_binprm(struct linux_binprm *bprm)
  */
 static inline void ptrace_event(int event, unsigned long message)
 {
-	if (unlikely(ptrace_event_enabled(current, event))) {
-		current->ptrace_message = message;
-		ptrace_notify((event << 8) | SIGTRAP);
-	} else if (event == PTRACE_EVENT_EXEC) {
-		/* legacy EXEC report via SIGTRAP */
-		if ((current->ptrace & (PT_PTRACED|PT_SEIZED)) == PT_PTRACED)
-			send_sig(SIGTRAP, current, 0);
-	}
+    if (unlikely(ptrace_event_enabled(current, event))) {
+        current->ptrace_message = message;
+        ptrace_notify((event << 8) | SIGTRAP);
+    } else if (event == PTRACE_EVENT_EXEC) {
+        /* legacy EXEC report via SIGTRAP */
+        if ((current->ptrace & (PT_PTRACED|PT_SEIZED)) == PT_PTRACED)
+            send_sig(SIGTRAP, current, 0);
+    }
 }
 ```
 
@@ -185,36 +185,36 @@ static inline void ptrace_event(int event, unsigned long message)
 
 ```bash
 |-> ptrace_notify
-	|-> ptrace_do_notify
-		|-> ptrace_stop
-			|-> do_notify_parent_cldstop
+    |-> ptrace_do_notify
+        |-> ptrace_stop
+            |-> do_notify_parent_cldstop
 ```
 
 让我们最后看一眼这里的通知tracer或其真正的父进程的函数 ptrace_stop -> do_notify_parent_cldstop() 是如何实现的：
 
 ```c
 static int ptrace_stop(int exit_code, int why, unsigned long message,
-		       kernel_siginfo_t *info)
-	__releases(&current->sighand->siglock)
-	__acquires(&current->sighand->siglock)
+               kernel_siginfo_t *info)
+    __releases(&current->sighand->siglock)
+    __acquires(&current->sighand->siglock)
 {
-	...
+    ...
 
-	/*
-	 * Notify parents of the stop.
-	 *
-	 * While ptraced, there are two parents - the ptracer and
-	 * the real_parent of the group_leader.  The ptracer should
-	 * know about every stop while the real parent is only
-	 * interested in the completion of group stop.  The states
-	 * for the two don't interact with each other.  Notify
-	 * separately unless they're gonna be duplicates.
-	 */
-	if (current->ptrace)
-		do_notify_parent_cldstop(current, true, why);
-	if (gstop_done && (!current->ptrace || ptrace_reparented(current)))
-		do_notify_parent_cldstop(current, false, why);
-	...
+    /*
+     * Notify parents of the stop.
+     *
+     * While ptraced, there are two parents - the ptracer and
+     * the real_parent of the group_leader.  The ptracer should
+     * know about every stop while the real parent is only
+     * interested in the completion of group stop.  The states
+     * for the two don't interact with each other.  Notify
+     * separately unless they're gonna be duplicates.
+     */
+    if (current->ptrace)
+        do_notify_parent_cldstop(current, true, why);
+    if (gstop_done && (!current->ptrace || ptrace_reparented(current)))
+        do_notify_parent_cldstop(current, false, why);
+    ...
 }
 
 /**
@@ -231,111 +231,113 @@ static int ptrace_stop(int exit_code, int why, unsigned long message,
  * Must be called with tasklist_lock at least read locked.
  */
 static void do_notify_parent_cldstop(struct task_struct *tsk,
-				     bool for_ptracer, int why)
+                     bool for_ptracer, int why)
 {
-	...
-	if (for_ptracer) {
-		parent = tsk->parent;
-	} else {
-		tsk = tsk->group_leader;
-		parent = tsk->real_parent;
-	}
+    ...
+    if (for_ptracer) {
+        parent = tsk->parent;
+    } else {
+        tsk = tsk->group_leader;
+        parent = tsk->real_parent;
+    }
 
-	clear_siginfo(&info);
-	info.si_signo = SIGCHLD;
-	info.si_errno = 0;
-	info.si_pid = task_pid_nr_ns(tsk, task_active_pid_ns(parent));
-	info.si_uid = from_kuid_munged(task_cred_xxx(parent, user_ns), task_uid(tsk));
-	info.si_utime = nsec_to_clock_t(utime);
-	info.si_stime = nsec_to_clock_t(stime);
+    clear_siginfo(&info);
+    info.si_signo = SIGCHLD;
+    info.si_errno = 0;
+    info.si_pid = task_pid_nr_ns(tsk, task_active_pid_ns(parent));
+    info.si_uid = from_kuid_munged(task_cred_xxx(parent, user_ns), task_uid(tsk));
+    info.si_utime = nsec_to_clock_t(utime);
+    info.si_stime = nsec_to_clock_t(stime);
 
- 	info.si_code = why;
- 	switch (why) {
- 	case CLD_CONTINUED:
- 		info.si_status = SIGCONT;
- 		break;
- 	case CLD_STOPPED:
- 		info.si_status = tsk->signal->group_exit_code & 0x7f;
- 		break;
- 	case CLD_TRAPPED:
- 		info.si_status = tsk->exit_code & 0x7f;
- 		break;
- 	default:
- 		BUG();
- 	}
+    info.si_code = why;
+    switch (why) {
+    case CLD_CONTINUED:
+        info.si_status = SIGCONT;
+        break;
+    case CLD_STOPPED:
+        info.si_status = tsk->signal->group_exit_code & 0x7f;
+        break;
+    case CLD_TRAPPED:
+        info.si_status = tsk->exit_code & 0x7f;
+        break;
+    default:
+        BUG();
+    }
 
-	sighand = parent->sighand;
-	if (sighand->action[SIGCHLD-1].sa.sa_handler != SIG_IGN &&
-	    !(sighand->action[SIGCHLD-1].sa.sa_flags & SA_NOCLDSTOP))
-		send_signal_locked(SIGCHLD, &info, parent, PIDTYPE_TGID);
-	/*
-	 * Even if SIGCHLD is not generated, we must wake up wait4 calls.
-	 */
-	__wake_up_parent(tsk, parent);
-	...
+    sighand = parent->sighand;
+    if (sighand->action[SIGCHLD-1].sa.sa_handler != SIG_IGN &&
+        !(sighand->action[SIGCHLD-1].sa.sa_flags & SA_NOCLDSTOP))
+        send_signal_locked(SIGCHLD, &info, parent, PIDTYPE_TGID);
+    /*
+     * Even if SIGCHLD is not generated, we must wake up wait4 calls.
+     */
+    __wake_up_parent(tsk, parent);
+    ...
 }
 ```
 
-这里的tracee通知tracer（或者父进程）我已经停下来了，是通过发送信号 SIGCHLD 的方式来通知的。
+这里的tracee通知tracer（或者父进程）我已经停下来了，会发送信号 SIGCHLD 的方式来通知tracer，但是这里的SIGCHLD不一定会生成，比如tracer实现中故意屏蔽SIGCHLD信号。所以，内核还有更保险的一个做法，`__wake_up_parent(task, parent`，在ptrace link关系中，这里的tsk就是tracee，parent就是tracer。
 
-那么tracer（或者父进程）wait4 的实现，是怎么实现的呢? 我们这里也进行了一个精简版的总结。
-简单来说，就是tracer或者父进程将自己加入一个等待子进程状态改变的等待队列中，然后将自己设置为可中断等待状态“INTERRUPTIBLE”，意思就是可以被信号唤醒，如SIGCHILD信号。
-然后tracer就调用一次进程调度，让出CPU去等待了，直到tracee因为PTRACE_TRACEME停下来，给tracer发信号通知SIGCHLD，此时tracer被唤醒，然后执行信号处理函数。
-tracer此时会将自己从可中断等待状态“INTERRUPTIBLE”切换为“RUNNING”状态，从等待tracee状态改变的等待队列中移除，然后等待被scheduler调度。
+那么tracer（或者父进程）wait4 的实现，是怎么实现的呢? 我们这里也进行了一个精简版的总结：
 
-再然后，tracer的syscall.Wait4操作执行结束，就可以继续执行后续的其他ptrace操作了。
+1. 简单来说，就是tracer或者父进程将自己加入一个等待子进程状态改变的等待队列中，然后将自己设置为可中断等待状态“INTERRUPTIBLE”，意思就是可以被信号唤醒，如SIGCHILD信号。
+2. 然后tracer就调用一次进程调度，让出CPU去等待了，直到tracee因为PTRACE_TRACEME停下来，给tracer发信号通知SIGCHLD or __wake_up_parent，此时tracer被唤醒。
+3. tracer此时会将自己从可中断等待状态“INTERRUPTIBLE”切换为“RUNNING”状态，从等待tracee状态改变的等待队列中移除，然后等待被scheduler调度。
+4. 当tracer被scheduler调度到之后，它就可以继续执行后续处理了。
+
+最终，tracer从syscall.Wait4系统调用阻塞状态中唤醒，从wait4返回，就可以继续执行后续的其他ptrace操作了。
 
 ```bash
 |-> wait4
-	  |-> kernel_wait4
-	  		|-> do_wait
+      |-> kernel_wait4
+            |-> do_wait
 ```
 
 下面来详细看看：
 
 ```c
 SYSCALL_DEFINE4(wait4, pid_t, upid, int __user *, stat_addr,
-		int, options, struct rusage __user *, ru)
+        int, options, struct rusage __user *, ru)
 {
-	struct rusage r;
-	long err = kernel_wait4(upid, stat_addr, options, ru ? &r : NULL);
+    struct rusage r;
+    long err = kernel_wait4(upid, stat_addr, options, ru ? &r : NULL);
 
-	if (err > 0) {
-		if (ru && copy_to_user(ru, &r, sizeof(struct rusage)))
-			return -EFAULT;
-	}
-	return err;
+    if (err > 0) {
+        if (ru && copy_to_user(ru, &r, sizeof(struct rusage)))
+            return -EFAULT;
+    }
+    return err;
 }
 
 long kernel_wait4(pid_t upid, int __user *stat_addr, int options,
-		  struct rusage *ru)
+          struct rusage *ru)
 {
-	...
-	ret = do_wait(&wo);
-	...
+    ...
+    ret = do_wait(&wo);
+    ...
 }
 
 static long do_wait(struct wait_opts *wo)
 {
-	...
-	init_waitqueue_func_entry(&wo->child_wait, child_wait_callback);
-	wo->child_wait.private = current;
-	add_wait_queue(&current->signal->wait_chldexit, &wo->child_wait);
+    ...
+    init_waitqueue_func_entry(&wo->child_wait, child_wait_callback);
+    wo->child_wait.private = current;
+    add_wait_queue(&current->signal->wait_chldexit, &wo->child_wait);
 
-	do {
-		set_current_state(TASK_INTERRUPTIBLE);
-		...
-		schedule();
-	} while (1);
+    do {
+        set_current_state(TASK_INTERRUPTIBLE);
+        ...
+        schedule();
+    } while (1);
 
-	__set_current_state(TASK_RUNNING);
-	remove_wait_queue(&current->signal->wait_chldexit, &wo->child_wait);
-	return retval;
+    __set_current_state(TASK_RUNNING);
+    remove_wait_queue(&current->signal->wait_chldexit, &wo->child_wait);
+    return retval;
 }
 
 ```
 
-父进程也可通过 `ptrace(PTRACE_COND, pid, ...)`操作来恢复子进程执行，使其继续执行execve加载的新程序。
+父进程也可通过 `ptrace(PTRACE_COND, pid, ...)` 操作来恢复子进程执行，使其继续执行execve加载的新程序。
 
 #### Put it Together
 
@@ -353,11 +355,11 @@ static long do_wait(struct wait_opts *wo)
 
 ### 代码实现
 
-**src详见：golang-debugger-lessons/3_process_startattach**
+src详见：golang-debugger-lessons/3_process_startattach。
 
 类似c语言fork+exec的方式，go标准库提供了一个ForkExec函数实现，以此可以用go重写上述c语言示例。但是，go标准库提供了另一种更简洁的方式。
 
-我们首先通过 `cmd := exec.Command(prog, args...)`获取一个cmd对象，在 `cmd.Start()`启动进程前打开进程标记位 `cmd.SysProcAttr.Ptrace=true`，然后再 `cmd.Start()`启动进程，最后调用 `Wait`函数来等待子进程（因为SIGTRAP）停下来并获取子进程的状态。
+我们首先通过 `cmd := exec.Command(prog, args...)` 获取一个cmd对象，在 `cmd.Start()` 启动进程前打开进程标记位 `cmd.SysProcAttr.Ptrace=true`，然后再 `cmd.Start()`启动进程，最后调用 `Wait`函数来等待子进程（因为SIGTRAP）停下来并获取子进程的状态。
 
 在这之后，父进程便可以继续做些调试相关的工作了，如读写内存等。
 
@@ -367,74 +369,74 @@ static long do_wait(struct wait_opts *wo)
 package main
 
 import (
-	"fmt"
-	"os"
-	"os/exec"
-	"runtime"
-	"strconv"
-	"strings"
-	"syscall"
-	"time"
+    "fmt"
+    "os"
+    "os/exec"
+    "runtime"
+    "strconv"
+    "strings"
+    "syscall"
+    "time"
 )
 
 const (
-	usage = "Usage: go run main.go exec <path/to/prog>"
+    usage = "Usage: ./godbg exec <path/to/prog>"
 
-	cmdExec   = "exec"
-	cmdAttach = "attach"
+    cmdExec   = "exec"
+    cmdAttach = "attach"
 )
 
 func main() {
-	runtime.LockOSThread()
+    runtime.LockOSThread()
 
-	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "%s\n\n", usage)
-		os.Exit(1)
-	}
-	cmd := os.Args[1]
+    if len(os.Args) < 3 {
+        fmt.Fprintf(os.Stderr, "%s\n\n", usage)
+        os.Exit(1)
+    }
+    cmd := os.Args[1]
 
-	switch cmd {
-	case cmdExec:
-		args := os.Args[2:]
-		fmt.Printf("exec %s\n", strings.Join(args, ""))
+    switch cmd {
+    case cmdExec:
+        args := os.Args[2:]
+        fmt.Printf("exec %s\n", strings.Join(args, ""))
 
-		if len(args) != 1 {
-			fmt.Println("参数错误")
-			os.Exit(1)
-		}
+        if len(args) != 1 {
+            fmt.Println("参数错误")
+            os.Exit(1)
+        }
 
-		// start process but don't wait it finished
-		progCmd := exec.Command(args[0])
-		progCmd.Stdin = os.Stdin
-		progCmd.Stdout = os.Stdout
-		progCmd.Stderr = os.Stderr
-		progCmd.SysProcAttr = &syscall.SysProcAttr{
-			Ptrace: true,	// this implies PTRACE_TRACEME
-		}
+        // start process but don't wait it finished
+        progCmd := exec.Command(args[0])
+        progCmd.Stdin = os.Stdin
+        progCmd.Stdout = os.Stdout
+        progCmd.Stderr = os.Stderr
+        progCmd.SysProcAttr = &syscall.SysProcAttr{
+            Ptrace: true,   // this implies PTRACE_TRACEME
+        }
 
-		if err := progCmd.Start(); err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
+        if err := progCmd.Start(); err != nil {
+            fmt.Println(err)
+            os.Exit(1)
+        }
 
-		// wait target process stopped
-		var (
-			status syscall.WaitStatus
-			rusage syscall.Rusage
-		)
-		pid := progCmd.Process.Pid
-		if _, err := syscall.Wait4(pid, &status, syscall.WALL, &rusage); err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-		fmt.Printf("process %d stopped:%v\n", pid, status.Stopped())
-	case cmdAttach:
-		// ...
+        // wait target process stopped
+        var (
+            status syscall.WaitStatus
+            rusage syscall.Rusage
+        )
+        pid := progCmd.Process.Pid
+        if _, err := syscall.Wait4(pid, &status, syscall.WALL, &rusage); err != nil {
+            fmt.Println(err)
+            os.Exit(1)
+        }
+        fmt.Printf("process %d stopped:%v\n", pid, status.Stopped())
+    case cmdAttach:
+        // ...
 
-	default:
-		fmt.Fprintf(os.Stderr, "%s unknown cmd\n\n", cmd)
-		os.Exit(1)
-	}
+    default:
+        fmt.Fprintf(os.Stderr, "%s unknown cmd\n\n", cmd)
+        os.Exit(1)
+    }
 }
 ```
 
@@ -466,31 +468,41 @@ godbg将启动ls进程，并通过PTRACE_TRACEME让内核把ls进程停下（通
 >
 > 如我们输入了exit，则会调用debugRootCmd中注册的exitCmd进行处理。exitCmd只是执行os.Exit(0)让进程退出，在退出之前内核会自动做些清理操作，如正在被其跟踪的tracee会被内核执行ptrace(PTRACE_COND,...)解除跟踪，让tracee恢复执行。
 
-当我们退出调试会话时，会通过 `ptrace(PTRACE_COND,...)`操作来恢复被调试进程继续执行，也就是ls正常执行列出目录下文件的命令，我们也看到了它输出了当前目录下的文件信息 `cmd go.mod go.sum LICENSE main.go syms target`。
+当我们退出调试会话时，会通过 `ptrace(PTRACE_COND,...)` 操作来恢复被调试进程继续执行，也就是ls正常执行列出目录下文件的命令，我们也看到了它输出了当前目录下的文件信息 `cmd go.mod go.sum LICENSE main.go syms target`。
 
-`godbg exec <prog>`命令现在一切正常了！
+`godbg exec <prog>` 命令现在一切正常了！
 
-> NOTE: 示例中程序退出时，没有显示调用 `ptrace(PTRACE_COND,...)`来恢复tracee的执行。其实tracer退出时，如果traced tracee还在，内核会自动解除tracee的跟踪状态。
+> NOTE: 示例中程序退出时，没有显示调用 `ptrace(PTRACE_COND,...)` 来恢复tracee的执行。其实tracer退出时，如果traced tracee还在，内核会自动解除tracee的跟踪状态。
 >
-> 如果tracee是我们显示启动的（不是attach的），那么在调试器退出时应该kill掉该进程（或者允许选择kill进程或让其继续执行），而不应该默认让其继续执行。
+> 如果tracee是我们主动启动的（不是attach的），那么在调试器退出时应该kill掉该进程（或者允许选择kill进程或让其继续执行），而不应该默认让其继续执行。
 
-再次思考下，如果我们exec执行的是一个go程序，应该如何处理呢？因为go程序天然是多线程程序，从其主线程启动到陆续创建出其他的gc、sysmon、执行众多goroutines的线程是有一个过程的，那么这个过程中我们是很难人为去感知的，调试器如何对这个过程中创建的诸多线程自动发起ptrace attach呢？
+再次思考下，如果我们exec执行的是一个go程序，应该如何处理呢？
 
-没有什么好办法，调试器作为一个普通用户态程序，只能请求操作系统提供的服务代为处理，这就涉及到ptrace attach的具体选项 `PTRACE_O_TRACECLONE`了，添加了这个选项内核会在clone创建新线程时给新线程发送必要的信号，等新线程调度时自然会停下来。
+- 前1节有提到过，如果目标进程中已创建多个线程，我们可以枚举 `/proc/<pid>/task` 下的线程列表逐个attach；
+- 但是对于新建的线程呢，主线程启动到陆续创建出其他的gc、sysmon、执行众多goroutines的线程是有一个过程的，这个过程中我们如何感知有新线程创建并自动attach呢？
+
+没有什么好办法，调试器作为一个普通用户态程序，只能请求操作系统提供的服务代为处理，这就涉及到ptrace attach的具体选项 `PTRACE_O_TRACECLONE` 了，添加了这个选项内核会在clone创建新线程时给新线程发送必要的信号，等新线程调度时自然会停下来。
 
 > **PTRACE_O_TRACECLONE***:
 >
 > Stop the tracee at the next clone(2) and automatically start tracing the newly cloned process, which will start with a SIGSTOP, or PTRACE_EVENT_STOP if PTRACE_SEIZE was used.
 
+在上述代码基础上做下列修改就可以搞定新线程创建时自动跟踪了：
+
+> ```go
+> pid := progCmd.Process.Pid
+> if _, err := syscall.Wait4(pid, &status, syscall.WALL, &rusage); err != nil {
+>    fmt.Println(err)
+>    os.Exit(1)
+> }
+> syscall.PtraceSetOptions(pid, syscall.PTRACE_O_TRACECLONE)
+> ```
+
 ### 本节小结
 
-本节实现了一个完整的“启动、跟踪”的实现原理、代码解释、示例演示。本节用到了start+attach或exec+attach的表述，这样做只是为了让章节内容组织上突出层层递进的关系。
-
-严格来说，我们应该用trace代替attach的表述。因为attach会让读者误以为是tracer 主动 `ptrace(PTRACE_ATTACH,)`实现的，其实是 tracee 主动 `ptrace(PTRACE_TRACEME,)`实现的。但是attach更符合大家的习惯，所以我们还是使用attach这个术语。
+第1节介绍了调试器如何启动程序看，第2节介绍了如何attach运行中的进程，本节介绍的是如何在启动时立即发起跟踪，以及如何跟踪后续新建线程。
 
 另外对于多线程调试，如果希望新创建出来的线程自动被trace，需要tracer执行系统调用 `syscall.PtraceSetOptions(traceePID, syscall.PTRACE_O_TRACECLONE)` 来完成对tracee的设置，这样当tracee内部新建线程时，内核会自动处理让其停下来并通知tracer。另外为了更好地调试，一般是tracer launch tracee之后立即attach tracee，然后再立即对tracee设置PTRACE_O_TRACECLONE选项，这样就万无一失了，tracee以及其启动后创建的线程都会被纳入tracer跟踪之下。
-
-> ps: 我们根据实际情况，看看是否有必要专门针对syscall.PtraceSetOptions(tracePID, syscall.PTRACE_O_TRACECLONE)单独开一小节、配套demo …… 实际上我们的最终demo里是有这部分代码、注释说明的。
 
 ### 参考内容
 
