@@ -2,16 +2,16 @@
 
 ### 实现目标：`godbg exec <prog>`
 
-调试器执行调试，首先得确定要调试的目标。它可能是一个进程实例，或者是一个core文件。为了便利性，调试器也可以代为执行编译操作，如dlv debug的目标可以是一个go main module。
+调试器执行调试，首先得确定要调试的目标。它可能是一个进程实例，或者是一个core文件。为了便利性，调试器也可以代为执行编译操作，如dlv debug的目标可以是一个 `main module` or `test package`。
 
-我们先关注如何调试一个进程，core文件只是进程的一个内核转储文件，调试器只能查看当时的栈帧情况。对进程进行调试涉及到的方方面面基本覆盖了对core文件进行调试的内容，所以我们先将重点放在对进程进行调试上。
+>我们先关注如何调试一个进程，core文件只是进程的一个内核转储文件，调试器只能查看当时的栈帧情况。对进程进行调试涉及到的方方面面基本覆盖了对core文件进行调试的内容，所以本章我们先将重点放在对进程进行调试上，对core文件的调试支持我们在符号级调试章节再介绍。
 
 调试一个进程，主要有以下几种情况：
 
-- 如果进程还未存在，我们需要启动指定进程，如dlv exec、gdb等指定程序名启动调试时会启动进程；
-- 如果进程已经存在，我们需要通过进程pid来跟踪进程，如dlv attach、gdb等通过-p指定pid对运行进程调试；
+- 如果目标进程还不存在，我们需要启动程序并跟踪进程，如 `dlv exec <prog>`、`gdb <prog>`；
+- 如果目标进程已经存在，我们需要通过进程pid来跟踪进程，如 `dlv attach <pid>`、`gdb <pid>`；
 
-为了方便开发、调试，调试器可能也包含了编译构建的任务，如保证构建产物中包含调试信息、避免编译过度优化对调试的不利影响等。通常这些操作需要传递特殊的选项给编译器、连接器，对开发者而言并不是一件很友好的事情。考虑到这点，go调试器dlv在执行 `dlv debug`命令时，会自动传递 `-gcflags="all=-N -l"`选项来禁用编译构建过程中的内联、优化，以保证构建产物满足调试器调试需要。
+为了方便开发、调试，调试器可能也包含了编译构建的任务，如保证构建产物中包含调试信息、禁止编译优化对调试的不利影响等。通常这些操作需要传递特殊的选项给编译器、链接器，对开发者而言并不是一件很友好的事情。考虑到这点，go调试器dlv在执行 `dlv debug`、`dlv test` 命令时，会自动传递 `-gcflags="all=-N -l"`选项来禁用编译构建过程中的内联、优化，以保证构建产物满足调试器调试需要。
 
 下面先介绍下第一种情况，指定程序路径，启动程序创建进程。
 
@@ -76,39 +76,38 @@ file: main.go
 package main
 
 import (
-	"fmt"
-	"os"
-	"os/exec"
+    "fmt"
+    "os"
+    "os/exec"
 )
 
 const (
-	usage = "Usage: go run main.go exec <path/to/prog>"
+    usage = "Usage: ./godbg exec <path/to/prog>"
 
-	cmdExec = "exec"
+    cmdExec = "exec"
 )
 
 func main() {
-	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "%s\n\n", usage)
-		os.Exit(1)
-	}
-	cmd := os.Args[1]
+    if len(os.Args) < 3 {
+        fmt.Fprintf(os.Stderr, "%s\n\n", usage)
+        os.Exit(1)
+    }
+    cmd := os.Args[1]
 
-	switch cmd {
-	case cmdExec:
-		prog := os.Args[2]
-		progCmd := exec.Command(prog)
-		buf, err := progCmd.CombinedOutput()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s exec error: %v, \n\n%s\n\n", err, string(buf))
-			os.Exit(1)
-		}
-		fmt.Fprintf(os.Stdout, "%s\n", string(buf))
-	default:
-		fmt.Fprintf(os.Stderr, "%s unknown cmd\n\n", cmd)
-		os.Exit(1)
-	}
-
+    switch cmd {
+    case cmdExec:
+        prog := os.Args[2]
+        progCmd := exec.Command(prog)
+        buf, err := progCmd.CombinedOutput()
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "%s exec error: %v, \n\n%s\n\n", err, string(buf))
+            os.Exit(1)
+        }
+        fmt.Fprintf(os.Stdout, "%s\n", string(buf))
+    default:
+        fmt.Fprintf(os.Stderr, "%s unknown cmd\n\n", cmd)
+        os.Exit(1)
+    }
 }
 ```
 
@@ -145,3 +144,5 @@ godbg正常执行了命令ls并显示出了当前目录下的文件，后面我�
 > ps：关于测试环境，强烈建议读者能使用与作者开发时一致的环境，以方便读者能顺利地完成测试。为简化这一过程，godbg工程中提供了容器开发配置 `devcontainer.json`，请读者使用vscode、goland 2023.2的容器开发模式打开工程并进行测试。
 >
 > ps：2025.2.18，容器的隔离性比较弱，我现在有点想提供一个配套的虚拟机来方便大家测试了，但是虚拟机文件vmdk往往都很大，大家下载这个环境也比较费劲。但是对于一些初学者，相比于容器技术可能更熟悉虚拟机的使用。
+>
+> TODO 完善下这里的测试环境说明，对学习者来说还是比较重要的。

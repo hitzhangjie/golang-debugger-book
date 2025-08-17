@@ -18,7 +18,7 @@
 
 > 这里给个实例，__debug_bin是一个由 `dlv debug`生成的可执行程序，包含了调试符号信息，`readelf`可以用来读取ELF文件中的section header，下面我们看一下ELF文件中包含的调试信息相关的 section。
 >
-> go build可以通过指定连接器选项“**-ldflags=-compressdwarf=false**”来禁用压缩，提前了解这点，方便以后通过dwarfdump等工具分析理解dwarf调试信息如何组织非常有用。
+> go build可以通过指定链接器选项“**-ldflags=-compressdwarf=false**”来禁用压缩，提前了解这点，方便以后通过dwarfdump等工具分析理解dwarf调试信息如何组织非常有用。
 >
 > ```bash
 > [root@centos ~]# readelf -a __debug_bin | grep debug
