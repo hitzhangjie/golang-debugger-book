@@ -44,7 +44,7 @@ Usage:
 Global Flags:
     --allow-non-terminal-interactive   Allows interactive sessions of Delve that don't have a terminal as stdin, stdout and stderr
 -r, --redirect stringArray             Specifies redirect rules for target process (see 'dlv help redirect')
-	...
+    ...
 ```
 
 OK，下面我们介绍下这块的调试会话初始化、输入调试命令进行调试的主流程。
@@ -121,43 +121,43 @@ main.go:main.main
 func execute(attachPid int, processArgs []string, ...) int {
     ...
 
-	var listener net.Listener
-	var clientConn net.Conn
+    var listener net.Listener
+    var clientConn net.Conn
 
-	// Make a TCP listener
-	if headless {
-		listener, _ = netListen(addr)
-	} else {
-		listener, clientConn = service.ListenerPipe()
-	}
-	defer listener.Close()
+    // Make a TCP listener
+    if headless {
+        listener, _ = netListen(addr)
+    } else {
+        listener, clientConn = service.ListenerPipe()
+    }
+    defer listener.Close()
 
     ...
 
-	return connect(listener.Addr().String(), clientConn, conf)
+    return connect(listener.Addr().String(), clientConn, conf)
 }
 
 // 如果远程调试模式，则addr有效、clientConn无效，net.Dial即可
 // 如果本地调试模式，则addr无效、clientConn有效，直接使用net.Pipe的一端clientConn即可
 func connect(addr string, clientConn net.Conn, conf *config.Config) int {
-	// Create and start a terminal - attach to running instance
-	var client *rpc2.RPCClient
-	if clientConn == nil {
-		if clientConn = netDial(addr); clientConn == nil {
-			return 1 // already logged
-		}
-	}
-	client = rpc2.NewClientFromConn(clientConn)
+    // Create and start a terminal - attach to running instance
+    var client *rpc2.RPCClient
+    if clientConn == nil {
+        if clientConn = netDial(addr); clientConn == nil {
+            return 1 // already logged
+        }
+    }
+    client = rpc2.NewClientFromConn(clientConn)
     ...
 
     // 初始化调试会话
-	session := debug.New(client, conf)
-	session.InitFile = initFile
-	status, err := session.Run()
-	if err != nil {
-		fmt.Println(err)
-	}
-	return status
+    session := debug.New(client, conf)
+    session.InitFile = initFile
+    status, err := session.Run()
+    if err != nil {
+        fmt.Println(err)
+    }
+    return status
 }
 ```
 
@@ -189,132 +189,132 @@ ps: 篇幅原因，这里不介绍trace命令的执行流程，实际上跟其�
 ```go
 // Run begins running the debugging session in the terminal.
 func (t *Session) Run() (int, error) {
-	defer t.Close()
+    defer t.Close()
 
-	multiClient := t.client.IsMulticlient()
+    multiClient := t.client.IsMulticlient()
 
-	// Send the debugger a halt command on SIGINT
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGINT)
-	go t.sigintGuard(ch, multiClient)
+    // Send the debugger a halt command on SIGINT
+    ch := make(chan os.Signal, 1)
+    signal.Notify(ch, syscall.SIGINT)
+    go t.sigintGuard(ch, multiClient)
 
-	// Record which functions are defined in the target
-	fns := trie.New()
-	// Record which debug commands and command aliases are supported by the current debugger
-	cmds := trie.New()
+    // Record which functions are defined in the target
+    fns := trie.New()
+    // Record which debug commands and command aliases are supported by the current debugger
+    cmds := trie.New()
 
-	funcs, _ := t.client.ListFunctions("", 0)
-	for _, fn := range funcs {
-		fns.Add(fn, nil)
-	}
-	for _, cmd := range t.cmds.cmds {
-		for _, alias := range cmd.aliases {
-			cmds.Add(alias, nil)
-		}
-	}
+    funcs, _ := t.client.ListFunctions("", 0)
+    for _, fn := range funcs {
+        fns.Add(fn, nil)
+    }
+    for _, cmd := range t.cmds.cmds {
+        for _, alias := range cmd.aliases {
+            cmds.Add(alias, nil)
+        }
+    }
 
-	var locs *trie.Trie
+    var locs *trie.Trie
 
-	// Read current input, auto-complete command parameters based on input debug commands and incomplete command parameters
-	t.line.SetCompleter(func(line string) (c []string) {
-		cmd := t.cmds.Find(strings.Split(line, " ")[0], noPrefix)
-		switch cmd.aliases[0] {
-		// For breakpoint-related operations, complete function names
-		case "break", "trace", "continue":
-			if spc := strings.LastIndex(line, " "); spc > 0 {
-				prefix := line[:spc] + " "
-				funcs := fns.FuzzySearch(line[spc+1:])
-				for _, f := range funcs {
-					c = append(c, prefix+f)
-				}
-			}
-		// If no command is entered
-		case "nullcmd", "nocmd":
-			commands := cmds.FuzzySearch(strings.ToLower(line))
-			c = append(c, commands...)
-		// If it's print or whatis, complete variable names
-		case "print", "whatis":
-			if locs == nil {
-				localVars, err := t.client.ListLocalVariables(
-					api.EvalScope{GoroutineID: -1, Frame: t.cmds.frame, DeferredCall: 0},
-					api.LoadConfig{},
-				)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Unable to get local variables: %s\n", err)
-					break
-				}
+    // Read current input, auto-complete command parameters based on input debug commands and incomplete command parameters
+    t.line.SetCompleter(func(line string) (c []string) {
+        cmd := t.cmds.Find(strings.Split(line, " ")[0], noPrefix)
+        switch cmd.aliases[0] {
+        // For breakpoint-related operations, complete function names
+        case "break", "trace", "continue":
+            if spc := strings.LastIndex(line, " "); spc > 0 {
+                prefix := line[:spc] + " "
+                funcs := fns.FuzzySearch(line[spc+1:])
+                for _, f := range funcs {
+                    c = append(c, prefix+f)
+                }
+            }
+        // If no command is entered
+        case "nullcmd", "nocmd":
+            commands := cmds.FuzzySearch(strings.ToLower(line))
+            c = append(c, commands...)
+        // If it's print or whatis, complete variable names
+        case "print", "whatis":
+            if locs == nil {
+                localVars, err := t.client.ListLocalVariables(
+                    api.EvalScope{GoroutineID: -1, Frame: t.cmds.frame, DeferredCall: 0},
+                    api.LoadConfig{},
+                )
+                if err != nil {
+                    fmt.Fprintf(os.Stderr, "Unable to get local variables: %s\n", err)
+                    break
+                }
 
-				locs = trie.New()
-				for _, loc := range localVars {
-					locs.Add(loc.Name, nil)
-				}
-			}
+                locs = trie.New()
+                for _, loc := range localVars {
+                    locs.Add(loc.Name, nil)
+                }
+            }
 
-			if spc := strings.LastIndex(line, " "); spc > 0 {
-				prefix := line[:spc] + " "
-				locals := locs.FuzzySearch(line[spc+1:])
-				for _, l := range locals {
-					c = append(c, prefix+l)
-				}
-			}
-		}
-		return
-	})
+            if spc := strings.LastIndex(line, " "); spc > 0 {
+                prefix := line[:spc] + " "
+                locals := locs.FuzzySearch(line[spc+1:])
+                for _, l := range locals {
+                    c = append(c, prefix+l)
+                }
+            }
+        }
+        return
+    })
 
-	// Read historical debug commands to quickly execute the previous command or repeat the last command via up/enter
-	fullHistoryFile, err := config.GetConfigFilePath(historyFile)
-	if err != nil {
-		fmt.Printf("Unable to load history file: %v.", err)
-	}
+    // Read historical debug commands to quickly execute the previous command or repeat the last command via up/enter
+    fullHistoryFile, err := config.GetConfigFilePath(historyFile)
+    if err != nil {
+        fmt.Printf("Unable to load history file: %v.", err)
+    }
 
-	t.historyFile, err = os.OpenFile(fullHistoryFile, os.O_RDWR|os.O_CREATE, 0600)
-	if err != nil {
-		fmt.Printf("Unable to open history file: %v. History will not be saved for this session.", err)
-	}
-	if _, err := t.line.ReadHistory(t.historyFile); err != nil {
-		fmt.Printf("Unable to read history file %s: %v\n", fullHistoryFile, err)
-	}
+    t.historyFile, err = os.OpenFile(fullHistoryFile, os.O_RDWR|os.O_CREATE, 0600)
+    if err != nil {
+        fmt.Printf("Unable to open history file: %v. History will not be saved for this session.", err)
+    }
+    if _, err := t.line.ReadHistory(t.historyFile); err != nil {
+        fmt.Printf("Unable to read history file %s: %v\n", fullHistoryFile, err)
+    }
 
-	fmt.Println("Type 'help' for list of commands.")
+    fmt.Println("Type 'help' for list of commands.")
 
-	if t.InitFile != "" {
-		err := t.cmds.executeFile(t, t.InitFile)
-		if err != nil {
-			if _, ok := err.(ExitRequestError); ok {
-				return t.handleExit()
-			}
-			fmt.Fprintf(os.Stderr, "Error executing init file: %s\n", err)
-		}
-	}
+    if t.InitFile != "" {
+        err := t.cmds.executeFile(t, t.InitFile)
+        if err != nil {
+            if _, ok := err.(ExitRequestError); ok {
+                return t.handleExit()
+            }
+            fmt.Fprintf(os.Stderr, "Error executing init file: %s\n", err)
+        }
+    }
 
-	// Record the last executed command
-	var lastCmd string
+    // Record the last executed command
+    var lastCmd string
 
-	// Ensure that the target process is neither running nor recording by
-	// making a blocking call.
-	_, _ = t.client.GetState()
+    // Ensure that the target process is neither running nor recording by
+    // making a blocking call.
+    _, _ = t.client.GetState()
 
-	// Enter the main loop of the debugger
-	for {
-		locs = nil
+    // Enter the main loop of the debugger
+    for {
+        locs = nil
 
-		// Read the user's input
-		cmdstr, _ := t.promptForInput()
-		if strings.TrimSpace(cmdstr) == "" {
-			cmdstr = lastCmd
-		}
+        // Read the user's input
+        cmdstr, _ := t.promptForInput()
+        if strings.TrimSpace(cmdstr) == "" {
+            cmdstr = lastCmd
+        }
 
-		// Record the last executed command
-		lastCmd = cmdstr
+        // Record the last executed command
+        lastCmd = cmdstr
 
-		// Execute the debugging command
-		if err := t.cmds.Call(cmdstr, t); err != nil {
-			if _, ok := err.(ExitRequestError); ok {
-				return t.handleExit()
-			}
-			...
-		}
-	}
+        // Execute the debugging command
+        if err := t.cmds.Call(cmdstr, t); err != nil {
+            if _, ok := err.(ExitRequestError); ok {
+                return t.handleExit()
+            }
+            ...
+        }
+    }
 }
 ```
 
@@ -323,44 +323,44 @@ func (t *Session) Run() (int, error) {
 ```go
 // Call takes a command to execute.
 func (s *DebugCommands) Call(cmdstr string, t *Session) error {
-	ctx := callContext{Prefix: noPrefix, Scope: api.EvalScope{GoroutineID: -1, Frame: s.frame, DeferredCall: 0}}
-	return s.CallWithContext(cmdstr, t, ctx)
+    ctx := callContext{Prefix: noPrefix, Scope: api.EvalScope{GoroutineID: -1, Frame: s.frame, DeferredCall: 0}}
+    return s.CallWithContext(cmdstr, t, ctx)
 }
 
 // callContext represents the context of a command.
 type callContext struct {
-	Prefix     cmdPrefix
-	Scope      api.EvalScope
-	Breakpoint *api.Breakpoint
+    Prefix     cmdPrefix
+    Scope      api.EvalScope
+    Breakpoint *api.Breakpoint
 }
 
 
 type cmdfunc func(t *Session, ctx callContext, args string) error
 
 type command struct {
-	aliases         []string
-	builtinAliases  []string
-	group           commandGroup
-	allowedPrefixes cmdPrefix
-	helpMsg         string
-	cmdFn           cmdfunc
+    aliases         []string
+    builtinAliases  []string
+    group           commandGroup
+    allowedPrefixes cmdPrefix
+    helpMsg         string
+    cmdFn           cmdfunc
 }
 
 type DebugCommands struct {
-	cmds   []*command
-	client service.Client
-	frame  int // Current frame as set by frame/up/down commands.
+    cmds   []*command
+    client service.Client
+    frame  int // Current frame as set by frame/up/down commands.
 }
 
 // CallWithContext takes a command and a context that command should be executed in.
 func (s *DebugCommands) CallWithContext(cmdstr string, t *Session, ctx callContext) error {
-	vals := strings.SplitN(strings.TrimSpace(cmdstr), " ", 2)
-	cmdname := vals[0]
-	var args string
-	if len(vals) > 1 {
-		args = strings.TrimSpace(vals[1])
-	}
-	return s.Find(cmdname, ctx.Prefix).cmdFn(t, ctx, args)
+    vals := strings.SplitN(strings.TrimSpace(cmdstr), " ", 2)
+    cmdname := vals[0]
+    var args string
+    if len(vals) > 1 {
+        args = strings.TrimSpace(vals[1])
+    }
+    return s.Find(cmdname, ctx.Prefix).cmdFn(t, ctx, args)
 }
 ```
 
@@ -368,12 +368,12 @@ DebugCommands相当于是对调试会话中的调试命令的管理，这里的�
 
 ```go
 type command struct {
-	aliases         []string
-	builtinAliases  []string
-	group           commandGroup
-	allowedPrefixes cmdPrefix
-	helpMsg         string
-	cmdFn           cmdfunc
+    aliases         []string
+    builtinAliases  []string
+    group           commandGroup
+    allowedPrefixes cmdPrefix
+    helpMsg         string
+    cmdFn           cmdfunc
 }
 ```
 
@@ -397,9 +397,9 @@ OK，下面我们先看看JSON-RPC这里的代码逻辑，然后结合一个具�
 
 ```bash
 t.cmds.Call(cmdstr, t)
-	\--> DebugCommands.CallWithContext(...)
-			\--> cmd:= s.Find(cmdname, ctx.Prefix)
-					\--> cmd.cmdFn(t, ctx, args)
+    \--> DebugCommands.CallWithContext(...)
+            \--> cmd:= s.Find(cmdname, ctx.Prefix)
+                    \--> cmd.cmdFn(t, ctx, args)
 ```
 
 我们看下JSON-RPC client实现了哪些方法吧，然后选几个有代表性的进行介绍，不用在这里一一介绍。
@@ -410,42 +410,41 @@ see path-to/tinydbg/cmds/debug/def.go，首先解析输入的命令行参数，f
 
 ```go
 func vars(t *Session, ctx callContext, args string) error {
-	// 解析
-	filter, cfg := parseVarArguments(args, t)
-	vars, err := t.client.ListPackageVariables(filter, cfg)
-	if err != nil {
-		return err
-	}
-	return t.printFilteredVariables("vars", vars, filter, cfg)
+    // 解析
+    filter, cfg := parseVarArguments(args, t)
+    vars, err := t.client.ListPackageVariables(filter, cfg)
+    if err != nil {
+        return err
+    }
+    return t.printFilteredVariables("vars", vars, filter, cfg)
 }
 ```
 
-see path-to/tinydbg/service/rpc2/client.go，这部分就是发起JSON-RPC的逻辑，调用调试器后端的RPCServer.ListPackageVariables(...)这个方法，并且请求体为args，响应是replay。
+see path-to/tinydbg/service/rpc2/client.go，这部分就是发起JSON-RPC的逻辑，调用调试器后端的RPCServer.ListPackageVariables(...)这个方法，返回正则匹配的变量列表。
 
 ```go
 func (c *RPCClient) ListPackageVariables(filter string, cfg api.LoadConfig) ([]api.Variable, error) {
-	var out ListPackageVarsOut
-	err := c.call("ListPackageVars", ListPackageVarsIn{filter, cfg}, &out)
-	return out.Variables, err
+    var out ListPackageVarsOut
+    err := c.call("ListPackageVars", ListPackageVarsIn{filter, cfg}, &out)
+    return out.Variables, err
 }
 
 // don't change this method name, it's used by main_test.go:TestTypecheckRPC
 func (c *RPCClient) call(method string, args, reply interface{}) error {
-	return c.client.Call("RPCServer."+method, args, reply)
+    return c.client.Call("RPCServer."+method, args, reply)
 }
 ```
 
 所有的JSON-RPC的请求、响应类型都定义在 `path-to/tinydbg/service/rpc2/*.go` 中，OK，接下来就是Go标准库中JSON-RPC实现的细节了：
 
-
 ```bash
-go/src/net/rpc.(*Client).Call(serverMethod, args, replay) error
-	\--> rpc.(*Client).Go(serviceMethod, args, reply, donechan) *Call {
-			\--> rpc.(*Client).send(call)
-					\--> rpc.(*clientCodec).WriteRequest(request, call.Args)
-							\--> rpc.(*Encoder).Encode(request)
-											\--> e.marshal(v, encOpts) as JSON data
-											\--> e.w.Write(jsondata), w==net.Conn
+go/src/net/rpc.(*Client).Call(serverMethod, args, reply) error
+    \--> rpc.(*Client).Go(serviceMethod, args, reply, donechan) *Call {
+            \--> rpc.(*Client).send(call)
+                    \--> rpc.(*clientCodec).WriteRequest(request, call.Args)
+                            \--> rpc.(*Encoder).Encode(request)
+                                     \--> e.marshal(v, encOpts) as JSON data
+                                     \--> e.w.Write(jsondata), w==net.Conn
 ```
 
 发出去之后，调试器前端就等着调试器后端接受请求并处理、返回结果，那这里的JSON-RPC client是如何读取到结果返回的呢？
@@ -455,8 +454,8 @@ go/src/net/rpc.(*Client).Call(serverMethod, args, replay) error
 ```go
 // Call invokes the named function, waits for it to complete, and returns its error status.
 func (client *Client) Call(serviceMethod string, args any, reply any) error {
-	call := <-client.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
-	return call.Error
+    call := <-client.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
+    return call.Error
 }
 ```
 
@@ -464,9 +463,9 @@ func (client *Client) Call(serviceMethod string, args any, reply any) error {
 
 ```go
 func (c *RPCClient) ListPackageVariables(filter string, cfg api.LoadConfig) ([]api.Variable, error) {
-	var out ListPackageVarsOut
-	err := c.call("ListPackageVars", ListPackageVarsIn{filter, cfg}, &out)
-	return out.Variables, err
+    var out ListPackageVarsOut
+    err := c.call("ListPackageVars", ListPackageVarsIn{filter, cfg}, &out)
+    return out.Variables, err
 }
 ```
 
@@ -474,12 +473,12 @@ func (c *RPCClient) ListPackageVariables(filter string, cfg api.LoadConfig) ([]a
 
 ```go
 func vars(t *Session, ctx callContext, args string) error {
-	filter, cfg := parseVarArguments(args, t)
-	vars, err := t.client.ListPackageVariables(filter, cfg)
-	if err != nil {
-		return err
-	}
-	return t.printFilteredVariables("vars", vars, filter, cfg)
+    filter, cfg := parseVarArguments(args, t)
+    vars, err := t.client.ListPackageVariables(filter, cfg)
+    if err != nil {
+        return err
+    }
+    return t.printFilteredVariables("vars", vars, filter, cfg)
 }
 ```
 
@@ -490,11 +489,11 @@ see go/src/net/rpc/client.go
 ```go
 // Call represents an active RPC.
 type Call struct {
-	ServiceMethod string     // The name of the service and method to call.
-	Args          any        // The argument to the function (*struct).
-	Reply         any        // The reply from the function (*struct).
-	Error         error      // After completion, the error status.
-	Done          chan *Call // Receives *Call when Go is complete.
+    ServiceMethod string     // The name of the service and method to call.
+    Args          any        // The argument to the function (*struct).
+    Reply         any        // The reply from the function (*struct).
+    Error         error      // After completion, the error status.
+    Done          chan *Call // Receives *Call when Go is complete.
 }
 ```
 
@@ -502,24 +501,24 @@ see go/src/net/rpc/client.go，收回包的路径是这样的：
 
 ```bash
 go/src/net/rpc.(*Client).input()
-	\--> forloop
-			\--> client.codec.ReadResponseHeader(&response)
-			\--> seq := response.Seq
-			\--> call := client.pending[seq]
-				 delete(client.pending, seq)
-			\--> if call == nil then this request timeout and deleted already
-			\--> if reponse.Error != "" then set call.Error and done
-					\--> call.Done <- call
-			\--> if reponse.Error == nil then set call.Replay and done
-					\--> call.Done <- call
+    \--> forloop
+            \--> client.codec.ReadResponseHeader(&response)
+            \--> seq := response.Seq
+            \--> call := client.pending[seq]
+                 delete(client.pending, seq)
+            \--> if call == nil then this request timeout and deleted already
+            \--> if reponse.Error != "" then set call.Error and done
+                    \--> call.Done <- call
+            \--> if reponse.Error == nil then set call.Replay and done
+                    \--> call.Done <- call
 
 go/src/net/rpc.(*Client).Call(serviceMethod string, args any, reply any) error
-	\--> call := <-client.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
-	\--> return call.Err
+    \--> call := <-client.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
+    \--> return call.Err
 
 func (c *RPCClient) ListPackageVariables(filter string, cfg api.LoadConfig) ([]api.Variable, error)
-	\--> err := c.call("ListPackageVars", ListPackageVarsIn{filter, cfg}, &out)
-	\--> return out.Variables, err
+    \--> err := c.call("ListPackageVars", ListPackageVarsIn{filter, cfg}, &out)
+    \--> return out.Variables, err
 ```
 
 OK，大致就是这样，如果你对更多细节感兴趣，可以自己看下这部分的源码。
@@ -532,34 +531,34 @@ see path-to/tinydbg/cmds/root.go
 
 ```go
 func execute(attachPid int, processArgs []string, conf *config.Config, coreFile string, kind debugger.ExecuteKind, dlvArgs []string, buildFlags string) int {
-	...
-	// Make a TCP listener or Unix listener, or preConnectedListener via net.Pipe
-	if headless {
-		listener, err = netListen(addr)
-	} else {
-		listener, clientConn = service.ListenerPipe()
-	}
-	...
+    ...
+    // Make a TCP listener or Unix listener, or preConnectedListener via net.Pipe
+    if headless {
+        listener, err = netListen(addr)
+    } else {
+        listener, clientConn = service.ListenerPipe()
+    }
+    ...
 
-	// Create and start a debugger server
-	server := rpccommon.NewServer(&service.Config{
-		Listener:       listener,
-		ProcessArgs:    processArgs,
-		AcceptMulti:    acceptMulti,
-		Debugger: debugger.Config{
-			AttachPid:             attachPid,
-			WorkingDir:            workingDir,
-			CoreFile:              coreFile,
-			Foreground:            headless && tty == "",
-			Packages:              dlvArgs,
-			...
-		},
-	})
-	...
+    // Create and start a debugger server
+    server := rpccommon.NewServer(&service.Config{
+        Listener:       listener,
+        ProcessArgs:    processArgs,
+        AcceptMulti:    acceptMulti,
+        Debugger: debugger.Config{
+            AttachPid:             attachPid,
+            WorkingDir:            workingDir,
+            CoreFile:              coreFile,
+            Foreground:            headless && tty == "",
+            Packages:              dlvArgs,
+            ...
+        },
+    })
+    ...
 
-	// run the server
-	_ = server.Run()
-	...
+    // run the server
+    _ = server.Run()
+    ...
 ```
 
 那么server.Run()具体做了什么呢？
@@ -568,54 +567,54 @@ func execute(attachPid int, processArgs []string, conf *config.Config, coreFile 
 // Run starts a debugger and exposes it with an JSON-RPC server. The debugger
 // itself can be stopped with the `detach` API.
 func (s *ServerImpl) Run() error {
-	...
-	// Create and start the debugger
-	config := s.config.Debugger
-	if s.debugger, err = debugger.New(&config, s.config.ProcessArgs); err != nil {
-		return err
-	}
+    ...
+    // Create and start the debugger
+    config := s.config.Debugger
+    if s.debugger, err = debugger.New(&config, s.config.ProcessArgs); err != nil {
+        return err
+    }
 
-	// Register the RPC methods mapping, map[methodName] = methodHandler
-	s.s2 = rpc2.NewServer(s.config, s.debugger)
-	s.methodMap = make(map[string]*methodType)
-	registerMethods(s.s2, s.methodMap)
+    // Register the RPC methods mapping, map[methodName] = methodHandler
+    s.s2 = rpc2.NewServer(s.config, s.debugger)
+    s.methodMap = make(map[string]*methodType)
+    registerMethods(s.s2, s.methodMap)
 
-	// Accept connection and serve the connection requests
-	go func() {
-		defer s.listener.Close()
-		for {
-			c, err := s.listener.Accept()
-			if err != nil {
-				select {
-				case <-s.stopChan:
-					// We were supposed to exit, do nothing and return
-					return
-				default:
-					panic(err)
-				}
-			}
+    // Accept connection and serve the connection requests
+    go func() {
+        defer s.listener.Close()
+        for {
+            c, err := s.listener.Accept()
+            if err != nil {
+                select {
+                case <-s.stopChan:
+                    // We were supposed to exit, do nothing and return
+                    return
+                default:
+                    panic(err)
+                }
+            }
 
-			// serve the connection requests
-			go s.serveConnection(c)
-			if !s.config.AcceptMulti {
-				break
-			}
-		}
-	}()
-	return nil
+            // serve the connection requests
+            go s.serveConnection(c)
+            if !s.config.AcceptMulti {
+                break
+            }
+        }
+    }()
+    return nil
 }
 
 func registerMethods(s *rpc2.RPCServer, methods map[string]*methodType) {
-	methods["RPCServer.Command"] = &methodType{method: reflect.ValueOf(s.Command)}
-	methods["RPCServer.CreateBreakpoint"] = &methodType{method: reflect.ValueOf(s.CreateBreakpoint)}
-	methods["RPCServer.CreateWatchpoint"] = &methodType{method: reflect.ValueOf(s.CreateWatchpoint)}
-	methods["RPCServer.Detach"] = &methodType{method: reflect.ValueOf(s.Detach)}
-	methods["RPCServer.Disassemble"] = &methodType{method: reflect.ValueOf(s.Disassemble)}
-	methods["RPCServer.Eval"] = &methodType{method: reflect.ValueOf(s.Eval)}
-	methods["RPCServer.ExamineMemory"] = &methodType{method: reflect.ValueOf(s.ExamineMemory)}
-	...
-	methods["RPCServer.ListLocalVars"] = &methodType{method: reflect.ValueOf(s.ListLocalVars)}
-	methods["RPCServer.ListPackageVars"] = &methodType{method: reflect.ValueOf(s.ListPackageVars)}
+    methods["RPCServer.Command"] = &methodType{method: reflect.ValueOf(s.Command)}
+    methods["RPCServer.CreateBreakpoint"] = &methodType{method: reflect.ValueOf(s.CreateBreakpoint)}
+    methods["RPCServer.CreateWatchpoint"] = &methodType{method: reflect.ValueOf(s.CreateWatchpoint)}
+    methods["RPCServer.Detach"] = &methodType{method: reflect.ValueOf(s.Detach)}
+    methods["RPCServer.Disassemble"] = &methodType{method: reflect.ValueOf(s.Disassemble)}
+    methods["RPCServer.Eval"] = &methodType{method: reflect.ValueOf(s.Eval)}
+    methods["RPCServer.ExamineMemory"] = &methodType{method: reflect.ValueOf(s.ExamineMemory)}
+    ...
+    methods["RPCServer.ListLocalVars"] = &methodType{method: reflect.ValueOf(s.ListLocalVars)}
+    methods["RPCServer.ListPackageVars"] = &methodType{method: reflect.ValueOf(s.ListPackageVars)}
 }
 ```
 
@@ -627,52 +626,52 @@ OK，看下如何处理连接请求的，JSON-RPC这里的serializer当然是JSO
 
 ```go
 func (s *ServerImpl) serveConnection(c io.ReadWriteCloser) {
-	conn := &bufReadWriteCloser{bufio.NewReader(c), c}
-	s.log.Debugf("serving JSON-RPC on new connection")
-	go s.serveJSONCodec(conn)
+    conn := &bufReadWriteCloser{bufio.NewReader(c), c}
+    s.log.Debugf("serving JSON-RPC on new connection")
+    go s.serveJSONCodec(conn)
 }
 
 func (s *ServerImpl) serveJSONCodec(conn io.ReadWriteCloser) {
-	...
-	codec := jsonrpc.NewServerCodec(conn)
-	var req rpc.Request
-	var resp rpc.Response
-	for {
-		req = rpc.Request{}
-		err := codec.ReadRequestHeader(&req)
-		...
+    ...
+    codec := jsonrpc.NewServerCodec(conn)
+    var req rpc.Request
+    var resp rpc.Response
+    for {
+        req = rpc.Request{}
+        err := codec.ReadRequestHeader(&req)
+        ...
 
-		mtype, ok := s.methodMap[req.ServiceMethod]
+        mtype, ok := s.methodMap[req.ServiceMethod]
 
-		var argv, replyv reflect.Value
-		...
+        var argv, replyv reflect.Value
+        ...
 
-		// argv guaranteed to be a pointer now.
-		if err = codec.ReadRequestBody(argv.Interface()); err != nil {
-			return
-		}
-		...
+        // argv guaranteed to be a pointer now.
+        if err = codec.ReadRequestBody(argv.Interface()); err != nil {
+            return
+        }
+        ...
 
-		if mtype.Synchronous {
-			replyv = reflect.New(mtype.ReplyType.Elem())
-			function := mtype.method
-			returnValues := function.Call([]reflect.Value{argv, replyv})
-			errInter := returnValues[0].Interface()
-			...
-			resp = rpc.Response{}
-			s.sendResponse(sending, &req, &resp, replyv.Interface(), codec, errmsg)
-			...
-		} else {
-			function := mtype.method
-			ctl := &RPCCallback{s, sending, codec, req, make(chan struct{}), clientDisconnectChan}
-			go func() {
-				...
-				function.Call([]reflect.Value{argv, reflect.ValueOf(ctl)})
-			}()
-			<-ctl.setupDone
-		}
-	}
-	...
+        if mtype.Synchronous {
+            replyv = reflect.New(mtype.ReplyType.Elem())
+            function := mtype.method
+            returnValues := function.Call([]reflect.Value{argv, replyv})
+            errInter := returnValues[0].Interface()
+            ...
+            resp = rpc.Response{}
+            s.sendResponse(sending, &req, &resp, replyv.Interface(), codec, errmsg)
+            ...
+        } else {
+            function := mtype.method
+            ctl := &RPCCallback{s, sending, codec, req, make(chan struct{}), clientDisconnectChan}
+            go func() {
+                ...
+                function.Call([]reflect.Value{argv, reflect.ValueOf(ctl)})
+            }()
+            <-ctl.setupDone
+        }
+    }
+    ...
 }
 ```
 
@@ -681,20 +680,20 @@ func (s *ServerImpl) serveJSONCodec(conn io.ReadWriteCloser) {
 ```go
 // disconnectCmd
 func (c *RPCClient) Disconnect(cont bool) error {
-	if cont {
-		out := new(CommandOut)
-		// 异步处理的，并没有等待RPCServer.Command执行结束才返回
-		c.client.Go("RPCServer.Command", &api.DebuggerCommand{Name: api.Continue, ReturnInfoLoadConfig: c.retValLoadCfg}, &out, nil)
-	}
-	return c.client.Close()
+    if cont {
+        out := new(CommandOut)
+        // 异步处理的，并没有等待RPCServer.Command执行结束才返回
+        c.client.Go("RPCServer.Command", &api.DebuggerCommand{Name: api.Continue, ReturnInfoLoadConfig: c.retValLoadCfg}, &out, nil)
+    }
+    return c.client.Close()
 }
 
 // varsCmd
 func (c *RPCClient) ListPackageVariables(filter string, cfg api.LoadConfig) ([]api.Variable, error) {
-	var out ListPackageVarsOut
-	// call操作，等到收到处理结果后才返回
-	err := c.call("ListPackageVars", ListPackageVarsIn{filter, cfg}, &out)
-	return out.Variables, err
+    var out ListPackageVarsOut
+    // call操作，等到收到处理结果后才返回
+    err := c.call("ListPackageVars", ListPackageVarsIn{filter, cfg}, &out)
+    return out.Variables, err
 }
 ```
 
