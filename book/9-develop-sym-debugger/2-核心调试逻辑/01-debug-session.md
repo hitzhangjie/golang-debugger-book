@@ -525,7 +525,7 @@ OK，大致就是这样，如果你对更多细节感兴趣，可以自己看下
 
 #### 调试器后端初始化并接受请求
 
-OK，接下来就是服务器测收包并处理这些请求了，当我们以 `--headless` 模式启动时，我们会启动一个调试器backend，它以服务的形式运行。
+OK，接下来就是服务器侧收包并处理这些请求了，当我们以 `--headless` 模式启动时，我们会启动一个调试器backend，它以服务的形式运行。
 
 see path-to/tinydbg/cmds/root.go
 
@@ -618,11 +618,18 @@ func registerMethods(s *rpc2.RPCServer, methods map[string]*methodType) {
 }
 ```
 
-OK，看下如何处理连接请求的，JSON-RPC这里的serializer当然是JSON decoder了，这里从连接循环收包，收完一个包equest，就取出request.Method对应的handler `mtype`，这个handler就是一个方法了，然后就根据方法的入参类型、出参类型，通过反射将JSON中的数据decode成具体类型的字段值，然后通过反射调用对应的方法进行处理。处理完成后回包。
+OK，看下如何处理连接请求的，JSON-RPC这里的serializer当然是JSON decoder了，这里从连接循环收包，收完一个request，就取出request.Method对应的handler `mtype`，这个handler就是一个方法了，然后就根据方法的入参类型、出参类型，通过反射将JSON中的数据decode成具体类型的字段值，然后通过反射调用对应的方法进行处理。处理完成后回包。
 
-值得一提的是，这里的服务端接口，有些是同步接口，有些是异步接口：
-- 同步接口，来一个请求处理一个，响应直接写回给前端，当前接口处理函数才返回；
-- 异步接口，来一个请求直接起协程异步处理，接口处理逻辑提前返回，处理完后通过callback的形式返回结果给前端；
+值得一提的是，这里的RPC接口，在C/S通信交互方式上既有同步接口，也有异步接口。所谓同步、异步，就是客户端是否必须等待服务器响应才能继续执行做后续处理。
+
+- 对于客户端来说：
+  - 同步接口的话，客户端会等服务器的处理结果，一般调用方法 `RPCClient.Go(...)`；
+  - 而异步接口的话，客户端有可能不会等服务器的处理结果，比如disconnect操作通知下服务器就退出了，一般调用方法 `RPCClient.Call(...)`；
+- 对于服务端来说：
+  - 同步接口，这种接口一般耗时比较短，或者客户端必须等待服务端处理完成，这类接口出参out的类型 != RPCCallback，而是具体的req对应的类型rsp；
+  - 异步接口，这种接口一般耗时比较长，或者客户端不关心服务器是否处理完成，比如客户端exit时仅通知服务器即可、不用等到服务器detach完成，这类接口出参out的类型为RPCCallback，req对应的响应类型rsp，这里的rsp通过 `RPCCallback.Return(rsp)` 返回客户端；
+
+ps: 我们开发网络服务器时，主调服务有时也会有些通知被调服务的操作，仅做通知不等结果，或者被调服务处理完后再通知主调方。被调方也可能为了表示收到了请求而回包，但是请求的处理是异步的。对于后者，C/S通信交互方式上还是同步的，只是Server端请求处理上是异步处理的。所以有时候你说“异步”，是强调“异步通信”，还是“异步处理”，二字之差可能就会被挑战。如果没有其他上下文信息帮识别“异步”具体指的是通信方式异步，还是服务端处理方式异步，我们应该用词准确避免引发不必要的歧义。写东西写多了，才发现，语言的魅力除了“内涵文字”，“精确表达”才是它最大的魅力。
 
 ```go
 func (s *ServerImpl) serveConnection(c io.ReadWriteCloser) {
@@ -675,7 +682,25 @@ func (s *ServerImpl) serveJSONCodec(conn io.ReadWriteCloser) {
 }
 ```
 
-举一个异步的调试命令disconnect作为参考，注意它和vars的不同：
+以RPCServer.Command为例，这个Command操作是个典型的异步操作：
+
+```go
+// Command interrupts, continues and steps through the program.
+func (s *RPCServer) Command(command api.DebuggerCommand, cb service.RPCCallback) {
+    // 执行对应命令
+    st, err := s.debugger.Command(&command, cb.SetupDoneChan(), cb.DisconnectChan())
+    if err != nil {
+        cb.Return(nil, err)
+        return
+    }
+    var out CommandOut
+    out.State = *st
+    // 通过callback返回结果
+    cb.Return(out, nil)
+}
+```
+
+举一个异步的调试命令disconnect作为参考，注意它和同步命令vars的不同。C/S异步通信交互方式用的是 `RPCClient.Go(...)`，同步通信方式用的是 `RPCClient.Call(...)`：
 
 ```go
 // disconnectCmd
@@ -697,7 +722,7 @@ func (c *RPCClient) ListPackageVariables(filter string, cfg api.LoadConfig) ([]a
 }
 ```
 
-OK! 就介绍到这里。
+OK! 关于调试会话如何建立的，我们就介绍到这里。
 
 ### 本节小结
 
