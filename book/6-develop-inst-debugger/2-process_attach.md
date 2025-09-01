@@ -33,7 +33,7 @@ tracer，指的是向tracee发送调试控制命令的调试器进程，准确�
 
 这也意味着，同一个线程只允许被同一个调试器（debugger backend）实例跟踪调试。关于这点，我们可以通过如下操作对此进行验证。
 
-#### ptrace link
+#### ptrace attach
 
 实际上ptrace_link是一个linux内核函数，顾名思义，它指的就是tracer attach到tracee后建立了跟踪关系。ptrace link一旦建立后，tracee就只允许接收来自link另一端的tracer的ptrace请求。关于这点，我们可以验证下。
 
@@ -62,7 +62,7 @@ Error: process 31060 attached error: operation not permitted
 
 这样也是不被允许的，读者如果感兴趣，可以自行注释掉godbg中的 `runtime.LockOSThread()` 调用，然后重编godbg进行调试活动，执行期间就会收到相关的权限报错信息 No Such Process。
 
-**3）内核中执行ptrace操作时，内核会进行这样的校验**
+**内核中执行ptrace操作时，内核会进行这样的校验**:
 
 file: ./kernel/ptrace.c
 
@@ -100,7 +100,7 @@ static int ptrace_check_attach(struct task_struct *child, bool ignore_state)
 
 如果后续ptrace请求来自非ptrace link建立时的tracer，那么ptrace_check_attach操作就会返回错误码 `-ESRCH`。
 
-#### syscall `ptrace`
+#### ptrace limits
 
 我们的调试器示例是基于Linux平台编写的，调试能力依赖于Linux ptrace。
 
@@ -108,7 +108,11 @@ static int ptrace_check_attach(struct task_struct *child, bool ignore_state)
 
 所以，在我们参考dlv等调试器的实现时会发现，发送调试命令的goroutine通常会调用 `runtime.LockOSThread()` 来绑定一个线程，专门用来向attached tracee发送调试指令（也就是各种ptrace操作）。
 
-> runtime.LockOSThread()，该函数的作用是将调用该函数的goroutine绑定到该操作系统线程上，意味着该操作系统线程只会用来执行该goroutine上的操作，除非该goroutine调用了runtime.UnLockOSThread()解除这种绑定关系，否则该线程不会用来调度其他goroutine。调用这个函数的goroutine也只能在当前线程上执行，不会被调度器迁移到其他线程。see:
+> runtime.LockOSThread()，该函数的作用是将调用该函数的goroutine绑定到该操作系统线程上，意味着该操作系统线程只会用来执行该goroutine上的操作，除非该goroutine调用了runtime.UnLockOSThread()解除这种绑定关系，否则该线程不会用来调度其他goroutine。调用这个函数的goroutine也只能在当前线程上执行，不会被调度器迁移到其他线程。
+>
+> 如果当前goroutine执行结束要退出，绑定的这个线程M也会被销毁。这是当前go runtime设计实现中，除了进程执行技术退出时销毁线程之外，线程M被创建出来后唯一可能被主动销毁的情况。
+>
+> see:
 >
 > ```go
 > package runtime // import "runtime"
@@ -129,7 +133,19 @@ static int ptrace_check_attach(struct task_struct *child, bool ignore_state)
 >
 > 调用了该函数之后，就可以满足tracee对tracer的要求：一旦tracer通过ptrace_attach了某个tracee，后续发送到该tracee的ptrace请求必须来自同一个tracer，tracee、tracer具体指的都是线程。
 
-当我们调用了attach之后，attach返回时，tracee有可能还没有停下来，这个时候需要通过wait方法来等待tracee停下来，并获取tracee的状态信息。当结束调试时，可以通过detach操作，让tracee恢复执行。
+#### wait & ptrace r/w
+
+当我们调用了attach之后，attach返回时，tracee有可能还没有停下来，这个时候需要通过wait方法来等待tracee停下来，并获取tracee的状态信息。
+
+此时我们不光可以使用ptrace的其他内存读写操作、寄存器读写操作等来读取tracee的信息，比如读写内存变量值、读写寄存器信息，甚至一些更加高级的用法，比如显示当前tracee的函数调用栈。
+
+#### ptrace detach
+
+当结束调试时，可以通过detach操作，让tracee恢复执行。
+
+### 代码实现
+
+src详见：golang-debugger-lessons/2_process_attach。
 
 > 下面是man手册关于ptrace操作attach、detach的说明，下面要用到：
 >
@@ -145,10 +161,6 @@ static int ptrace_check_attach(struct task_struct *child, bool ignore_state)
 > Restart the stopped tracee as for PTRACE_CONT, but first de‐
 > tach from it.  Under Linux, a tracee can be detached in this
 > way regardless of which method was used to initiate tracing.
-
-### 代码实现
-
-src详见：golang-debugger-lessons/2_process_attach。
 
 file: main.go
 
@@ -283,13 +295,12 @@ func checkPid(pid int) bool {
     - 如果是attach，那么pid参数应该是个整数，如果不是也直接退出；
 2. 参数正常情况下，开始校验pid进程是否存在，存在则开始尝试attach到tracee，建立ptrace link；
 3. attach之后，tracee并不一定立即就会停下来，需要wait来获取其状态变化情况；
-4. 等tracee停下来之后，我们休眠10s钟，假定此时自己正在干些调试操作一样；
-5. 10s钟之后，tracer尝试detach tracee，解除ptrace link，让tracee继续恢复执行。
+4. 等tracee停下来之后，我们休眠10s钟，假定此时自己正在执行些调试操作；
+5. 10s钟之后调试结束，tracer尝试detach tracee，解除ptrace link，让tracee继续恢复执行。
 
-我们在Linux平台上实现时，需要考虑Linux平台本身的问题，具体包括：
-
-- 检查pid是否对应着一个有效的进程，通常会通过 `exec.FindProcess(pid)`来检查，但是在Unix平台下，这个函数总是返回OK，所以是行不通的。因此我们借助了 `kill -s 0 pid`这一比较经典的做法来检查pid合法性。
-- tracer、tracee进行detach操作的时候，我们是用了ptrace系统调用，这个也和平台有关系，如Linux平台下的man手册有说明，必须确保一个tracee的所有的ptrace requests来自相同的tracer线程，实现时就需要注意这点。
+>我们在Linux平台上实现时，需要考虑Linux平台本身的问题，具体包括：
+>- 检查pid是否对应着一个有效的进程，通常会通过 `exec.FindProcess(pid)`来检查，但是在Unix平台下，这个函数总是返回OK，所以是行不通的。因此我们借助了 `kill -s 0 pid`这一比较经典的做法来检查pid合法性。
+>- tracer、tracee进行detach操作的时候，我们是用了ptrace系统调用，这个也和平台有关系，如Linux平台下的man手册有说明，必须确保一个tracee的所有的ptrace requests来自相同的tracer线程，实现时就需要注意这点。
 
 ### 代码测试
 
@@ -421,7 +432,7 @@ func main() {
 }
 ```
 
-因为go程序天然是多线程程序，sysmon、gc等等都可能会用到独立线程，我们attach时只是简单的attach了pid对应进程的某一个线程，其他的线程仍然是没有被调试跟踪的，是可以正常执行的。
+因为go程序天然是多线程程序，sysmon、gc等等都可能会用到独立线程，我们attach时只是简单的`attach <pid>`只是跟踪了进程中的某个线程，其他的线程仍然是没有被调试跟踪的，是可以正常执行的。
 
 那我们ptrace时指定了pid到底attach了哪一个线程呢？**这个pid对应的线程难道不是执行main.main的线程吗？先回答读者问题：没错，还真不一定是！**
 
@@ -429,9 +440,7 @@ func main() {
 
 在Linux下，线程其实是通过轻量级进程（LWP）来实现的，这里的ptrace参数pid实际上是线程对应的LWP的进程id。只对进程pid进行ptrace attach操作，作用是，这个pid对应的线程会被调试跟踪，对于天然就是多线程的go进程而言，其他线程并没有被处理，它们可能正在执行，或者被其他的tracers跟踪，都是有可能的。
 
-
-
-被调试进程中如果有其他线程，仍然是可以运行的，这就是为什么我们某些读者发现有时候被调试程序仍然在不停输出，因为tracer并没有在main.main内部设置断点，执行该函数的main goroutine可能由其他未被trace的线程执行，所以仍然可以看到程序不停输出。
+被调试进程中如果有其他线程，仍然是可以运行的，这就是为什么我们某些读者发现有时候被调试程序仍然在不停输出，因为tracer并没有在main.main内部设置断点，执行该函数的main goroutine可能由其他未被跟踪的线程执行，所以仍然可以看到程序不停输出。
 
 #### 问题：go进程中线程是如何创建出来的？
 
@@ -465,9 +474,11 @@ func newosproc(mp *m) {
 
 >ps: 关于clone选项的更多作用，您可以通过查看man手册 `man 2 clone`来了解。
 
-#### 问题：想让执行main.main的线程停下来？
+#### 问题：想确保执行main.main的线程停下来？
 
-如果想让被调试进程停止执行，调试器需要枚举进程中包含的线程并对它们逐一进行ptrace attach操作。具体到Linux，可以列出 `/proc/<pid>/task`下的所有线程的pid (LWP的pid，而非进程内线程编号tid)。
+在不考虑main.main->forloop位置设断点的情况下，如果只是想让所有线程在attach时都能尽快停下来，需要采用All-stop Mode。
+
+调试器需要在attach成功后，枚举进程中包含的线程并对它们逐一进行ptrace attach操作。具体到Linux，可以列出 `/proc/<pid>/task`下的所有线程的pid (LWP的pid，而非进程内线程编号tid)。
 
 ```go
 func (p *DebuggedProcess) loadThreadList() ([]int, error) {
@@ -486,7 +497,9 @@ func (p *DebuggedProcess) loadThreadList() ([]int, error) {
 }
 ```
 
-当拿到进程内所有线程时，对每个线程逐个执行ptrace attach就可以了。
+对进程内每个线程逐个执行ptrace attach，所有线程也就都停下来了。All-stop Mode很重要，这里也算是提前了解下。
+
+>调试很重要的一点就是，在可疑代码处先提前设置好断点，执行到此位置的线程必须停下来，为了方便调试其他线程也要停下来。如果没有提前设置好断点，可疑位置代码已经执行过了，就只能重新开始调试会话了。调试活动通常是带有目的性的调试，而不是漫无目的地闲逛，这样调试效率才会高。
 
 #### 问题：如何判断进程是否是多线程程序？
 
@@ -606,4 +619,8 @@ man 2 waitpid
 
 ### 本节小结
 
-attach操作是调试器执行调试操作的第一步，这里我们除了介绍如何attach进程，还详细解释了ptrace link的概念以及限制，并从内核层面解释了这种限制，以及我们使用go语言这种原生多线程程序情况下如何解决这个问题。我们还结合go语言启动流程，解释了一些go开发者不太了解的GMP调度问题（比如main.main不一定运行在main thread），并进一步说明了为什么attach go进程后main.main中的循环仍然在执行。此外，我们还介绍了如何判断进程是否是多线程程序，以及如何枚举进程中的线程LWP pid等操作。通过这些内容，我们解释了一些非常有价值的基础问题，为后续深入理解调试器的实现和原理打下了坚实的基础。
+attach操作是调试器进行调试的第一步。本节不仅介绍了如何attach到目标进程，还详细阐述了ptrace link的概念及其限制，并从内核层面分析了这些限制的原因。同时，我们还讨论了Go语言作为原生多线程程序，如何借助All-stop Mode实现对多个线程的同步跟踪与观察。
+
+针对attach目标进程后，main.main中的循环依然在执行的现象，我们结合Go的协程编程模型，深入讲解了其多线程调度机制，并结合Go的启动流程，解释了初学者常见的GMP调度疑惑（例如main.main不一定运行在主线程上）。此外，我们还介绍了如何枚举进程中的线程列表并实现All-stop Mode，以及如何判断一个进程是否为多线程程序。
+
+通过这些内容，我们梳理并解答了调试器实现过程中一些基础但至关重要的问题，为后续深入理解调试器的实现原理打下了坚实的基础。
