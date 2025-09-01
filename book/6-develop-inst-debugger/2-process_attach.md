@@ -29,7 +29,7 @@ multiclient访问debugger backend时会介绍。
 
 tracer，指的是向tracee发送调试控制命令的调试器进程，准确地说，也是线程。
 
-有时会使用术语ptrace link，实际上是指tracer通过ptrace系统调用（如PTRACE_ATTACH）成功跟踪了tracee，此后tracer就可以向tracee发送各种调试命令。需要注意的是，建立跟踪关系后，tracee期望后续所有的ptrace请求都来自同一个tracer线程，否则会被内核拒绝或行为未定义。因此，调试器（debugger backend）实现时要注意，attach后后续对该tracee的所有ptrace操作都要在该ptrace link对应的tracer线程发起。
+有时会使用术语ptrace link，实际上是指tracer通过ptrace系统调用（如PTRACE_ATTACH）成功跟踪了tracee，此后tracer就可以向tracee发送各种调试命令。需要注意的是，建立跟踪关系后，tracee期望后续所有的ptrace请求都来自同一个tracer线程，否则会被内核拒绝或行为未定义。因此，调试器（debugger backend）实现时要注意，attach后后续对该tracee的所有ptrace操作都要在主动建立该ptrace link的tracer线程中发起。
 
 这也意味着，同一个线程只允许被同一个调试器（debugger backend）实例跟踪调试。关于这点，我们可以通过如下操作对此进行验证。
 
