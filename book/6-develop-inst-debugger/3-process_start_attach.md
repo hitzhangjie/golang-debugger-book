@@ -153,7 +153,7 @@ static int exec_binprm(struct linux_binprm *bprm)
 }
 ```
 
-这里 `exec_binprm(bprm)`内部调用了 `ptrace_event(PTRACE_EVENT_EXEC, message)`，后者将对进程ptrace状态进行检查，一旦发现进程ptrace标记位设置了PT_PTRACED，内核将给进程发送一个SIGTRAP信号，由此转入SIGTRAP的信号处理逻辑。
+这里 `exec_binprm(bprm)`内部调用了 `ptrace_event(PTRACE_EVENT_EXEC, message)`，后者将对进程ptrace状态进行检查，一旦发现进程ptrace标记位设置了PT_PTRACED，内核将给进程发送一个SIGTRAP信号，由此转入SIGTRAP的信号处理逻辑。或者如果发现当前tracee上被tracer设置了标记 `current->ptrace & PTRACE_EVENT_FLAG(PTRACE_EVENT_EXEC) == TRUE`，此时就会执行 `ptrace_notify((event<<8)|SIGTRAP)` 来给tracee发送一个信号SIGTRAP。
 
 **file: include/linux/ptrace.h**
 
@@ -181,102 +181,100 @@ static inline void ptrace_event(int event, unsigned long message)
 }
 ```
 
-在Linux下面，SIGTRAP信号将使得进程暂停执行，并向父进程通知自身的状态变化，父进程通过wait系统调用来获取子进程状态的变化信息。
+在Linux下面，SIGTRAP信号将使得进程暂停执行，并向父进程通知自身的状态变化，然后父进程通过wait系统调用来获取子进程状态的变化信息。ptrace_event中这两个分支都可以实现对tracee通知SIGTRAP的目的，那么结合我们的示例来看，我们是通过子进程执行`ptrace(PTRACE_TRACEME, ...)`操作来实现的，究竟是执行的哪一个分支呢？实际上是第2个分支。
+
+我们先展开第1个分支来看看：
+- 第1个分支看上去是内核更推崇的一种方式，即tracer主动调用 `ptrace(PTRACE_SETOPTIONS，...)` 来设置PTRACE_EVENT_EXEC，可以在进程启动前、启动后进行设置；
+- 第2个分支这是对经典ptraceme操作的兼容，即子进程启动后在exec替换掉代码段之前，先自己执行 `ptrace(PTRACE_TRACEME, ...)` 来设置current->ptrace = PT_TRACED，并且此时tracer此时没有通过1）中操作对后续tracee exec调用进行跟踪的话，那么就会进入第2个分支；
+
+ps: 总结下来其实就是，基本上调试器希望跟踪tracee中后续的exec族函数调用时，才需要`ptrace(PTRACE_SETOPTIONS，...)`显示设置下PTRACE_EVENT_EXEC。对于希望启动后就立即跟踪这种场景而言，都是需要调试器启动子进程时给个选项ptrace=true，然后fork出子进程后，检查有没有该选项，有的话就执行ptraceme操作。前者会进入第一个分支处理，而后者必然进入第2个分支处理。其实看到最后，殊途同归，都是通过信号SIGTRAP去通知tracee，进而信号处理函数（SIGTRAP特殊由内核处理）中唤醒tracer。
+
+OK，我们也粗略扫一眼分支1的处理逻辑，然后在看下分支2的处理逻辑。
+
+##### 分支1：ptrace_event_enabled(task, PTRACE_EVENT_EXEC)
 
 ```bash
 |-> ptrace_notify
-    |-> ptrace_do_notify
-        |-> ptrace_stop
-            |-> do_notify_parent_cldstop
+|   |-> ptrace_do_notify
+|   |   |-> ptrace_stop
+|   |   |   |   // 设置一个不可调度状态
+|   |   |   |-> set_special_state(TASK_TRACED);
+|   |   |   |   // 通知tracer
+|   |   |   |-> do_notify_parent_cldstop(current, true, why)
+|   |   |   |      kernel_siginfo, info.si_signo=SIGCHLD, info.si_code = CLD_STOPPED 
+|   |   |   |      __group_send_sig_info(SIGCHLD, &info, parent);
+|   |   |   |      __wake_up_parent(tsk, parent);
+|   |   |   |   // 禁用抢占，不允许被调度
+|   |   |   |-> freezable_schedule()
 ```
 
-让我们最后看一眼这里的通知tracer或其真正的父进程的函数 ptrace_stop -> do_notify_parent_cldstop() 是如何实现的：
+ptrace_do_notify -> ptrace_stop -> do_notify_parent_cldstop()，这里的tracee通知tracer（或者父进程）我已经停下来了，会发送信号 SIGCHLD 的方式来通知tracer，但是这里的SIGCHLD不一定会生成，比如tracer实现中故意屏蔽SIGCHLD信号。所以，内核还有更保险的一个做法，`__wake_up_parent(task, parent`，在ptrace link关系中，这里的tsk就是tracee，parent就是tracer。
+
+##### 分支2：event == PTRACE_EVENT_EXEC
+
+分支2的情况下，要先send_sig发送信号SIGTRAP给tracee，然后内核中的信号处理逻辑执行，专门对ptraced状态的进程的信号执行特殊处理，比如暂停tracee执行并通知唤醒tracer。下面来看看进一步的细节，这个在命中断点时，处理流程也是近似的。
+
+```bash
+|-> send_sig(SIGTRAP, current, 0)
+    |-> send_sig_info(sig, __si_special(priv), p) 
+        |-> do_send_sig_info(sig, info, p, PIDTYPE_PID)
+            |-> send_signal(sig, info, p, type)
+                |-> __send_signal(sig, info, t, type, force)
+                    |-> signalfd_notify(t, sig) // linux内核允许通过fd来收信号
+                    |-> sigaddset(&pending->signal, sig)
+                    |-> complete_signal(sig, t, type);
+```
+
+Linux中信号分为同步信号和异步信号：
+
+- 同步信号是指令执行时就同步生成的，表示发生了严重事件，通常是不能耽搁处理的，也不建议捕获后自定义信号处理函数，比如SIGSEGV、SIGTRAP等，因为处理不当可能问题更大。
+  ps:  但是go运行时有捕获部分SIGSEGV将其转为panic进行处理。
+- 异步信号，这个是程序执行期间由外部操作生成的，如Ctrl+C生成的SIGINT、SIGTERM、SIGQUIT等，这类信号的处理等到程序执行系统调用返回用户态前处理即可，是可以捕获并自定义信号处理函数的；
+
+Linux定义的同步信号主要有下面几个，其中就有我们关心的SIGTRAP：
 
 ```c
-static int ptrace_stop(int exit_code, int why, unsigned long message,
-               kernel_siginfo_t *info)
-    __releases(&current->sighand->siglock)
-    __acquires(&current->sighand->siglock)
-{
-    ...
-
-    /*
-     * Notify parents of the stop.
-     *
-     * While ptraced, there are two parents - the ptracer and
-     * the real_parent of the group_leader.  The ptracer should
-     * know about every stop while the real parent is only
-     * interested in the completion of group stop.  The states
-     * for the two don't interact with each other.  Notify
-     * separately unless they're gonna be duplicates.
-     */
-    if (current->ptrace)
-        do_notify_parent_cldstop(current, true, why);
-    if (gstop_done && (!current->ptrace || ptrace_reparented(current)))
-        do_notify_parent_cldstop(current, false, why);
-    ...
-}
-
-/**
- * do_notify_parent_cldstop - notify parent of stopped/continued state change
- * @tsk: task reporting the state change
- * @for_ptracer: the notification is for ptracer
- * @why: CLD_{CONTINUED|STOPPED|TRAPPED} to report
- *
- * Notify @tsk's parent that the stopped/continued state has changed.  If
- * @for_ptracer is %false, @tsk's group leader notifies to its real parent.
- * If %true, @tsk reports to @tsk->parent which should be the ptracer.
- *
- * CONTEXT:
- * Must be called with tasklist_lock at least read locked.
- */
-static void do_notify_parent_cldstop(struct task_struct *tsk,
-                     bool for_ptracer, int why)
-{
-    ...
-    if (for_ptracer) {
-        parent = tsk->parent;
-    } else {
-        tsk = tsk->group_leader;
-        parent = tsk->real_parent;
-    }
-
-    clear_siginfo(&info);
-    info.si_signo = SIGCHLD;
-    info.si_errno = 0;
-    info.si_pid = task_pid_nr_ns(tsk, task_active_pid_ns(parent));
-    info.si_uid = from_kuid_munged(task_cred_xxx(parent, user_ns), task_uid(tsk));
-    info.si_utime = nsec_to_clock_t(utime);
-    info.si_stime = nsec_to_clock_t(stime);
-
-    info.si_code = why;
-    switch (why) {
-    case CLD_CONTINUED:
-        info.si_status = SIGCONT;
-        break;
-    case CLD_STOPPED:
-        info.si_status = tsk->signal->group_exit_code & 0x7f;
-        break;
-    case CLD_TRAPPED:
-        info.si_status = tsk->exit_code & 0x7f;
-        break;
-    default:
-        BUG();
-    }
-
-    sighand = parent->sighand;
-    if (sighand->action[SIGCHLD-1].sa.sa_handler != SIG_IGN &&
-        !(sighand->action[SIGCHLD-1].sa.sa_flags & SA_NOCLDSTOP))
-        send_signal_locked(SIGCHLD, &info, parent, PIDTYPE_TGID);
-    /*
-     * Even if SIGCHLD is not generated, we must wake up wait4 calls.
-     */
-    __wake_up_parent(tsk, parent);
-    ...
-}
+#define SYNCHRONOUS_MASK                                     \
+    (sigmask(SIGSEGV) | sigmask(SIGBUS) | sigmask(SIGILL) |  \
+     sigmask(SIGTRAP) | sigmask(SIGFPE) | sigmask(SIGSYS))
 ```
 
-这里的tracee通知tracer（或者父进程）我已经停下来了，会发送信号 SIGCHLD 的方式来通知tracer，但是这里的SIGCHLD不一定会生成，比如tracer实现中故意屏蔽SIGCHLD信号。所以，内核还有更保险的一个做法，`__wake_up_parent(task, parent`，在ptrace link关系中，这里的tsk就是tracee，parent就是tracer。
+当前tracee线程是在执行系统调用execve哦，执行期间发现有task_struct->ptraced=true标识，然后内核为其生成了一个SIGTRAP信号，当tracee线程从系统调用返回用户程序之前，会有一个契机执行一遍信号处理。其实，就是一个get_signal、handle_signal的过程。对于SIGTRAP比较特殊，它是同步信号，会被优先出队并进行处理，并且会停止当前tracee调度，并通知唤醒tracer。
+
+```bash
+arch_do_signal_or_restart(struct pt_regs *regs, bool has_signal)
+|-> get_signal
+|   |   // 同步信号优先出队进行处理，比如SIGTRAP
+|   |-> signr = dequeue_synchronous_signal(&ksig->info);
+|   |
+|   |   // 如果是ptrace SIGTRAP，那么立即去执行处理，
+|   |   // - 先暂停tracee执行，
+|   |   // - 再通知tracer
+|   |-> if (unlikely(current->ptrace) && signr != SIGKILL)
+|   |     signr = ptrace_signal(signr, &ksig->info);
+|   |     |-> ptrace_stop(signr, CLD_TRAPPED, 0, info);
+|   |     |   |   // 设置一个不可调度状态
+|   |     |   |-> set_special_state(TASK_TRACED);
+|   |     |   |   // 通知tracer
+|   |     |   |-> do_notify_parent_cldstop(current, true, why)
+|   |     |   |      kernel_siginfo, info.si_signo=SIGCHLD, info.si_code = CLD_STOPPED 
+|   |     |   |      __group_send_sig_info(SIGCHLD, &info, parent);
+|   |     |   |      __wake_up_parent(tsk, parent);
+|   |     |   |   // 禁用抢占，不允许被调度
+|   |     |   |-> freezable_schedule()
+|   |-> // 如果是其他信号类型，且sig_handler != IGN，则转handle_signal执行
+|
+|-> handle_signal(struct ksignal *ksig, struct pt_regs *regs)
+|   |   // 设置signal handler执行需要的栈帧
+|   |-> failed = setup_rt_frame(ksig, oldset, regs)
+|   |   // 切换上下文，执行对应的signal handler
+|   |-> fpu__clear_user_states(fpu) // enter signal handler
+|   |   // 执行信号处理函数结束
+|   |-> signal_setup_done(failed, ksig, stepping);
+```
+
+OK，大致就是这样一个流程，大家能消化的了最好，消化不了知道个大概也不影响我们继续本节内容。
+##### tracer从wait4中被唤醒
 
 那么tracer（或者父进程）wait4 的实现，是怎么实现的呢? 我们这里也进行了一个精简版的总结：
 
@@ -334,7 +332,6 @@ static long do_wait(struct wait_opts *wo)
     remove_wait_queue(&current->signal->wait_chldexit, &wo->child_wait);
     return retval;
 }
-
 ```
 
 父进程也可通过 `ptrace(PTRACE_COND, pid, ...)` 操作来恢复子进程执行，使其继续执行execve加载的新程序。
@@ -347,9 +344,9 @@ static long do_wait(struct wait_opts *wo)
 
 重新初始化完成之前内核会将进程状态调整为“**UnInterruptible Wait**”阻止其被调度、响应外部信号，完成之后，再将其调整为“**Interruptible Wait**”，即可以被信号唤醒，意味着如果有信号到达，则允许进程对信号进行处理。
 
-接下来，如果该进程没有特殊的ptrace标记位，子进程状态将被更新为可运行等待下次调度。当内核发现这个子进程ptrace标记位为PT_PTRACED时，则会执行这样的逻辑：内核给这个子进程发送了一个**SIGTRAP**信号，该信号将被追加到进程的pending信号队列中，并尝试唤醒该进程，当内核任务调度器调度到该进程时，发现其有pending信号到达，将执行SIGTRAP的信号处理逻辑，只不过SIGTRAP比较特殊是内核代为处理。
+接下来，如果该进程没有特殊的ptrace标记位，子进程状态将被更新为可运行等待下次调度。当内核发现这个子进程ptrace标记位为PT_PTRACED时，则会执行这样的逻辑：内核给这个子进程发送了一个**SIGTRAP**信号，该信号将被追加到进程的pending信号队列中，并尝试唤醒该进程，当内核任务调度器调度到该进程时，或者当前进程执行系统调用返回用户态之前，发现其有pending信号到达，将执行SIGTRAP的信号处理逻辑，只不过SIGTRAP比较特殊是内核代为处理。
 
-**SIGTRAP信号处理具体做什么呢？**它会暂停目标进程的执行，并通过SIGCHLD信号向父进程通知自己的状态变化。注意，父进程调用完 `ptrace(PTRACE_ATTACH, ...)` 这个操作并不会等待到tracee停下来，父进程通过系统调用wait尝试获取进程状态时，此时tracee可能还没停下来。tracer调用wait会将tracer状态变为 “**Interruptible Wait**”，当前tracer会被加入tracee进程状态变化的等待队列里。直到前面讲的内核处理tracee的SIGTRAP信号后将其停下来，然后发送SIGCHLD信号通知tracer将tracer唤醒。
+**SIGTRAP信号处理具体做什么呢？**它会暂停目标进程的执行，并通过SIGCHLD信号向父进程通知自己的状态变化。注意，父进程调用完 `ptrace(PTRACE_ATTACH, ...)` 这个操作并不会等待到tracee停下来，父进程通过系统调用wait尝试获取进程状态时，此时tracee可能还没停下来。tracer调用wait会将tracer状态变为 “**Interruptible Wait**”，当前tracer会被加入tracee进程状态变化的等待队列里。直到前面讲的内核处理tracee的SIGTRAP信号后将其停下来，然后发送SIGCHLD信号通知tracer将tracer唤醒。但是发送SIGCHLD信号的方式不可靠，因为tracer进程有可能屏蔽该信号，更可靠的做法还是__wait_up_parent(...)方法直接将tracer唤醒。
 
 此时，tracer被唤醒，wait就可以返回子进程tracee的状态变化情况。tracer发现子进程tracee已经停下来（并且是因为SIGTRAP停下来），就可以发起后续调试命令对应的ptrace操作，如读写内存数据。
 
@@ -440,6 +437,34 @@ func main() {
 }
 ```
 
+其实这里通过设置进程启动选项ptrace=true的方式，到了标准库代码后，启动时也是类似我们c中处理的方式，最终也会进入发送信号send_sig分支发送SIGTRAP给tracee。
+
+```go
+func forkAndExecInChild1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *ProcAttr, sys *SysProcAttr, pipe int) (pid uintptr, pidfd int32, err1 Errno, mapPipe [2]int, locked bool) {
+    // set clone flags
+    flags = sys.Cloneflags
+    if sys.Cloneflags&CLONE_NEWUSER == 0 && sys.Unshareflags&CLONE_NEWUSER == 0 {
+        flags |= CLONE_VFORK | CLONE_VM
+    }
+    ...
+
+    // clone child process
+    if clone3 != nil {
+        pid, err1 = rawVforkSyscall(_SYS_clone3, uintptr(unsafe.Pointer(clone3)), unsafe.Sizeof(*clone3), 0)
+    } else {
+        pid, err1 = rawVforkSyscall(SYS_CLONE, flags, 0, uintptr(unsafe.Pointer(&pidfd)))
+    }
+    ...
+
+    // Enable tracing if requested.
+    // Do this right before exec so that we don't unnecessarily trace the runtime
+    // setting up after the fork. See issue #21428.
+    if sys.Ptrace {
+        _, _, err1 = RawSyscall(SYS_PTRACE, uintptr(PTRACE_TRACEME), 0, 0)
+        ...
+    }
+```
+
 ### 代码测试
 
 下面我们针对调整后的代码进行测试：
@@ -472,7 +497,7 @@ godbg将启动ls进程，并通过PTRACE_TRACEME让内核把ls进程停下（通
 
 `godbg exec <prog>` 命令现在一切正常了！
 
-> NOTE: 示例中程序退出时，没有显示调用 `ptrace(PTRACE_COND,...)` 来恢复tracee的执行。其实tracer退出时，如果traced tracee还在，内核会自动解除tracee的跟踪状态。
+> NOTE: 示例中程序退出时，没有显示调用 `ptrace(PTRACE_COND,...)` 来恢复tracee的执行。其实tracer退出时，如果某个目标线程还处于被跟踪状态，内核会自动解除tracee的跟踪状态，还它自由。
 >
 > 如果tracee是我们主动启动的（不是attach的），那么在调试器退出时应该kill掉该进程（或者允许选择kill进程或让其继续执行），而不应该默认让其继续执行。
 
@@ -500,10 +525,11 @@ godbg将启动ls进程，并通过PTRACE_TRACEME让内核把ls进程停下（通
 
 ### 本节小结
 
-第1节介绍了调试器如何启动程序看，第2节介绍了如何attach运行中的进程，本节介绍的是如何在启动时立即发起跟踪，以及如何跟踪后续新建线程。
+第1节介绍了调试器如何启动程序看，第2节介绍了如何attach运行中的进程，本节介绍的是如何在启动时立即发起跟踪，以及如何继续跟踪未来进程新建的线程。
 
-另外对于多线程调试，如果希望新创建出来的线程自动被trace，需要tracer执行系统调用 `syscall.PtraceSetOptions(traceePID, syscall.PTRACE_O_TRACECLONE)` 来完成对tracee的设置，这样当tracee内部新建线程时，内核会自动处理让其停下来并通知tracer。另外为了更好地调试，一般是tracer launch tracee之后立即attach tracee，然后再立即对tracee设置PTRACE_O_TRACECLONE选项，这样就万无一失了，tracee以及其启动后创建的线程都会被纳入tracer跟踪之下。
+对于多线程调试，如果希望新创建出来的线程自动被trace，需要tracer执行系统调用 `syscall.PtraceSetOptions(traceePID, syscall.PTRACE_O_TRACECLONE)` 来完成对tracee的设置，这样当tracee内部新建线程时，内核会自动处理让其停下来并通知tracer。另外为了更好地调试，一般是tracer launch tracee之后立即attach tracee，然后再立即对tracee设置PTRACE_O_TRACECLONE选项，这样就万无一失了，tracee以及其启动后创建的线程都会被纳入tracer跟踪之下。
 
+读完本节内容之后，相信读者朋友又了解了些调试器开发、Linux操作系统信号处理方面的宝贵经验、教训。下节内容再见。
 ### 参考内容
 
 - Playing with ptrace, Part I, Pradeep Padala, https://www.linuxjournal.com/article/6100
