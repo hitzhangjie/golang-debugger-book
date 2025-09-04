@@ -104,15 +104,15 @@ static int ptrace_check_attach(struct task_struct *child, bool ignore_state)
 
 我们的调试器示例是基于Linux平台编写的，调试能力依赖于Linux ptrace。
 
-通常，如果调试器也是多线程程序，就要注意ptrace的约束，当tracer、tracee建立了跟踪关系后，tracee（被跟踪线程）后续接收到的多个调试命令应该来自同一个tracer（跟踪线程），意味着调试器实现时要将发送调试命令给tracee的task绑定到特定线程上。更具体地讲，这里的task可以是goroutine。
+通常，如果调试器也是多线程程序，就要注意ptrace的约束，当tracer、tracee建立了跟踪关系后，tracee（被跟踪线程）后续接收到的多个调试命令应该来自同一个tracer（跟踪线程），意味着调试器实现时要将发送调试命令给tracee的task (goroutine) 绑定到tracer对应的特定线程上。
 
-所以，在我们参考dlv等调试器的实现时会发现，发送调试命令的goroutine通常会调用 `runtime.LockOSThread()` 来绑定一个线程，专门用来向attached tracee发送调试指令（也就是各种ptrace操作）。
+所以，在我们参考dlv等调试器的实现时会发现，发送调试命令的goroutine通常会调用 `runtime.LockOSThread()` 来绑定一个线程，后续ptrace请求均通过这个goroutine、这个thread来发送。
 
 > runtime.LockOSThread()，该函数的作用是将调用该函数的goroutine绑定到该操作系统线程上，意味着该操作系统线程只会用来执行该goroutine上的操作，除非该goroutine调用了runtime.UnLockOSThread()解除这种绑定关系，否则该线程不会用来调度其他goroutine。调用这个函数的goroutine也只能在当前线程上执行，不会被调度器迁移到其他线程。
 >
-> 如果当前goroutine执行结束要退出，绑定的这个线程M也会被销毁。这是当前go runtime设计实现中，除了进程执行技术退出时销毁线程之外，线程M被创建出来后唯一可能被主动销毁的情况。
+> 如果这个goroutine执行结束后退出，绑定的这个线程M也会被销毁。这是当前go runtime设计实现中，除了进程退出时销毁线程之外的唯一一个线程M被创建出来后又销毁的情况。换言之，如果你的程序执行太多阻塞系统调用创建大量线程后，这些线程是不会被运行时主动销毁的。
 >
-> see:
+> ok，我们来看下这个runtime.LockOSThread()的文档注释，see:
 >
 > ```go
 > package runtime // import "runtime"
@@ -130,8 +130,8 @@ static int ptrace_check_attach(struct task_struct *child, bool ignore_state)
 >     A goroutine should call LockOSThread before calling OS services or non-Go
 >     library functions that depend on per-thread state.
 > ```
->
-> 调用了该函数之后，就可以满足tracee对tracer的要求：一旦tracer通过ptrace_attach了某个tracee，后续发送到该tracee的ptrace请求必须来自同一个tracer，tracee、tracer具体指的都是线程。
+
+调用了该函数之后，就可以满足tracee对tracer的要求：一旦tracer通过ptrace_attach了某个tracee，后续发送到该tracee的ptrace请求必须来自同一个tracer (tracee、tracer具体指的都是线程)。
 
 #### wait & ptrace r/w
 
