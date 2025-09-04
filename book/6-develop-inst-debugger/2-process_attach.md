@@ -131,7 +131,7 @@ static int ptrace_check_attach(struct task_struct *child, bool ignore_state)
 >     library functions that depend on per-thread state.
 > ```
 
-调用了该函数之后，就可以满足tracee对tracer的要求：一旦tracer通过ptrace_attach了某个tracee，后续发送到该tracee的ptrace请求必须来自同一个tracer (tracee、tracer具体指的都是线程)。
+调用了该函数之后，就可以满足tracee对tracer的要求：一旦tracer通过ptrace_attach了某个tracee，后续发送到该tracee的ptrace请求必须来自同一个tracer (tracee、tracer具体指的都是线程)。否则会遇到错误 `-ESRCH (No Such Process)`。
 
 #### wait & ptrace r/w
 
@@ -376,43 +376,7 @@ process 1311 detach succ
 
 ### 问题探讨
 
-为了让读者能快速掌握核心调试原理，示例里我们有意简化了示例，如被调试进程是一个单线程程序，如果是一个多线程程序结果会不会不一样呢？会!
-
-#### 问题：如何绑定goroutine与thread？
-
-发送ptrace attach请求的线程，与被调试线程二者之间建立了ptrace link，它们的角色分别为tracer、tracee，后续tracee期望收到的所有ptrace请求都来自这个tracer。因为这个原因，天然就是多线程的go程序就需要保证，后续发送ptrace请求的goroutine必须始终如一执行在同一个线程上。
-
-`runtime.LockOSThread()` 就是为了向go运行时传达这种限制，给我把当前goroutine固定在当前thread上调度:
-
-```go
-// LockOSThread wires the calling goroutine to its current operating system thread.
-// The calling goroutine will always execute in that thread,
-// and no other goroutine will execute in it,
-// until the calling goroutine has made as many calls to
-// [UnlockOSThread] as to LockOSThread.
-// If the calling goroutine exits without unlocking the thread,
-// the thread will be terminated.
-//
-// All init functions are run on the startup thread. Calling LockOSThread
-// from an init function will cause the main function to be invoked on
-// that thread.
-//
-// A goroutine should call LockOSThread before calling OS services or
-// non-Go library functions that depend on per-thread state.
-//
-//go:nosplit
-func LockOSThread() {
-    ...
-}
-```
-
-当goroutine中调用该函数后：
-
-1. 调用该函数的goroutine只能被go运行时调度执行在当前线程四大行；
-2. 且不允许进其他goroutine被调度在当前线程上；
-3. 当调用该函数的goroutine退出时，存在调度绑定关系的线程也会被销毁。
-
-调试器中必须调用该函数，才能符合linux内核对ptrace请求的合法性校验，否则会遇到错误 `-ESRCH (No Such Process)`。
+为了让读者能快速掌握核心调试原理，示例里我们有意简化了示例，示例中被调试进程是一个单线程程序，如果是一个多线程程序结果会不会不一样呢？会!
 
 #### 问题：多线程程序attach后仍在运行？
 
@@ -432,15 +396,14 @@ func main() {
 }
 ```
 
-因为go程序天然是多线程程序，sysmon、gc等等都可能会用到独立线程，我们attach时只是简单的`attach <pid>`只是跟踪了进程中的某个线程，其他的线程仍然是没有被调试跟踪的，是可以正常执行的。
+解释这个事情，有几个事实需要阐明：
+1. go程序天然是多线程程序，sysmon、gc等等都可能会用到独立线程，我们执行 `attach <pid>` 只是跟踪了进程中的主线程，其他的线程仍然是没有被调踪的，是可以继续执行的。
+2. go运行时采用GMP调度机制，同一个goroutine在生命周期能可能会在多个thread上先后执行一部分代码逻辑，比如某个goroutine执行阻塞系统调用后，会创建出新的线程，如果系统调用返回后，goroutine也要恢复执行，此时有可能会去找之前的thread，但是根据调度负载情况、原先M、原先P空闲情况，非常有可能这个goroutine会在另一个thread中继续执行，而该thread没有被调试器跟踪，依然可以继续执行。
+3. 具体到我们示例中，ptrace指定的pid到底是主线程pid，main.main是main goroutine的入口函数，但是main goroutine却不一定在main thread中执行。
 
-那我们ptrace时指定了pid到底attach了哪一个线程呢？**这个pid对应的线程难道不是执行main.main的线程吗？先回答读者问题：没错，还真不一定是！**
+附录《go runtime: go程序启动流程》中对go程序的启动流程做了分析，可以帮读者朋友打消这里runtime.main、main.main 在 main goroutine、main thread 中执行细节的一些疑虑。**go程序中函数main.main是由main goroutine来执行的，但是main goroutine并没有和main thread存在任何默认的绑定关系**。所以认为main.main一定运行在pid对应的主线程上是错误的（联想GMP调度机制，main goroutine一开始就不一定运行在主线程上，而且也没有上述提及的runtime.LockOSThread()会一直保证运行在特定线程上）！
 
-附录《go runtime: go程序启动流程》中对go程序的启动流程做了分析，可以帮读者朋友打消这里runtime.main、main.main 在 main goroutine、main thread 中执行细节的一些疑虑。**go程序中函数main.main是由main goroutine来执行的，但是main goroutine并没有和main thread存在任何默认的绑定关系 (main)**。所以认为main.main一定运行在参数pid对应的主线程上是错误的 （没有上述提及的runtime.LockOSThread()的绑定操作）！
-
-在Linux下，线程其实是通过轻量级进程（LWP）来实现的，这里的ptrace参数pid实际上是线程对应的LWP的进程id。只对进程pid进行ptrace attach操作，作用是，这个pid对应的线程会被调试跟踪，对于天然就是多线程的go进程而言，其他线程并没有被处理，它们可能正在执行，或者被其他的tracers跟踪，都是有可能的。
-
-被调试进程中如果有其他线程，仍然是可以运行的，这就是为什么我们某些读者发现有时候被调试程序仍然在不停输出，因为tracer并没有在main.main内部设置断点，执行该函数的main goroutine可能由其他未被跟踪的线程执行，所以仍然可以看到程序不停输出。
+在Linux下，线程其实是通过轻量级进程（LWP）来实现的，这里的ptrace参数pid实际上是主线程对应的LWP的pid。只对这个pid进行ptrace attach操作，作用是，这个pid对应的线程会被跟踪，但是进程中的其他线程并没有被跟踪，它们仍然可以继续执行。这就是为什么我们自己写个go程序验证下attach功能，会发现被调试程序仍然在不停输出，因为tracer并没有在main.main内部设置断点，执行该函数main.main的main goroutine可能由其他未被跟踪的线程执行。
 
 #### 问题：go进程中线程是如何创建出来的？
 
@@ -478,7 +441,7 @@ func newosproc(mp *m) {
 
 在不考虑main.main->forloop位置设断点的情况下，如果只是想让所有线程在attach时都能尽快停下来，需要采用All-stop Mode。
 
-调试器需要在attach成功后，枚举进程中包含的线程并对它们逐一进行ptrace attach操作。具体到Linux，可以列出 `/proc/<pid>/task`下的所有线程的pid (LWP的pid，而非进程内线程编号tid)。
+调试器需要在attach主线程成功后，枚举进程包含的所有线程，并对它们逐一进行ptrace attach操作。Linux下可以列出 `/proc/<pid>/task` 下的所有线程的pid (LWP的pid，而非进程内线程编号tid)。
 
 ```go
 func (p *DebuggedProcess) loadThreadList() ([]int, error) {
@@ -499,7 +462,7 @@ func (p *DebuggedProcess) loadThreadList() ([]int, error) {
 
 对进程内每个线程逐个执行ptrace attach，所有线程也就都停下来了。All-stop Mode很重要，这里也算是提前了解下。
 
->调试很重要的一点就是，在可疑代码处先提前设置好断点，执行到此位置的线程必须停下来，为了方便调试其他线程也要停下来。如果没有提前设置好断点，可疑位置代码已经执行过了，就只能重新开始调试会话了。调试活动通常是带有目的性的调试，而不是漫无目的地闲逛，这样调试效率才会高。
+>调试活动通常是带有目的性的调试，而不是漫无目的地闲逛，这样调试效率才会高。调试很重要的一点就是，在可疑代码处先提前设置好断点，执行到此位置的线程自然会停下来。如果没有提前设置好断点，可疑位置代码已经执行过了，就只能重新开始调试会话了。对于多线程程序，为了方便观察多个线程的运行情况甚至是线程间的交互情况，通常这些线程要么全部运行要么全部停止。
 
 #### 问题：如何判断进程是否是多线程程序？
 
@@ -530,6 +493,7 @@ func (p *DebuggedProcess) loadThreadList() ([]int, error) {
   ```
 
   通过状态 **'T'** 可以识别多线程程序中哪些线程正在被调试跟踪。
+  
 - `ls /proc/<pid>/task`
 
   ```bash
