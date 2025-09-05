@@ -509,9 +509,15 @@ func helpMessageByGroups(cmd *cobra.Command) string {
 - 基于liner的方式则更加精炼，对用户打扰也更少，也具备了我们期望拥有的自动补全能力，能够满足我们最初设计的调试会话的要求，因此将其作为最终实现版本，
 
 也跟读者强调一下，随着我们添加的功能越来越多、功能间依赖越来越多、代码量也越来越多，我们的代码示例简单到一个源文件就可以搞定的情况会越来越少。也就是说，读者后续测试的用例可能会有相当一部分要考虑使用 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 来直接进行测试验证。为了读者阅读学习的便利性，我们会尽量按照这个形式规范：
+
 - repo1 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 会包含完整示例；
 - 如果本章节的demo可以简化到一个源文件，repo2 [hitzhangjie/golang-debugger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons) 依然会提供示例；
 - 如果示例仅包含在repo1，我们会明确在相关小节的设计实现、代码测试时告知读者。
+
+### 本节小结
+
+本节围绕调试器的“调试会话”交互界面展开，详细介绍了两种主流的命令行交互实现方式：基于 cobra-prompt 的酷炫交互和基于 liner 的精炼交互。通过实际效果截图和代码示例，展示了命令自动补全、参数提示、分组帮助等功能如何提升调试体验。对比分析后，指出 liner 方案更适合调试器场景，既能满足自动补全等核心需求，又能减少对用户的干扰。通过本节内容，读者可以系统了解调试器命令行会话的设计思路和实现细节，为后续深入开发和使用打下坚实基础。
+
 ### 参考内容
 
 - cobra, https://github.com/spf13/cobra
