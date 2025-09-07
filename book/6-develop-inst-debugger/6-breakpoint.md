@@ -31,9 +31,7 @@ break <locspec>
 
 locspec表示一个代码中的位置，可以是指令地址，也可以是一个源文件中的位置。如果是后者，我们需要查询行号表先将源码中的位置转换成指令地址。有了指令地址之后，我们就可以对该地址处的指令数据进行patch以达到添加、移除断点的目的。
 
-本章节，我们先只考虑locspec为指令地址的情况。
-
-> locspec支持的格式，直接关系到添加断点的效率。delve中定义了一系列的locspec格式，感兴趣可以参考dlv中的实现：https://sourcegraph.com/github.com/go-delve/delve@master/-/blob/pkg/locspec/locations.go
+locspec支持的格式，直接关系到添加断点的效率。第九章介绍符号级调试器时我们定义了一系列支持的locspec [](../9-develop-sym-debugger/2-核心调试逻辑/20-how_locspec_works.md)，这里先我们先只考虑locspec为指令地址的情况。
 
 现在来看下我们的实现代码：
 
