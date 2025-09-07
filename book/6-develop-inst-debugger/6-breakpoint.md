@@ -22,16 +22,11 @@
 
 ### 代码实现
 
-我们使用 `break`命令来添加断点，可以简单缩写成 `b`，使用方式如下：
+我们使用 `break`命令来添加断点，可以简单缩写成 `b`，使用方式如下： `break <locspec>`。
 
-```bash
-# 注意<locspec>的写法
-break <locspec>
-```
+locspec表示一个代码中的位置，可以是指令地址，也可以是一个源文件中的位置。locspec支持的格式，直接关系到添加断点的效率。第九章介绍符号级调试器时我们定义了一系列支持的locspec [](../9-develop-sym-debugger/2-核心调试逻辑/20-how_locspec_works.md)，这里先我们先只考虑locspec为指令地址的情况。
 
-locspec表示一个代码中的位置，可以是指令地址，也可以是一个源文件中的位置。如果是后者，我们需要查询行号表先将源码中的位置转换成指令地址。有了指令地址之后，我们就可以对该地址处的指令数据进行patch以达到添加、移除断点的目的。
-
-locspec支持的格式，直接关系到添加断点的效率。第九章介绍符号级调试器时我们定义了一系列支持的locspec [](../9-develop-sym-debugger/2-核心调试逻辑/20-how_locspec_works.md)，这里先我们先只考虑locspec为指令地址的情况。
+对于指令地址，我们可以先借助反汇编操作列出程序中不同地址处的指令，有了各个指令的地址之后，我们就可以对该特定地址处的指令数据进行patch以达到添加、移除断点的目的。
 
 现在来看下我们的实现代码：
 
@@ -39,61 +34,61 @@ locspec支持的格式，直接关系到添加断点的效率。第九章介绍�
 package debug
 
 import (
-	"errors"
-	"fmt"
-	"strconv"
-	"strings"
-	"syscall"
+    "errors"
+    "fmt"
+    "strconv"
+    "strings"
+    "syscall"
 
-	"github.com/spf13/cobra"
+    "github.com/spf13/cobra"
 )
 
 var breakCmd = &cobra.Command{
-	Use:   "break <locspec>",
-	Short: "在源码中添加断点",
-	Long: `在源码中添加断点，源码位置可以通过locspec格式指定。
+    Use:   "break <locspec>",
+    Short: "在源码中添加断点",
+    Long: `在源码中添加断点，源码位置可以通过locspec格式指定。
 
 当前支持的locspec格式，包括两种:
 - 指令地址
 - [文件名:]行号
 - [文件名:]函数名`,
-	Aliases: []string{"b", "breakpoint"},
-	Annotations: map[string]string{
-		cmdGroupKey: cmdGroupBreakpoints,
-	},
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("break %s\n", strings.Join(args, " "))
+    Aliases: []string{"b", "breakpoint"},
+    Annotations: map[string]string{
+        cmdGroupKey: cmdGroupBreakpoints,
+    },
+    RunE: func(cmd *cobra.Command, args []string) error {
+        fmt.Printf("break %s\n", strings.Join(args, " "))
 
-		if len(args) != 1 {
-			return errors.New("参数错误")
-		}
+        if len(args) != 1 {
+            return errors.New("参数错误")
+        }
 
-		locStr := args[0]
-		addr, err := strconv.ParseUint(locStr, 0, 64)
-		if err != nil {
-			return fmt.Errorf("invalid locspec: %v", err)
-		}
+        locStr := args[0]
+        addr, err := strconv.ParseUint(locStr, 0, 64)
+        if err != nil {
+            return fmt.Errorf("invalid locspec: %v", err)
+        }
 
     // 记录地址addr处的原始1字节数据
-		orig := [1]byte{}
-		n, err := syscall.PtracePeekData(TraceePID, uintptr(addr), orig[:])
-		if err != nil || n != 1 {
-			return fmt.Errorf("peek text, %d bytes, error: %v", n, err)
-		}
-		breakpointsOrigDat[uintptr(addr)] = orig[0]
+        orig := [1]byte{}
+        n, err := syscall.PtracePeekData(TraceePID, uintptr(addr), orig[:])
+        if err != nil || n != 1 {
+            return fmt.Errorf("peek text, %d bytes, error: %v", n, err)
+        }
+        breakpointsOrigDat[uintptr(addr)] = orig[0]
 
     // 将addr出的一字节数据覆写为0xCC
-		n, err = syscall.PtracePokeText(TraceePID, uintptr(addr), []byte{0xCC})
-		if err != nil || n != 1 {
-			return fmt.Errorf("poke text, %d bytes, error: %v", n, err)
-		}
-		fmt.Printf("添加断点成功\n")
-		return nil
-	},
+        n, err = syscall.PtracePokeText(TraceePID, uintptr(addr), []byte{0xCC})
+        if err != nil || n != 1 {
+            return fmt.Errorf("poke text, %d bytes, error: %v", n, err)
+        }
+        fmt.Printf("添加断点成功\n")
+        return nil
+    },
 }
 
 func init() {
-	debugRootCmd.AddCommand(breakCmd)
+    debugRootCmd.AddCommand(breakCmd)
 }
 ```
 
@@ -152,7 +147,14 @@ godbg> exit
 ```
 
 最后执行exit退出调试。
+这里我们只展示了断点的添加逻辑，断点的移除逻辑，其实实现过程非常相似，我们将在clear命令的实现时再介绍。另外有网友可能有疑问，这里怎么没演示下添加断点后tracee暂停执行的效果呢？因为现在还没有实现执行到断点处的功能，我们会在continue操作实现后进行演示。
 
-这里我们只展示了断点的添加逻辑，断点的移除逻辑，其实实现过程非常相似，我们将在clear命令的实现时再介绍。另外有网友可能有疑问，这里怎么没演示下添加断点后tracee暂停执行的效果呢？因为现在还不到时候。我们添加断点功能，还停留在指令级调试功能（只实现了 `break "指令地址"` ），我们还没有实现符号级调试器在指定源码位置添加断点的操作（ `break "源文件:行号"` 或者 `break "函数名" `），如果要演示在tracee在特定源码位置停下来的操作，我们得先借助其他手段获取源码位置对应的指令地址，然后再回填到我们的 `break "指令地址"` 操作中。即便我们做了这个事情，我们还需要 `continue` 操作先支持完才能让tracee运行到断点处，才能体现出读者想要的tracee暂停执行的效果。
+ps：我们添加断点功能，还停留在指令级调试功能（只实现了 `break "指令地址"` ），我们还没有实现符号级调试器在指定源码位置添加断点的操作（ `break "源文件:行号"` 或者 `break "函数名"`），如果要演示在tracee在特定源码位置停下来的操作，我们得先借助DWARF调试信息获取源码位置对应的指令地址，然后在这个地址处添加断点。然后，执行 `continue` 操作让tracee运行到断点处。这部分我们会在第九章符号级调试器 [debug> continue](../9-develop-sym-debugger/2-核心调试逻辑/28-debug_continue.md) 小节进行介绍。
 
-读者先知道原因就好了，我们这里先快速介绍如何实现break（添加断点）、clear（移除断点）功能之后，我们再来看step（单步执行指令）、next（单步执行语句）、continue（执行到断点位置）等控制执行流程的调试命令如何实现。在在所有必要前置工作准备妥当后，我们会提供一个完整的demo来演示断点功能。
+接下来几个小节，我们先快速介绍如何实现break（添加断点）、clear（移除断点）功能之后，我们再来看如何实现step（单步执行指令）、next（单步执行语句）、continue（执行到断点位置）等控制执行流程的调试命令，每个小节我们也会提供对应的示例进行演示。
+
+### 本节小结
+
+本节主要探讨了动态断点的实现原理和具体代码实现，为调试器的核心功能奠定基础。核心要点包括：断点按生命周期分为静态断点和动态断点，按实现方式分为软件断点和硬件断点；软件断点通过将目标地址的指令替换为0xCC（int 0x3h）来实现程序暂停；实现过程包括保存原始指令字节、写入断点指令、记录断点信息三个关键步骤；使用ptrace系统调用的PEEKDATA和POKEDATA操作完成内存读写。
+
+本节需要特别关注的是理解断点机制的本质：通过指令替换实现程序控制流的暂停，这是所有调试操作的基础。断点功能的实现为后续的step、next、continue等控制执行流程的调试命令提供了技术支撑，也是从指令级调试向符号级调试演进的重要环节。掌握了断点的添加和移除机制后，我们就能在此基础上构建更复杂的调试功能，最终实现完整的调试器系统。
