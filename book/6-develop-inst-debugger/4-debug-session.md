@@ -507,11 +507,19 @@ func helpMessageByGroups(cmd *cobra.Command) string {
 - 基于cobraprompt的方式随酷炫但是对调试过程干扰比较大，可能更容易导致用户抓不住重点，不便于用户保持对问题本身的探求和关注；
 - 基于liner的方式则更加精炼，对用户打扰也更少，也具备了我们期望拥有的自动补全能力，能够满足我们最初设计的调试会话的要求，因此将其作为最终实现版本，
 
-也跟读者强调一下，随着我们添加的功能越来越多、功能间依赖越来越多、代码量也越来越多，我们的代码示例简单到一个源文件就可以搞定的情况会越来越少。也就是说，读者后续测试的用例可能会有相当一部分要考虑使用 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 来直接进行测试验证。为了读者阅读学习的便利性，我们会尽量按照这个形式规范：
+#### 配套代码
 
-- repo1 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 会包含完整示例；
-- 如果本章节的demo可以简化到一个源文件，repo2 [hitzhangjie/golang-debugger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons) 依然会提供示例；
-- 如果示例仅包含在repo1，我们会明确在相关小节的设计实现、代码测试时告知读者。
+也跟读者强调一下，随着我们添加的功能越来越多、功能间依赖越来越多、代码量也越来越多，我们的代码示例简单到一个源文件就可以搞定的情况会越来越少。也就是说，读者后续测试的用例可能会有相当一部分要考虑使用 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 来直接进行测试验证。
+
+为了读者阅读学习的便利性，我们会尽量按照这个形式规范：
+
+- repo1 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 会包含每个调试命令的实现；
+- repo2 [hitzhangjie/golang-debugger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons) 如果demo可以简化到一个源文件，我们会尽量repo2也包含一个对应的测试用例。或者需要多步调试器操作，为了方便读者一键运行测试，会将调试器核心操作所步骤在测试用例中以代码的形式给出来；
+- repo3 [hitzhangjie/tinydbg] 这个是dlv大幅裁剪、精简后的符号级调试器实现；
+
+golang-debugger-lessons这个repo中的每个示例都是完全独立的，因此你可以自由修改测试，而不用担心把godbg整个项目修改的跑不起来了、运行不正常了、查问题又没有头绪，更适合新手学习测试。您可以在具备一定调试器开发经验后，再去查看、修改 godbg 这个项目。而当进入到符号级调试器开发领域时，我们将使用repo [hitzhangjie/tinydbg] 这个经过dlv裁剪精简后的版本进行学习、测试。
+
+ps: 如果示例仅包含在repo1，我们在相关小节的设计实现、代码测试时会明确告知读者如何测试。
 
 ### 本节小结
 
