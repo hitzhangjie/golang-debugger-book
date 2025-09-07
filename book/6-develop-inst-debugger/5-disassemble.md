@@ -35,12 +35,12 @@ package main
 
 // GetExecutable 根据pid获取可执行程序路径
 func GetExecutable(pid int) (string, error) {
-	exeLink := fmt.Sprintf("/proc/%d/exe", pid)
-	exePath, err := os.Readlink(exeLink)
-	if err != nil {
-    	return "", fmt.Errorf("find executable by pid err: %w", err)
-	}
-	return exePath, nil
+    exeLink := fmt.Sprintf("/proc/%d/exe", pid)
+    exePath, err := os.Readlink(exeLink)
+    if err != nil {
+        return "", fmt.Errorf("find executable by pid err: %w", err)
+    }
+    return exePath, nil
 }
 ```
 
@@ -79,56 +79,56 @@ Program Header Table和Section Header Table，是为构建两种不同视图特�
 package main
 
 import (
-	"debug/elf"
-	"fmt"
-	"os"
-	"strconv"
+    "debug/elf"
+    "fmt"
+    "os"
+    "strconv"
 
-	"golang.org/x/arch/x86/x86asm"
+    "golang.org/x/arch/x86/x86asm"
 )
 
 func main() {
 
     // go run main.go <pid>
-	if len(os.Args) != 2 {
-		panic("invalid params")
-	}
+    if len(os.Args) != 2 {
+        panic("invalid params")
+    }
 
-	// pid
-	pid, err := strconv.Atoi(os.Args[1])
-	if err != nil {
-		panic(err)
-	}
+    // pid
+    pid, err := strconv.Atoi(os.Args[1])
+    if err != nil {
+        panic(err)
+    }
 
-	// 通过pid找到可执行程序路径
-	exePath, err := GetExecutable(pid)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(exePath)
+    // 通过pid找到可执行程序路径
+    exePath, err := GetExecutable(pid)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(exePath)
 
-	// 读取指令信息并反汇编
-	elfFile, err := elf.Open(exePath)
-	if err != nil {
-		panic(err)
-	}
-	section := elfFile.Section(".text")
-	buf, err := section.Data()
-	if err != nil {
-		panic(err)
-	}
+    // 读取指令信息并反汇编
+    elfFile, err := elf.Open(exePath)
+    if err != nil {
+        panic(err)
+    }
+    section := elfFile.Section(".text")
+    buf, err := section.Data()
+    if err != nil {
+        panic(err)
+    }
 
-	// 逐语句解析机器指令并反汇编，然后打印出来
-	offset := 0
-	for {
+    // 逐语句解析机器指令并反汇编，然后打印出来
+    offset := 0
+    for {
         // 使用64位模式
-		inst, err := x86asm.Decode(buf[offset:], 64)
-		if err != nil {
-			panic(err)
-		}
-		fmt.Printf("%8x %s\n", offset, inst.String())
-		offset += inst.Len
-	}
+        inst, err := x86asm.Decode(buf[offset:], 64)
+        if err != nil {
+            panic(err)
+        }
+        fmt.Printf("%8x %s\n", offset, inst.String())
+        offset += inst.Len
+    }
 }
 ```
 
@@ -170,77 +170,77 @@ offset: 0xcc 0x1 0x2 0x3 0x4   | orig: <offset,0x0>
 package debug
 
 import (
-	"fmt"
-	"os"
-	"syscall"
+    "fmt"
+    "os"
+    "syscall"
 
-	"github.com/spf13/cobra"
-	"golang.org/x/arch/x86/x86asm"
+    "github.com/spf13/cobra"
+    "golang.org/x/arch/x86/x86asm"
 )
 
 var disassCmd = &cobra.Command{
-	Use:   "disass <locspec>",
-	Short: "反汇编机器指令",
-	Annotations: map[string]string{
-		cmdGroupKey: cmdGroupSource,
-	},
-	RunE: func(cmd *cobra.Command, args []string) error {
+    Use:   "disass <locspec>",
+    Short: "反汇编机器指令",
+    Annotations: map[string]string{
+        cmdGroupKey: cmdGroupSource,
+    },
+    RunE: func(cmd *cobra.Command, args []string) error {
 
-		// 读取PC值
-		regs := syscall.PtraceRegs{}
-		err := syscall.PtraceGetRegs(TraceePID, &regs)
-		if err != nil {
-			return err
-		}
+        // 读取PC值
+        regs := syscall.PtraceRegs{}
+        err := syscall.PtraceGetRegs(TraceePID, &regs)
+        if err != nil {
+            return err
+        }
 
-		buf := make([]byte, 1)
-		n, err := syscall.PtracePeekText(TraceePID, uintptr(regs.PC()-1), buf)
-		if err != nil || n != 1 {
-			return fmt.Errorf("peek text error: %v, bytes: %d", err, n)
-		}
-		fmt.Printf("read %d bytes, value of %x\n", n, buf[0])
-		// PC前一字节为0xCC表示当前PC应回退1字节才能读取到完整指令数据
-		if buf[0] == 0xCC {
-			regs.SetPC(regs.PC() - 1)
-		}
+        buf := make([]byte, 1)
+        n, err := syscall.PtracePeekText(TraceePID, uintptr(regs.PC()-1), buf)
+        if err != nil || n != 1 {
+            return fmt.Errorf("peek text error: %v, bytes: %d", err, n)
+        }
+        fmt.Printf("read %d bytes, value of %x\n", n, buf[0])
+        // PC前一字节为0xCC表示当前PC应回退1字节才能读取到完整指令数据
+        if buf[0] == 0xCC {
+            regs.SetPC(regs.PC() - 1)
+        }
 
-		// 查找，如果之前设置过断点，将恢复
-		dat := make([]byte, 1024)
-		n, err = syscall.PtracePeekText(TraceePID, uintptr(regs.PC()), dat)
-		if err != nil {
-			return fmt.Errorf("peek text error: %v, bytes: %d", err, n)
-		}
-		fmt.Printf("size of text: %d\n", n)
+        // 查找，如果之前设置过断点，将恢复
+        dat := make([]byte, 1024)
+        n, err = syscall.PtracePeekText(TraceePID, uintptr(regs.PC()), dat)
+        if err != nil {
+            return fmt.Errorf("peek text error: %v, bytes: %d", err, n)
+        }
+        fmt.Printf("size of text: %d\n", n)
   
-		// TODO 在实现了断点功能之后，需注意读取到的dat[0]为0xCC，此时需注意还原指令数据，
-		// 否则反汇编操作是有错误的。
+        // TODO 在实现了断点功能之后，需注意读取到的dat[0]为0xCC，此时需注意还原指令数据，
+        // 否则反汇编操作是有错误的。
 
-		// 反汇编这里的指令数据
-		offset := 0
-		for offset < n {
+        // 反汇编这里的指令数据
+        offset := 0
+        for offset < n {
             // 使用64位模式
-			inst, err := x86asm.Decode(dat[offset:], 64)
-			if err != nil {
-				return fmt.Errorf("x86asm decode error: %v", err)
-			}
-			fmt.Printf("%8x %s\n", offset, inst.String())
-			offset += inst.Len
-		}
-	},
+            inst, err := x86asm.Decode(dat[offset:], 64)
+            if err != nil {
+                return fmt.Errorf("x86asm decode error: %v", err)
+            }
+            fmt.Printf("%8x %s\n", offset, inst.String())
+            offset += inst.Len
+        }
+    },
 }
 
 func init() {
-	debugRootCmd.AddCommand(disassCmd)
+    debugRootCmd.AddCommand(disassCmd)
 }
 
 // GetExecutable 根据pid获取可执行pa程序路径
 func GetExecutable(pid int) (string, error) {
-	exeLink := fmt.Sprintf("/proc/%d/exe", pid)
-	exePath, err := os.Readlink(exeLink)
-	if err != nil {
-    	return "", fmt.Errorf("find executable by pid err: %w", err)
-	}
-	return exePath, nil
+    exeLink := fmt.Sprintf("/proc/%d/exe", pid)
+    exePath, err := os.Readlink(exeLink)
+    if err != nil {
+        return "", fmt.Errorf("find executable by pid err: %w", err)
+    }
+    return exePath, nil
 }
 ```
 
@@ -311,24 +311,30 @@ size of text: 1024
 
 ```go
 func instSyntax(inst x86asm.Inst, syntax string) (string, error) {
-	asm := ""
-	switch syntax {
-	case "go":
-		asm = x86asm.GoSyntax(inst, uint64(inst.PCRel), nil)
-	case "gnu":
-		asm = x86asm.GNUSyntax(inst, uint64(inst.PCRel), nil)
-	case "intel":
-		asm = x86asm.IntelSyntax(inst, uint64(inst.PCRel), nil)
-	default:
-		return "", fmt.Errorf("invalid asm syntax error")
-	}
-	return asm, nil
+    asm := ""
+    switch syntax {
+    case "go":
+        asm = x86asm.GoSyntax(inst, uint64(inst.PCRel), nil)
+    case "gnu":
+        asm = x86asm.GNUSyntax(inst, uint64(inst.PCRel), nil)
+    case "intel":
+        asm = x86asm.IntelSyntax(inst, uint64(inst.PCRel), nil)
+    default:
+        return "", fmt.Errorf("invalid asm syntax error")
+    }
+    return asm, nil
 }
 ```
 
 另外我们也添加了选项 `disass -n <num>`来指定一次反汇编操作要decode的指令条数，因为调试会话中往往更关心当前待执行的指令，所以没必要一次反汇编成千上万行指令，那仅会分散调试人员的注意力而已。
 
 您可以在项目 `hitzhangjie/godbg` 源文件 `godbg/cmd/debug/disass.go`中查看完整反汇编实现。
+
+### 本节小结
+
+本节主要探讨了指令级调试中反汇编功能的实现原理与具体方法，核心内容包括：**反汇编的基本概念与实现框架选择**，通过对比Capstone、Gapstone等框架，最终选择Go官方提供的x86asm库；**ELF文件解析与指令提取**，详细说明了如何通过debug/elf包解析可执行文件，从.text段提取机器指令数据；**断点位置反汇编的特殊处理**，重点阐述了断点处指令patch机制对反汇编的影响，以及PC值调整和指令还原的关键步骤；**完整的反汇编命令实现**，提供了disassCmd的具体代码实现，支持多种汇编语法风格和指令数量控制。本节的核心难点在于理解断点处指令patch的工作原理：当断点通过0xCC指令实现时，需要正确识别PC位置并还原原始指令数据，确保反汇编结果的准确性。
+
+通过本节的学习，读者掌握了反汇编的完整技术链路，为构建功能完整的指令级调试器提供了关键支撑。下一节将基于本节的反汇编基础，识别特定指令地址，并实现动态断点的添加与移除功能。
 
 ### 参考文献
 
