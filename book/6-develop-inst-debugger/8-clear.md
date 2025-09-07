@@ -159,8 +159,21 @@ Sun Sep  7 15:22:27 CST 2025 pid: 416728 <= godbg attach 416728, after traced, t
 
 ```
 
+现在我们回到godbg调试会话中依次执行如下操作：
 
-现在我们回到godbg调试会话中执行continue操作，然后会观察到tracee开始重新输出信息：
+```bash
+godbg> pregs
+    Rax <Rax value>
+    Rbx <Rbx value>
+    ... 
+    Rip <Rip value>
+    ...
+
+godbg> break <Rip value>
+godbg> continue
+```
+
+执行continue操作，然后会观察到tracee开始重新输出信息：
 
 ```bash
 $ while [ 1 -eq 1 ]; do t=`date`; echo "$t pid: $$"; sleep 1; done
@@ -193,7 +206,7 @@ Sun Sep  7 15:23:19 CST 2025 pid: 416728
 You can now close this terminal with Ctrl+D, or press Enter to restart.
 ```
 
-所以，调试器在退出之前务必要清理掉之前创建过的所有断点，否则会给tracee后续运行造成非常不良的影响。
+所以，调试器在退出之前务必要清理掉之前创建过的所有断点，否则会给tracee后续运行造成非常不良的影响。我们将在clearall时顺便提下如何做这个优化。
 
 ### 本节小结
 
