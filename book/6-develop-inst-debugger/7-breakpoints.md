@@ -29,19 +29,19 @@ breakpoint[3] 0x5000101 world.go:30
 package debug
 
 var breakCmd = &cobra.Command{
-	RunE: func(cmd *cobra.Command, args []string) error {
-		...
-		breakpoint, err := target.NewBreakpoint(addr, orig[0], "")
-		if err != nil {
-			return fmt.Errorf("add breakpoint error: %v", err)
-		}
-		breakpoints[addr] = &breakpoint
+    RunE: func(cmd *cobra.Command, args []string) error {
+        ...
+        breakpoint, err := target.NewBreakpoint(addr, orig[0], "")
+        if err != nil {
+            return fmt.Errorf("add breakpoint error: %v", err)
+        }
+        breakpoints[addr] = &breakpoint
     ...
-	},
+    },
 }
 
 func init() {
-	debugRootCmd.AddCommand(breakCmd)
+    debugRootCmd.AddCommand(breakCmd)
 }
 ```
 
@@ -49,13 +49,13 @@ func init() {
 
 ```go
 func NewBreakpoint(addr uintptr, orig byte, location string) (Breakpoint, error) {
-	b := Breakpoint{
-		ID:       seqNo.Add(1),
-		Addr:     addr,
-		Orig:     orig,
-		Location: location,
-	}
-	return b, nil
+    b := Breakpoint{
+        ID:       seqNo.Add(1),
+        Addr:     addr,
+        Orig:     orig,
+        Location: location,
+    }
+    return b, nil
 }
 ```
 
@@ -72,39 +72,39 @@ func NewBreakpoint(addr uintptr, orig byte, location string) (Breakpoint, error)
 package debug
 
 import (
-	"fmt"
-	"sort"
+    "fmt"
+    "sort"
 
-	"godbg/target"
+    "godbg/target"
 
-	"github.com/spf13/cobra"
+    "github.com/spf13/cobra"
 )
 
 var breaksCmd = &cobra.Command{
-	Use:     "breaks",
-	Short:   "列出所有断点",
-	Long:    "列出所有断点",
-	Aliases: []string{"bs", "breakpoints"},
-	Annotations: map[string]string{
-		cmdGroupKey: cmdGroupBreakpoints,
-	},
-	RunE: func(cmd *cobra.Command, args []string) error {
+    Use:     "breaks",
+    Short:   "列出所有断点",
+    Long:    "列出所有断点",
+    Aliases: []string{"bs", "breakpoints"},
+    Annotations: map[string]string{
+        cmdGroupKey: cmdGroupBreakpoints,
+    },
+    RunE: func(cmd *cobra.Command, args []string) error {
 
-		bs := target.Breakpoints{}
-		for _, b := range breakpoints {
-			bs = append(bs, *b)
-		}
-		sort.Sort(bs)
+        bs := target.Breakpoints{}
+        for _, b := range breakpoints {
+            bs = append(bs, *b)
+        }
+        sort.Sort(bs)
 
-		for _, b := range bs {
-			fmt.Printf("breakpoint[%d] %#x %s\n", b.ID, b.Addr, b.Location)
-		}
-		return nil
-	},
+        for _, b := range bs {
+            fmt.Printf("breakpoint[%d] %#x %s\n", b.ID, b.Addr, b.Location)
+        }
+        return nil
+    },
 }
 
 func init() {
-	debugRootCmd.AddCommand(breaksCmd)
+    debugRootCmd.AddCommand(breaksCmd)
 }
 ```
 
@@ -120,38 +120,38 @@ func init() {
 package target
 
 import (
-	"go.uber.org/atomic"
+    "go.uber.org/atomic"
 )
 
 var (
   // 断点编号
-	seqNo = atomic.NewUint64(0)
+    seqNo = atomic.NewUint64(0)
 )
 
 // Breakpoint 断点
 type Breakpoint struct {
-	ID       uint64
-	Addr     uintptr
-	Orig     byte
-	Location string
+    ID       uint64
+    Addr     uintptr
+    Orig     byte
+    Location string
 }
 
 // Breakpoints 断点切片，实现了排序接口
 type Breakpoints []Breakpoint
 
 func (b Breakpoints) Len() int {
-	return len(b)
+    return len(b)
 }
 
 func (b Breakpoints) Less(i, j int) bool {
-	if b[i].ID <= b[j].ID {
-		return true
-	}
-	return false
+    if b[i].ID <= b[j].ID {
+        return true
+    }
+    return false
 }
 
 func (b Breakpoints) Swap(i, j int) {
-	b[i], b[j] = b[j], b[i]
+    b[i], b[j] = b[j], b[i]
 }
 ```
 
@@ -190,7 +190,7 @@ breakpoint[2] 0x4653ab
 godbg> 
 ```
 
-我们可以看到添加了断点之后，breakpoints命令正常显示了断点列表。
+我们可以看到添加了断点之后，breakpoints命令正常显示了断点列表。现在我们只显示了断点编号、断点指令地址，当我们实现符号级调试器时，我们还会显示出断点源码位置 file:lineno。
 
 ```bash
 godbg> breakpoints
@@ -200,4 +200,6 @@ breakpoint[2] 0x4653ab
 
 这里的编号1、2将用来作为断点标识用以移除断点，我们将在clear命令中描述这点。
 
-> ps: 和上一小节类似，目前添加断点 `break <locspec>`，列出断点 `breakpoints`，locspec的形式目前仅支持内存地址的形式，还不支持源码位置。我们将在后续实现符号级调试器时解决此问题。
+### 本节小结
+
+本节主要探讨了动态断点中"列出断点"功能的实现，包括断点编号管理、sortable断点信息存储结构设计、O(1)时间复杂度查询指定编号的断点。本节内容完善了动态断点的管理功能，为调试器提供了完整的断点查看能力，与前后章节的断点添加、移除功能形成完整的断点管理闭环。下一节将基于本节建立的断点编号机制，实现断点的移除功能。
