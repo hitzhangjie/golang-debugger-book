@@ -81,7 +81,7 @@ func main() {
 
 实际上读到这里时，我们已经基于 spf13/cobra 命令行管理框架对godbg进行了重构，使其更易于管理命令及实现。在后续的调试会话的示例中就可以看到。
 
-#### 基于cobraprompt的调试会话实现
+#### 基于cobraprompt实现
 
 基于cobraprompt实现调试会话，看中的是其自动补全这个便利性，实现思路相对来说也比较简单：
 
@@ -243,7 +243,7 @@ func GetSourceFiles() []prompt.Suggest {
 }
 ```
 
-#### 基于liner的调试会话实现
+#### 基于peterh/liner实现
 
 已经有了基于cobraprompt的自动补全实现了，那我们为什么又提供一个基于liner实现的版本呢？在作者初次尝试实现调试会话时，是基于cobraprompt，当时作者认为cobraprompt的这种自动输入补全能力非常方便和酷炫，所以对其称赞有加。但是随着后续调试活动的增加，作者逐渐意识到：**调试过程中保持用户对问题探求的专注、减少对用户的干扰，比单纯地追求酷炫、方便本身更重要**。
 
@@ -482,7 +482,7 @@ func helpMessageByGroups(cmd *cobra.Command) string {
 
 这是关于调试会话界面的运行效果展示。
 
-#### 基于liner实现
+#### 基于peterh/liner实现
 
 这部分代码位于repo [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg)下，执行 `go install -v`即可进行体验。
 
