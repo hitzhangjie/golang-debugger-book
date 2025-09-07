@@ -24,7 +24,7 @@
 
 `godbg exec <prog>`，当通过这种方式启动并跟踪了一个进程后，我们可以实现 `debug.NewDebugShell().Run()`来创建并启动一个调试会话。本小节我们介绍下调试会话的实现细节，读者了解后将能够熟悉cobraprompt的使用，或者使用liner能代替cobraprompt来实现不同风格的调试会话。
 
-#### 基于cobra进行命令管理
+#### spf13/cobra管理调试命令
 
 在前面1、2、3小节中，我们演示的示例程序中是通过os.Args[1]来判断godbg的子命令并通过switch-case转入对应的处理逻辑的。当我们实现了调试回话之后，我们也需要频繁读取用户输入的其他命令，如break、continue、next等等，其实每一个命令就对应着一个不同的处理逻辑，如果我们都像前面几个小节这样写，我们的代码很快就将变得冗长且难以招架。
 
@@ -81,7 +81,7 @@ func main() {
 
 实际上读到这里时，我们已经基于 spf13/cobra 命令行管理框架对godbg进行了重构，使其更易于管理命令及实现。在后续的调试会话的示例中就可以看到。
 
-#### 基于cobraprompt实现
+#### 基于cobraprompt的调试会话实现
 
 基于cobraprompt实现调试会话，看中的是其自动补全这个便利性，实现思路相对来说也比较简单：
 
@@ -94,157 +94,156 @@ func main() {
 package debug
 
 import (
-	"bytes"
-	"fmt"
-	"sort"
-	"strings"
+    "bytes"
+    "fmt"
+    "sort"
+    "strings"
 
-	"github.com/c-bata/go-prompt"
-	"github.com/hitzhangjie/godbg/target"
-	cobraprompt "github.com/stromland/cobra-prompt"
+    "github.com/c-bata/go-prompt"
+    "github.com/hitzhangjie/godbg/target"
+    cobraprompt "github.com/stromland/cobra-prompt"
 
-	"github.com/spf13/cobra"
+    "github.com/spf13/cobra"
 )
 
 const (
-	cmdGroupAnnotation = "cmd_group_annotation"
+    cmdGroupAnnotation = "cmd_group_annotation"
 
-	cmdGroupBreakpoints = "1-breaks"
-	cmdGroupSource      = "2-source"
-	cmdGroupCtrlFlow    = "3-execute"
-	cmdGroupInfo        = "4-info"
-	cmdGroupOthers      = "5-other"
-	cmdGroupCobra       = "other"
+    cmdGroupBreakpoints = "1-breaks"
+    cmdGroupSource      = "2-source"
+    cmdGroupCtrlFlow    = "3-execute"
+    cmdGroupInfo        = "4-info"
+    cmdGroupOthers      = "5-other"
+    cmdGroupCobra       = "other"
 
-	cmdGroupDelimiter = "-"
+    cmdGroupDelimiter = "-"
 
-	prefix    = "godbg> "
-	descShort = "godbg interactive debugging commands"
+    prefix    = "godbg> "
+    descShort = "godbg interactive debugging commands"
 )
 
 const (
-	suggestionListSourceFiles = "ListSourceFiles"
+    suggestionListSourceFiles = "ListSourceFiles"
 )
 
 var (
-	TraceePID   int
-	breakpoints = map[uintptr]*target.Breakpoint{}
+    TraceePID   int
+    breakpoints = map[uintptr]*target.Breakpoint{}
 )
 
 var debugRootCmd = &cobra.Command{
-	Use:   "help [command]",
-	Short: descShort,
+    Use:   "help [command]",
+    Short: descShort,
 }
 
 // NewDebugShell 创建一个debug专用的交互管理器
 func NewDebugShell() *cobraprompt.CobraPrompt {
 
-	fn := func(cmd *cobra.Command, args []string) {
-		// 描述信息
-		fmt.Println(cmd.Short)
-		fmt.Println()
+    fn := func(cmd *cobra.Command, args []string) {
+        // 描述信息
+        fmt.Println(cmd.Short)
+        fmt.Println()
 
-		// 使用信息
-		fmt.Println(cmd.Use)
-		fmt.Println(cmd.Flags().FlagUsages())
+        // 使用信息
+        fmt.Println(cmd.Use)
+        fmt.Println(cmd.Flags().FlagUsages())
 
-		// 命令分组
-		usage := helpMessageByGroups(cmd)
-		fmt.Println(usage)
-	}
-	debugRootCmd.SetHelpFunc(fn)
+        // 命令分组
+        usage := helpMessageByGroups(cmd)
+        fmt.Println(usage)
+    }
+    debugRootCmd.SetHelpFunc(fn)
 
-	return &cobraprompt.CobraPrompt{
-		RootCmd:                debugRootCmd,
-		DynamicSuggestionsFunc: dynamicSuggestions,
-		ResetFlagsFlag:         false,
-		GoPromptOptions: []prompt.Option{
-			prompt.OptionTitle(descShort),
-			prompt.OptionPrefix(prefix),
-			prompt.OptionSuggestionBGColor(prompt.DarkBlue),
-			prompt.OptionDescriptionBGColor(prompt.DarkBlue),
-			prompt.OptionSelectedSuggestionBGColor(prompt.Red),
-			prompt.OptionSelectedDescriptionBGColor(prompt.Red),
-			// here, hide prompt dropdown list
-			// TODO do we have a better way to show/hide the prompt dropdown list?
-			prompt.OptionMaxSuggestion(10),
-			prompt.OptionShowCompletionAtStart(),
-			prompt.OptionCompletionOnDown(),
-		},
-		EnableSilentPrompt: true,
-		EnableShowAtStart:  true,
-	}
+    return &cobraprompt.CobraPrompt{
+        RootCmd:                debugRootCmd,
+        DynamicSuggestionsFunc: dynamicSuggestions,
+        ResetFlagsFlag:         false,
+        GoPromptOptions: []prompt.Option{
+            prompt.OptionTitle(descShort),
+            prompt.OptionPrefix(prefix),
+            prompt.OptionSuggestionBGColor(prompt.DarkBlue),
+            prompt.OptionDescriptionBGColor(prompt.DarkBlue),
+            prompt.OptionSelectedSuggestionBGColor(prompt.Red),
+            prompt.OptionSelectedDescriptionBGColor(prompt.Red),
+            // here, hide prompt dropdown list
+            // TODO do we have a better way to show/hide the prompt dropdown list?
+            prompt.OptionMaxSuggestion(10),
+            prompt.OptionShowCompletionAtStart(),
+            prompt.OptionCompletionOnDown(),
+        },
+        EnableSilentPrompt: true,
+        EnableShowAtStart:  true,
+    }
 }
 
 // helpMessageByGroups 将各个命令按照分组归类，再展示帮助信息
 func helpMessageByGroups(cmd *cobra.Command) string {
 
-	// key:group, val:sorted commands in same group
-	groups := map[string][]string{}
-	for _, c := range cmd.Commands() {
-		// 如果没有指定命令分组，放入other组
-		var groupName string
-		v, ok := c.Annotations[cmdGroupAnnotation]
-		if !ok {
-			groupName = "other"
-		} else {
-			groupName = v
-		}
+    // key:group, val:sorted commands in same group
+    groups := map[string][]string{}
+    for _, c := range cmd.Commands() {
+        // 如果没有指定命令分组，放入other组
+        var groupName string
+        v, ok := c.Annotations[cmdGroupAnnotation]
+        if !ok {
+            groupName = "other"
+        } else {
+            groupName = v
+        }
 
-		groupCmds, ok := groups[groupName]
-		groupCmds = append(groupCmds, fmt.Sprintf("  %-16s:%s", c.Name(), c.Short))
-		sort.Strings(groupCmds)
+        groupCmds, ok := groups[groupName]
+        groupCmds = append(groupCmds, fmt.Sprintf("  %-16s:%s", c.Name(), c.Short))
+        sort.Strings(groupCmds)
 
-		groups[groupName] = groupCmds
-	}
+        groups[groupName] = groupCmds
+    }
 
-	if len(groups[cmdGroupCobra]) != 0 {
-		groups[cmdGroupOthers] = append(groups[cmdGroupOthers], groups[cmdGroupCobra]...)
-	}
-	delete(groups, cmdGroupCobra)
+    if len(groups[cmdGroupCobra]) != 0 {
+        groups[cmdGroupOthers] = append(groups[cmdGroupOthers], groups[cmdGroupCobra]...)
+    }
+    delete(groups, cmdGroupCobra)
 
-	// 按照分组名进行排序
-	groupNames := []string{}
-	for k, _ := range groups {
-		groupNames = append(groupNames, k)
-	}
-	sort.Strings(groupNames)
+    // 按照分组名进行排序
+    groupNames := []string{}
+    for k, _ := range groups {
+        groupNames = append(groupNames, k)
+    }
+    sort.Strings(groupNames)
 
-	// 按照group分组，并对组内命令进行排序
-	buf := bytes.Buffer{}
-	for _, groupName := range groupNames {
-		commands, _ := groups[groupName]
+    // 按照group分组，并对组内命令进行排序
+    buf := bytes.Buffer{}
+    for _, groupName := range groupNames {
+        commands, _ := groups[groupName]
 
-		group := strings.Split(groupName, cmdGroupDelimiter)[1]
-		buf.WriteString(fmt.Sprintf("- [%s]\n", group))
+        group := strings.Split(groupName, cmdGroupDelimiter)[1]
+        buf.WriteString(fmt.Sprintf("- [%s]\n", group))
 
-		for _, cmd := range commands {
-			buf.WriteString(fmt.Sprintf("%s\n", cmd))
-		}
-		buf.WriteString("\n")
-	}
-	return buf.String()
+        for _, cmd := range commands {
+            buf.WriteString(fmt.Sprintf("%s\n", cmd))
+        }
+        buf.WriteString("\n")
+    }
+    return buf.String()
 }
 
 func dynamicSuggestions(annotation string, _ prompt.Document) []prompt.Suggest {
-	switch annotation {
-	case suggestionListSourceFiles:
-		return GetSourceFiles()
-	default:
-		return []prompt.Suggest{}
-	}
+    switch annotation {
+    case suggestionListSourceFiles:
+        return GetSourceFiles()
+    default:
+        return []prompt.Suggest{}
+    }
 }
 
 func GetSourceFiles() []prompt.Suggest {
-	return []prompt.Suggest{
-		{Text: "main.go", Description: "main.go"},
-		{Text: "helloworld.go", Description: "helloworld.go"},
-	}
+    return []prompt.Suggest{
+        {Text: "main.go", Description: "main.go"},
+        {Text: "helloworld.go", Description: "helloworld.go"},
+    }
 }
-
 ```
 
-#### 基于liner实现
+#### 基于liner的调试会话实现
 
 已经有了基于cobraprompt的自动补全实现了，那我们为什么又提供一个基于liner实现的版本呢？在作者初次尝试实现调试会话时，是基于cobraprompt，当时作者认为cobraprompt的这种自动输入补全能力非常方便和酷炫，所以对其称赞有加。但是随着后续调试活动的增加，作者逐渐意识到：**调试过程中保持用户对问题探求的专注、减少对用户的干扰，比单纯地追求酷炫、方便本身更重要**。
 
@@ -265,192 +264,192 @@ func GetSourceFiles() []prompt.Suggest {
 package debug
 
 import (
-	"bytes"
-	"fmt"
-	"sort"
-	"strings"
+    "bytes"
+    "fmt"
+    "sort"
+    "strings"
 
-	"github.com/peterh/liner"
-	"github.com/spf13/cobra"
+    "github.com/peterh/liner"
+    "github.com/spf13/cobra"
 )
 
 const (
-	cmdGroupAnnotation = "cmd_group_annotation"
+    cmdGroupAnnotation = "cmd_group_annotation"
 
-	cmdGroupBreakpoints = "1-breaks"
-	cmdGroupSource      = "2-source"
-	cmdGroupCtrlFlow    = "3-execute"
-	cmdGroupInfo        = "4-info"
-	cmdGroupOthers      = "5-other"
-	cmdGroupCobra       = "other"
+    cmdGroupBreakpoints = "1-breaks"
+    cmdGroupSource      = "2-source"
+    cmdGroupCtrlFlow    = "3-execute"
+    cmdGroupInfo        = "4-info"
+    cmdGroupOthers      = "5-other"
+    cmdGroupCobra       = "other"
 
-	cmdGroupDelimiter = "-"
+    cmdGroupDelimiter = "-"
 
-	prefix    = "godbg> "
-	descShort = "godbg interactive debugging commands"
+    prefix    = "godbg> "
+    descShort = "godbg interactive debugging commands"
 )
 
 const (
-	suggestionListSourceFiles = "ListSourceFiles"
+    suggestionListSourceFiles = "ListSourceFiles"
 )
 
 var debugRootCmd = &cobra.Command{
-	Use:   "help [command]",
-	Short: descShort,
+    Use:   "help [command]",
+    Short: descShort,
 }
 
 var (
-	CurrentSession *DebugSession
+    CurrentSession *DebugSession
 )
 
 // DebugSession 调试会话
 type DebugSession struct {
-	done   chan bool
-	prefix string
-	root   *cobra.Command
-	liner  *liner.State
-	last   string
+    done   chan bool
+    prefix string
+    root   *cobra.Command
+    liner  *liner.State
+    last   string
 
-	defers []func()
+    defers []func()
 }
 
 // NewDebugSession 创建一个debug专用的交互管理器
 func NewDebugSession() *DebugSession {
 
-	fn := func(cmd *cobra.Command, args []string) {
-		// 描述信息
-		fmt.Println(cmd.Short)
-		fmt.Println()
+    fn := func(cmd *cobra.Command, args []string) {
+        // 描述信息
+        fmt.Println(cmd.Short)
+        fmt.Println()
 
-		// 使用信息
-		fmt.Println(cmd.Use)
-		fmt.Println(cmd.Flags().FlagUsages())
+        // 使用信息
+        fmt.Println(cmd.Use)
+        fmt.Println(cmd.Flags().FlagUsages())
 
-		// 命令分组
-		usage := helpMessageByGroups(cmd)
-		fmt.Println(usage)
-	}
-	debugRootCmd.SetHelpFunc(fn)
+        // 命令分组
+        usage := helpMessageByGroups(cmd)
+        fmt.Println(usage)
+    }
+    debugRootCmd.SetHelpFunc(fn)
 
-	return &DebugSession{
-		done:   make(chan bool),
-		prefix: prefix,
-		root:   debugRootCmd,
-		liner:  liner.NewLiner(),
-		last:   "",
-	}
+    return &DebugSession{
+        done:   make(chan bool),
+        prefix: prefix,
+        root:   debugRootCmd,
+        liner:  liner.NewLiner(),
+        last:   "",
+    }
 }
 
 func (s *DebugSession) Start() {
-	s.liner.SetCompleter(completer)
-	s.liner.SetTabCompletionStyle(liner.TabPrints)
+    s.liner.SetCompleter(completer)
+    s.liner.SetTabCompletionStyle(liner.TabPrints)
 
-	defer func() {
-		for idx := len(s.defers) - 1; idx >= 0; idx-- {
-			s.defers[idx]()
-		}
-	}()
+    defer func() {
+        for idx := len(s.defers) - 1; idx >= 0; idx-- {
+            s.defers[idx]()
+        }
+    }()
 
-	for {
-		select {
-		case <-s.done:
-			s.liner.Close()
-			return
-		default:
-		}
+    for {
+        select {
+        case <-s.done:
+            s.liner.Close()
+            return
+        default:
+        }
 
-		txt, err := s.liner.Prompt(s.prefix)
-		if err != nil {
-			panic(err)
-		}
+        txt, err := s.liner.Prompt(s.prefix)
+        if err != nil {
+            panic(err)
+        }
 
-		txt = strings.TrimSpace(txt)
-		if len(txt) != 0 {
-			s.last = txt
-			s.liner.AppendHistory(txt)
-		} else {
-			txt = s.last
-		}
+        txt = strings.TrimSpace(txt)
+        if len(txt) != 0 {
+            s.last = txt
+            s.liner.AppendHistory(txt)
+        } else {
+            txt = s.last
+        }
 
-		s.root.SetArgs(strings.Split(txt, " "))
-		s.root.Execute()
-	}
+        s.root.SetArgs(strings.Split(txt, " "))
+        s.root.Execute()
+    }
 }
 
 func (s *DebugSession) AtExit(fn func()) *DebugSession {
-	s.defers = append(s.defers, fn)
-	return s
+    s.defers = append(s.defers, fn)
+    return s
 }
 
 func (s *DebugSession) Stop() {
-	close(s.done)
+    close(s.done)
 }
 
 func completer(line string) []string {
-	cmds := []string{}
-	for _, c := range debugRootCmd.Commands() {
-		// complete cmd
-		if strings.HasPrefix(c.Use, line) {
-			cmds = append(cmds, strings.Split(c.Use, " ")[0])
-		}
-		// complete cmd's aliases
-		for _, alias := range c.Aliases {
-			if strings.HasPrefix(alias, line) {
-				cmds = append(cmds, alias)
-			}
-		}
-	}
-	return cmds
+    cmds := []string{}
+    for _, c := range debugRootCmd.Commands() {
+        // complete cmd
+        if strings.HasPrefix(c.Use, line) {
+            cmds = append(cmds, strings.Split(c.Use, " ")[0])
+        }
+        // complete cmd's aliases
+        for _, alias := range c.Aliases {
+            if strings.HasPrefix(alias, line) {
+                cmds = append(cmds, alias)
+            }
+        }
+    }
+    return cmds
 }
 
 // helpMessageByGroups 将各个命令按照分组归类，再展示帮助信息
 func helpMessageByGroups(cmd *cobra.Command) string {
 
-	// key:group, val:sorted commands in same group
-	groups := map[string][]string{}
-	for _, c := range cmd.Commands() {
-		// 如果没有指定命令分组，放入other组
-		var groupName string
-		v, ok := c.Annotations[cmdGroupAnnotation]
-		if !ok {
-			groupName = "other"
-		} else {
-			groupName = v
-		}
+    // key:group, val:sorted commands in same group
+    groups := map[string][]string{}
+    for _, c := range cmd.Commands() {
+        // 如果没有指定命令分组，放入other组
+        var groupName string
+        v, ok := c.Annotations[cmdGroupAnnotation]
+        if !ok {
+            groupName = "other"
+        } else {
+            groupName = v
+        }
 
-		groupCmds, ok := groups[groupName]
-		groupCmds = append(groupCmds, fmt.Sprintf("  %-16s:%s", c.Name(), c.Short))
-		sort.Strings(groupCmds)
+        groupCmds, ok := groups[groupName]
+        groupCmds = append(groupCmds, fmt.Sprintf("  %-16s:%s", c.Name(), c.Short))
+        sort.Strings(groupCmds)
 
-		groups[groupName] = groupCmds
-	}
+        groups[groupName] = groupCmds
+    }
 
-	if len(groups[cmdGroupCobra]) != 0 {
-		groups[cmdGroupOthers] = append(groups[cmdGroupOthers], groups[cmdGroupCobra]...)
-	}
-	delete(groups, cmdGroupCobra)
+    if len(groups[cmdGroupCobra]) != 0 {
+        groups[cmdGroupOthers] = append(groups[cmdGroupOthers], groups[cmdGroupCobra]...)
+    }
+    delete(groups, cmdGroupCobra)
 
-	// 按照分组名进行排序
-	groupNames := []string{}
-	for k, _ := range groups {
-		groupNames = append(groupNames, k)
-	}
-	sort.Strings(groupNames)
+    // 按照分组名进行排序
+    groupNames := []string{}
+    for k, _ := range groups {
+        groupNames = append(groupNames, k)
+    }
+    sort.Strings(groupNames)
 
-	// 按照group分组，并对组内命令进行排序
-	buf := bytes.Buffer{}
-	for _, groupName := range groupNames {
-		commands, _ := groups[groupName]
+    // 按照group分组，并对组内命令进行排序
+    buf := bytes.Buffer{}
+    for _, groupName := range groupNames {
+        commands, _ := groups[groupName]
 
-		group := strings.Split(groupName, cmdGroupDelimiter)[1]
-		buf.WriteString(fmt.Sprintf("- [%s]\n", group))
+        group := strings.Split(groupName, cmdGroupDelimiter)[1]
+        buf.WriteString(fmt.Sprintf("- [%s]\n", group))
 
-		for _, cmd := range commands {
-			buf.WriteString(fmt.Sprintf("%s\n", cmd))
-		}
-		buf.WriteString("\n")
-	}
-	return buf.String()
+        for _, cmd := range commands {
+            buf.WriteString(fmt.Sprintf("%s\n", cmd))
+        }
+        buf.WriteString("\n")
+    }
+    return buf.String()
 }
 
 ```
@@ -516,7 +515,7 @@ func helpMessageByGroups(cmd *cobra.Command) string {
 
 ### 本节小结
 
-本节围绕调试器的“调试会话”交互界面展开，详细介绍了两种主流的命令行交互实现方式：基于 cobra-prompt 的酷炫交互和基于 liner 的精炼交互。通过实际效果截图和代码示例，展示了命令自动补全、参数提示、分组帮助等功能如何提升调试体验。对比分析后，指出 liner 方案更适合调试器场景，既能满足自动补全等核心需求，又能减少对用户的干扰。通过本节内容，读者可以系统了解调试器命令行会话的设计思路和实现细节，为后续深入开发和使用打下坚实基础。
+本节围绕调试器的“调试会话”交互界面展开，详细介绍了两种命令行交互实现方式：基于 cobra-prompt 的酷炫交互和基于 liner 的精炼交互。通过实际效果截图和代码示例，展示了命令自动补全、参数提示、分组帮助等功能如何提升调试体验。对比分析后，指出 liner 方案更适合调试器场景，既能满足自动补全等核心需求，又能减少对用户的干扰。通过本节内容，读者可以系统了解调试器命令行会话的设计思路和实现细节，为后续深入开发和使用打下坚实基础。
 
 接下来我们将学习如何在调试会话中扩展不同的调试命令，如反汇编、添加断点、列出断点、清理断点、步进、执行到断点、读写内存、读写寄存器等调试命令。指令级调试和符号级调试器相比虽然实现起来更简单、工作量也小，但是不要小瞧这部分内容，tracer->kernel->tracee这条控制路径上的交互逻辑是几乎相同的，掌握了指令级调试的这部分内容就扫清了这部分路径上的疑障。等到介绍符号级调试器实现时，我们的技术路径将更加完善 debugger frontend->RPC->debugger backend (tracer with DWARF support)->kernel->tracee。
 
