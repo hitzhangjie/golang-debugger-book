@@ -111,10 +111,12 @@ godbg> step
 这里会影响到调试体验，我们将在后续过程中予以完善。
 
 > ps：上述代码是 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 中的实现，我们重点介绍了step的实现。另外在 [hitzhangjie/golang-debuger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons) /10_step 下，我们也提供了一个step执行的示例，只有一个源文件，与其他demo互不影响，您也可以按照你的想法修改测试下，不用担心改坏整个 godbg的问题。
+>
+>FIXME(demo) 这里的代码实际上也是godbg中的早期实现版本了，后续为了增强维护性，早就进行了大范围的重构。
 
 ### 代码测试
 
-启动一个程序，获取其进程pid，然后执行 `godbg attach <pid>`对进程进行调试，等调试会话就绪之后，我们输入 `disass`反汇编看下当前指令地址之后的汇编指令有哪些。
+启动一个程序，获取其进程pid，然后执行 `godbg attach <pid>`对进程进行调试，等调试会话就绪之后，我们输入 `disass` 反汇编看下当前指令地址之后的汇编指令有哪些。
 
 ```bash
 godbg> disass
@@ -147,20 +149,32 @@ godbg>
 
 我们执行了step指令3次，step每次执行一条指令之后，会输出执行指令后的PC值，依次是0x40ab4e、0x40ab53、0x40ab58，依次是下条指令的首地址。
 
-不禁要问，执行系统调用 `ptrace(PTRACE_SINGLESTEP,...)` 时，内核是如何实现逐指令执行的？显然它没有采用指令patch的方式（如果也是指令patch的方式，上述step命令输出的PC值应该是在当前显示的值基础上分别+1）。
+不禁要问，执行系统调用 `ptrace(PTRACE_SINGLESTEP,...)` 时，内核是如何实现逐指令执行的？只执行一条机器指令后立即停下来，有点奇妙！ 
 
 ### 更多相关内容：SINGLESTEP
 
-那内核是如何处理PTRACE_SINGLESTEP请求的呢？SINGLESTEP确实比较特殊，在man(2)手册里面并没有找到太多有价值的信息：
+内核是如何处理PTRACE_SINGLESTEP请求的呢？SINGLESTEP确实比较特殊，在man(2)手册里面并没有找到太多有价值的信息：
 
 ```bash
-   PTRACE_SINGLESTEP stops
-       [Details of these kinds of stops are yet to be documented.]
+$ man 2 ptrace
+------------------------------------------------------------------
+
+NAME
+       ptrace - process trace
+
+SYNOPSIS
+       #include <sys/ptrace.h>
+       long ptrace(enum __ptrace_request request, pid_t pid,
+                   void *addr, void *data);
+Description
+    ...
+    PTRACE_SINGLESTEP stops
+        [Details of these kinds of stops are yet to be documented.]
 ```
 
 man(2)手册里面没有太多有价值的相关信息，查看内核源码以及Intel开发手册之后，可以了解到这方面的细节。
 
-1. SINGLESTEP调试在Intel平台上部分借助了处理器自身硬件特性来实现的，参考《Intel® 64 and IA-32 Architectures Software Developer's Manual Volume 1: Basic Architecture》，Intel架构处理器是有一个标识寄存器EFLAGS，当通过内核将标志寄存器的TF标志置为1时，处理器会自动进入单步执行模式，清0退出单步执行模式。
+1. SINGLESTEP调试在Intel平台上是借助了处理器自身硬件特性来实现的，参考《Intel® 64 and IA-32 Architectures Software Developer's Manual Volume 1: Basic Architecture》，Intel架构处理器是有一个标识寄存器EFLAGS，当通过内核将标志寄存器的TF标志置为1时，处理器会自动进入单步执行模式，清0退出单步执行模式。
 
    > **System Flags and IOPL Field**
    >
@@ -169,7 +183,7 @@ man(2)手册里面没有太多有价值的相关信息，查看内核源码以�
    > **TF (bit 8) Trap flag** — Set to enable single-step mode for debugging; clear to disable single-step mode.
    >
 2. 我们执行系统调用 `syscall.PtraceSingleStep(...)` 时，实际上是 `ptrace(PTRACE_SINGLESTEP, pid...)` ，此时内核会将被跟踪的tracee的task_struct中的寄存器部分的flags设置为flags |= TRAP，然后调度tracee执行。
-3. 调度器执行tracee时会先将其进程控制块task_struct中的硬件上下文信息还原到处理器寄存器中，然后再执行对应tracee的指令。此时处理器发现EFLAGS.TF=1，执行指令的时候就会先清空该标志位，然后执行单条指令，执行完成后处理器会自动生成一个陷阱中断，不需要软件层面模拟。
+3. 调度器执行tracee时会先将其进程控制块task_struct中的硬件上下文信息还原到处理器寄存器中，然后再执行对应tracee的指令。此时处理器发现EFLAGS.TF=1，进入单步执行模式。处理器执行单条指令，执行完成后处理器会自动生成一个陷阱中断，然后重置该标志位。这里的陷阱中断是type-1中断 (中断1是调试异常#DB，中断3是断点异常#BP)。
 
    > **Single-step interrupt**
    > When a system is instructed to single-step, it will execute one instruction and then stop.
@@ -177,6 +191,13 @@ man(2)手册里面没有太多有价值的相关信息，查看内核源码以�
    > The Intel 8086 trap flag and type-1 interrupt response make it quite easy to implement a single-step feature in an 8086-based system. If the trap flag is set, the 8086 will automatically do a type-1 interrupt after each instruction executes. When the 8086 does a type-1 interrupt, ...
    > The trap flag is reset when the 8086 does a type-1 interrupt, so the single-step mode will be disabled during the interrupt-service procedure.
    >
-4. 内核中断服务程序负责处理这个TRAP，其实就是继续暂停tracee调度（此时也会保存下硬件上下文信息），然后内核会给tracer发送SIGTRAP信号，以这种方式通知调试器tracer你跟踪的tracee已经单步执行了一条指令后停下来等待接收后续调试命令了。
+4. 内核中断服务程序负责处理这个中断(中断1，#DB异常），会像处理中断3#BP异常时那样，给tracee发送SIGTRAP，信号处理时进而会暂停tracee调度，然后通过SIGCHLD、__wake_up_parent唤醒tracer，以这种方式通知调试器tracer，“嘿，tracee已经单步执行了一条指令，并且已经停下来等待接收后续调试命令了”。
 
-这就是Intel平台下单步执行的一些细节信息，读者如果对其他硬件平台感兴趣，也可以自行了解下它们是如何设计实现来解决单步调试问题的。
+ps：这就是Intel平台下单步执行的一些细节信息，读者如果对其他硬件平台感兴趣，也可以自行了解下它们是如何设计实现来解决单步调试问题的。
+
+### 本节小结
+
+本节主要探讨了调试器中step逐指令执行功能的实现原理与具体实现，核心内容包括：通过ptrace(PTRACE_SINGLESTEP)系统调用实现单步执行；处理断点恢复的特殊情况，确保PC值正确性；理解Intel平台下基于EFLAGS.TF标志位的硬件单步执行机制。
+
+本节内容为读者深入理解调试器执行控制机制以及后续实现continue、next等高级调试命令奠定了重要基础。
+
