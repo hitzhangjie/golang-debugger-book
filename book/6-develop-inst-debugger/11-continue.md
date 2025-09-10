@@ -2,17 +2,23 @@
 
 ### 实现目标：continue运行到下个断点
 
-假定当前tracee处于被调试跟踪、暂停执行状态，如果要运行到下个断点处，应该如何做呢？detach之后，被跟踪的tracee会自动恢复执行，但是我们肯定要继续跟踪。那应该如何操作呢？
+假定当前tracee处于被调试跟踪、暂停执行状态，如果要运行到下个断点处，应该如何做呢？detach之后，被跟踪的tracee会自动恢复执行，但我们肯定要继续跟踪。
 
-操作系统提供了 `ptrace(PTRACE_COND,...)` 操作，允许我们恢复tracee执行，此时的tracee仍然被tracer跟踪，当tracee一直运行到下个断点处时，执行0xCC触发3号中断#BP，进而内核生成SIGTRAP给tracee，进而进入信号处理逻辑，暂停tracee并唤醒tracer。
+操作系统提供了 `ptrace(PTRACE_CONT,...)` 操作，允许我们恢复tracee执行，此时的tracee仍然被tracer跟踪。当tracee运行到下个断点处时，执行0xCC触发3号中断#BP，内核生成SIGTRAP给tracee，进入信号处理逻辑，暂停tracee并唤醒tracer。
 
-在执行上述调用恢复tracee执行前，我们还是要检查下当前 `PC-1 `地址处是否是我们添加的断点，如果是则需要将其替换为原始指令数据，并回退PC (PC=PC-1)，然后才能保证tracee执行了正确的第1条指令、后续的指令也才能解码正常，才算是正常恢复执行。
+在执行恢复操作前，需要检查当前 `PC-1` 地址处是否是我们添加的断点，如果是则需要将其替换为原始指令数据，并回退PC (PC=PC-1)，确保tracee能够正确执行后续指令。
 
 ### 代码实现
 
-continue命令执行时，首先检查当前PC-1处数据是否为0xCC，如果是则说明PC-1处是一个被patch的指令（可能是单字节指令，也可能是多字节指令）。需要将断点位置的数据，还原回patched之前的原始数据。然后将 PC=PC-1，再执行 `ptrace(PTRACE_COND, ...)` 操作请求操作系统恢复tracee执行，最后，我们tracer通过 `syscall.Wait4(...)` 等待tracee停下来。
+continue命令的执行流程如下：
 
-tracee运行到断点处停下来。运行到断点处后又会重新触发int3中断停下来，然后tracee状态变化又会通知到tracer，tracer被唤醒后，然后再 `ptrace(PTRACE_GET_REGS, ...)` 检查下其寄存器信息，这里我们先只获取PC值。注意当前PC值是执行了0xCC指令之后的地址值，因此 PC=断点地址+1。
+1. 检查当前PC-1处数据是否为0xCC，如果是则说明该处是被patch的断点指令
+2. 将断点位置的数据还原为原始指令，并将PC回退1
+3. 执行 `ptrace(PTRACE_CONT, ...)` 操作请求操作系统恢复tracee执行
+4. 通过 `syscall.Wait4(...)` 等待tracee停下来
+5. 当tracee运行到断点处时，会重新触发int3中断，tracer被唤醒后获取寄存器信息
+
+注意：当前PC值是执行了0xCC指令之后的地址值，因此 PC=断点地址+1。
 
 **file: cmd/debug/continue.go**
 
@@ -89,17 +95,21 @@ func init() {
 }
 ```
 
-在cmd/debug/step.go的基础上简单修改下就可以实现continue操作，详见源文件cmd/debug/continue.go。
+上述代码基于cmd/debug/step.go修改实现，详见源文件cmd/debug/continue.go。
 
-> ps：上述代码是 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 中的实现，我们重点介绍了step的实现。另外在 [hitzhangjie/golang-debuger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons) /11_continue 下，我们也提供了一个continue执行的示例，只有一个源文件，与其他demo互不影响，您也可以按照你的想法修改测试下，不用担心改坏整个 godbg的问题。
+> 注：上述代码来自 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 项目。另外在 [hitzhangjie/golang-debuger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons) /11_continue 下提供了独立的continue执行示例，可单独测试修改。
 
 ### 代码测试
 
-首先启动一个进程，获取其pid，然后通过 `godbg attach <pid>`对目标进程进行调试，等调试会话就绪后，我们输入 `dis`（dis是disass命令的别名）进行反汇编。
+测试步骤如下：
 
-要验证continue命令的功能，首先要dis反汇编查看指令地址，然后再break添加断点，然后再continue运行到断点。
+1. 启动一个进程，获取其pid
+2. 通过 `godbg attach <pid>` 对目标进程进行调试
+3. 调试会话就绪后，输入 `dis`（disass命令的别名）进行反汇编
+4. 选择合适的指令地址添加断点
+5. 执行continue命令运行到断点
 
-需要注意的是，添加断点时要简单看下汇编指令的含义，因为考虑到代码执行时的分支控制逻辑，我们添加的断点并不一定在代码实际的执行路径上，所以可能不能验证continue运行到断点的功能（但是仍然可以验证运行到进程执行结束）。
+注意：添加断点时要考虑代码执行时的分支控制逻辑，确保断点位于实际的执行路径上，否则可能无法验证continue运行到断点的功能。
 
 为了验证运行到下个断点，我多次运行dis、step，直到发现有一段指令可以连续执行，中间没有什么跳转操作，如下图所示：
 
@@ -133,20 +143,17 @@ continue
 continue ok, current PC: 0x42e2ee
 ```
 
-我们在第4条指令 `0x42e2ed test %eax,%eax`处添加断点，断点添加成功后，我们执行 `c`(c是continue的别名）来运行到断点处。运行到断点之后，输出当前的PC值，前面有分析过，PC=0x42e2ee=0x42e2ed+1，因为被调试进程是在执行了0x42e2ed处的指令 `0xCC`才停下来的，完全符合预期。
+我们在第4条指令 `0x42e2ed test %eax,%eax` 处添加断点，然后执行 `c`（continue的别名）运行到断点处。运行结果显示当前PC值为0x42e2ee=0x42e2ed+1，这是因为被调试进程在执行了0x42e2ed处的0xCC断点指令后才停下来，完全符合预期。
 
 ### 更多相关内容
 
-continue命令有多重要？相当重要，特别是对于符号级调试器而言。
+continue命令对于符号级调试器至关重要。在源代码向汇编指令的转换过程中，一条源代码语句可能对应多条机器指令。当我们需要：
 
-源代码向汇编指令的转换过程中，一条源代码语句可能对应着多条机器指令，当我们：
+- 逐语句执行
+- 进入、退出函数（函数有prologue、epilogue）
+- 进入、退出循环体
 
-- 逐语句执行时；
-- 进入、退出一个函数时（函数有prologue、epilogue）；
-- 进入、退出一个循环体时；
-- 等等；
-
-要实现上述源码级调试就必须要借助对源码及指令的理解，恰到好处的在正确的地址处设置断点，然后配合continue来实现。
+实现上述源码级调试功能时，必须借助对源码及指令的理解，在正确的地址处设置断点，然后配合continue命令来实现。
 
 我们将在符号级调试器一章中更详细地研究这些内容。
 
