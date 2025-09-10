@@ -2,15 +2,17 @@
 
 ### 实现目标：continue运行到下个断点
 
-运行到下个断点处，就是让tracee正常执行后续指令，直到命中并执行完下一个被0xCC patch的指令后触发int3中断，然后内核中断服务将tracee暂停执行。
+假定当前tracee处于被调试跟踪、暂停执行状态，如果要运行到下个断点处，应该如何做呢？detach之后，被跟踪的tracee会自动恢复执行，但是我们肯定要继续跟踪。那应该如何操作呢？
 
-具体怎么实现呢？操作系统提供了 `ptrace(PTRACE_COND,...)` 操作，允许我们直接运行到下个断点处。但是在执行上述调用前，同样要检查下当前 `PC-1 `地址处的数据是否为 `0xCC`，如果是则需要将其替换为原始指令数据。
+操作系统提供了 `ptrace(PTRACE_COND,...)` 操作，允许我们恢复tracee执行，此时的tracee仍然被tracer跟踪，当tracee一直运行到下个断点处时，执行0xCC触发3号中断#BP，进而内核生成SIGTRAP给tracee，进而进入信号处理逻辑，暂停tracee并唤醒tracer。
+
+在执行上述调用恢复tracee执行前，我们还是要检查下当前 `PC-1 `地址处是否是我们添加的断点，如果是则需要将其替换为原始指令数据，并回退PC (PC=PC-1)，然后才能保证tracee执行了正确的第1条指令、后续的指令也才能解码正常，才算是正常恢复执行。
 
 ### 代码实现
 
-continue命令执行时，首先检查当前PC-1处数据是否为0xCC，如果是则说明PC-1处是一个被patch的指令（可能是单字节指令，也可能是多字节指令）。需要将断点位置的数据，还原回patched之前的原始数据。然后将 PC=PC-1，再执行 `ptrace(PTRACE_COND, ...)` 操作请求操作系统恢复tracee执行，让tracee运行到断点处停下来。运行到断点处后又会重新触发int3中断停下来，然后tracee状态变化又会通知到tracer。
+continue命令执行时，首先检查当前PC-1处数据是否为0xCC，如果是则说明PC-1处是一个被patch的指令（可能是单字节指令，也可能是多字节指令）。需要将断点位置的数据，还原回patched之前的原始数据。然后将 PC=PC-1，再执行 `ptrace(PTRACE_COND, ...)` 操作请求操作系统恢复tracee执行，最后，我们tracer通过 `syscall.Wait4(...)` 等待tracee停下来。
 
-最后，我们tracer通过 `syscall.Wait4(...)` 等待tracee停下来，然后再检查下其寄存器信息，这里我们先只获取PC值。注意当前PC值是执行了0xCC指令之后的地址值，因此 PC=断点地址+1。
+tracee运行到断点处停下来。运行到断点处后又会重新触发int3中断停下来，然后tracee状态变化又会通知到tracer，tracer被唤醒后，然后再 `ptrace(PTRACE_GET_REGS, ...)` 检查下其寄存器信息，这里我们先只获取PC值。注意当前PC值是执行了0xCC指令之后的地址值，因此 PC=断点地址+1。
 
 **file: cmd/debug/continue.go**
 
@@ -63,10 +65,10 @@ var continueCmd = &cobra.Command{
 			return fmt.Errorf("single step error: %v", err)
 		}
 
-		// MUST: 当发起了某些对tracee执行控制的ptrace request之后，要调用syscall.Wait等待并获取tracee状态变化
+		// 发起了对tracee执行控制的ptrace请求后，要调用syscall.Wait等待并获取tracee状态变化
 		var wstatus syscall.WaitStatus
 		var rusage syscall.Rusage
-		_, err = syscall.Wait4(TraceePID, &wstatus, syscall.WALL, &rusage)
+		_, err = syscall.Wait4(TraceePID, &wstatus, syscall.WSTOPPED, &rusage)
 		if err != nil {
 			return fmt.Errorf("wait error: %v", err)
 		}
@@ -147,3 +149,10 @@ continue命令有多重要？相当重要，特别是对于符号级调试器而
 要实现上述源码级调试就必须要借助对源码及指令的理解，恰到好处的在正确的地址处设置断点，然后配合continue来实现。
 
 我们将在符号级调试器一章中更详细地研究这些内容。
+
+### 本节小结
+
+本节主要探讨了调试器中continue命令的实现原理和具体实现，核心内容包括：通过`ptrace(PTRACE_CONT,...)`恢复tracee执行，并等待其运行到下一个断点或者执行结束；在恢复执行前需要检查并还原断点处的原始指令数据，同时调整PC寄存器值，以确保指令解码正常；使用`syscall.Wait4`等待tracee在断点处停止并获取其状态变化。本节重点强调了断点恢复机制的重要性——必须将0xCC断点指令还原为原始指令并回退PC，确保tracee能够正确执行后续指令。
+
+这些底层机制为符号级调试器提供了基础支撑，使得调试器能够实现逐语句执行、函数进入退出等高级调试功能。本节内容为读者理解调试器的执行控制机制和后续学习符号级调试器打下了坚实的技术基础。
+
