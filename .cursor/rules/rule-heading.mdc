@@ -1,0 +1,7 @@
+---
+description: 标题级别设置
+globs: *.md
+alwaysApply: true
+---
+
+有些章节排版特殊要求，markdown起始标题会设置为二级标题，此时要注意遵守文档的标题设置惯例，避免盲目对齐markdown linters报出的标题级别问题。

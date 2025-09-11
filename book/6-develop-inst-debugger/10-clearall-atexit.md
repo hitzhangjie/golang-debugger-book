@@ -2,15 +2,23 @@
 
 ### 问题背景：断点残留的危害
 
-在调试器开发过程中，我们通过ptrace系统调用对目标进程的指令进行动态修改来实现断点功能。具体来说，断点的添加是通过将目标地址的指令字节替换为0xCC（int3指令）来实现的，同时需要备份原始指令字节以便后续恢复。
+在调试器开发过程中，我们通过ptrace系统调用对目标进程的指令进行动态修改来实现动态软件断点。具体来说，断点的添加是通过将目标地址的指令字节替换为0xCC（int3指令）来实现的，同时需要备份原始指令字节以便后续恢复。
 
-然而，如果调试器在退出前没有主动清理这些动态添加的断点，将会给被调试进程（tracee）造成严重的不良影响：
+调试器与tracee的关系存在多种场景：
+
+- 通过 `debug` 编译构建并启动构建好的程序；
+- 通过 `exec` 启动已经构建好的程序；
+- 通过`attach`跟踪正在运行中的进程。
+
+对于前两种情况，调试器退出时通常会主动终止tracee；而对于`attach`场景，调试器退出后时一般会倾向于恢复tracee的执行。
+
+然而，如果调试器在退出前没有主动清理这些动态添加的断点，将会给被调试进程造成严重的不良影响：
 
 1. **指令不完整**：多字节指令被patch后变成不完整的指令序列
-2. **SIGTRAP信号**：当tracee执行到断点位置时，会触发SIGTRAP信号
+2. **SIGTRAP信号**：当tracee执行到断点位置时，会触发SIGTRAP信号  
 3. **进程终止**：在没有tracer的情况下，内核的默认行为是杀死该tracee进程
 
-这种问题在attach到已运行进程的场景下尤为严重，因为用户通常希望调试器退出后，被调试的进程能够继续正常运行。
+我们必须足够重视这个问题，需要实现一个类似C语言atexit的机制，在调试器退出前自动清理所有断点。
 
 ### 实现目标：自动断点清理
 
@@ -93,6 +101,7 @@ session.Start()
 我们通过一个实际的测试来演示不清理断点会导致的问题：
 
 1. **启动测试进程**：
+
 ```bash
 $ while [ 1 -eq 1 ]; do t=`date`; echo "$t pid: $$"; sleep 1; done
 
@@ -103,6 +112,7 @@ Sun Sep  7 15:22:26 CST 2025 pid: 416728
 ```
 
 2. **附加调试器并添加断点**：
+
 ```bash
 godbg attach 416728
 godbg> pregs
@@ -117,24 +127,28 @@ godbg> continue
 ```
 
 3. **观察进程行为**：
+
 执行continue后，tracee开始重新输出信息：
+
 ```bash
 Sun Sep  7 15:23:19 CST 2025 pid: 416728 <= after we run `continue`, we see the output again.
 ```
 
 4. **退出调试器（不清理断点）**：
+
 ```bash
 godbg> exit
 ```
 
 5. **观察进程终止**：
+
 ```bash
 Sun Sep  7 15:22:23 CST 2025 pid: 416728
 Sun Sep  7 15:22:24 CST 2025 pid: 416728
 Sun Sep  7 15:22:25 CST 2025 pid: 416728
 Sun Sep  7 15:22:26 CST 2025 pid: 416728
 Sun Sep  7 15:22:27 CST 2025 pid: 416728 
-                                         
+                                        
 
 Sun Sep  7 15:23:19 CST 2025 pid: 416728
 
@@ -145,11 +159,13 @@ You can now close this terminal with Ctrl+D, or press Enter to restart.
 #### 测试场景：使用AtExit机制的正确行为
 
 1. **启动测试进程**：
+
 ```bash
 $ while [ 1 -eq 1 ]; do t=`date`; echo "$t pid: $$"; sleep 1; done
 ```
 
 2. **使用带AtExit的调试器**：
+
 ```bash
 godbg attach 416728
 godbg> break <address>
@@ -159,13 +175,14 @@ godbg> exit
 ```
 
 3. **验证进程继续运行**：
+
 ```bash
 Sun Sep  7 15:22:23 CST 2025 pid: 416728
 Sun Sep  7 15:22:24 CST 2025 pid: 416728
 Sun Sep  7 15:22:25 CST 2025 pid: 416728
 Sun Sep  7 15:22:26 CST 2025 pid: 416728
 Sun Sep  7 15:22:27 CST 2025 pid: 416728 
-                                         
+                                        
 
 Sun Sep  7 15:23:19 CST 2025 pid: 416728
 Sun Sep  7 15:23:20 CST 2025 pid: 416728 <= 进程继续正常运行

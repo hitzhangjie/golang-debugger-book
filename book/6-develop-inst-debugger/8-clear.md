@@ -123,94 +123,16 @@ breakpoint[3] 0x4653c2
 
 现在断点2已经被移除了，我们的添加、移除断点的功能是正常的。
 
-### 思考：如果tracer退出前不清理断点?
+### 思考：如果tracer退出前不清理断点？
 
-思考一个问题，tracer添加、移除断点都是通过ptrace系统调用显示对进程指令进行patch，那么如果tracer退出前不显示清除过去添加过的断点会怎样？
+思考一个问题，tracer添加、移除断点都是通过ptrace系统调用对进程指令进行patch，那么如果tracer退出前不主动清除过去添加过的断点会怎样？
 
-我们尝试运行一个shell操作来模拟tracee：
+这会导致被调试进程在后续执行时遇到严重问题：多字节指令被patch后不完整，执行时会触发SIGTRAP信号，在没有tracer的情况下，内核的默认行为是杀死该进程。
 
-```bash
-$ while [ 1 -eq 1 ]; do t=`date`; echo "$t pid: $$"; sleep 1; done
-
-Sun Sep  7 15:22:23 CST 2025 pid: 416728
-Sun Sep  7 15:22:24 CST 2025 pid: 416728
-Sun Sep  7 15:22:25 CST 2025 pid: 416728
-Sun Sep  7 15:22:26 CST 2025 pid: 416728
-```
-
-然后咱们执行godbg调试跟踪跟进程：
-
-```bash
-godbg attach 416728
-```
-
-回头发现刚才的shell操作不再执行输出操作了：
-
-```bash
-$ while [ 1 -eq 1 ]; do t=`date`; echo "$t pid: $$"; sleep 1; done
-
-Sun Sep  7 15:22:23 CST 2025 pid: 416728
-Sun Sep  7 15:22:24 CST 2025 pid: 416728
-Sun Sep  7 15:22:25 CST 2025 pid: 416728
-Sun Sep  7 15:22:26 CST 2025 pid: 416728
-Sun Sep  7 15:22:27 CST 2025 pid: 416728 <= godbg attach 416728, after traced, tracee paused
-                                         <= OK, press enter enter enter to create some space here,
-                                            so we can watch the output again when we run `continue`.
-
-```
-
-现在我们回到godbg调试会话中依次执行如下操作：
-
-```bash
-godbg> pregs
-    Rax <Rax value>
-    Rbx <Rbx value>
-    ... 
-    Rip <Rip value>
-    ...
-
-godbg> break <Rip value>
-godbg> continue
-```
-
-执行continue操作，然后会观察到tracee开始重新输出信息：
-
-```bash
-$ while [ 1 -eq 1 ]; do t=`date`; echo "$t pid: $$"; sleep 1; done
-
-Sun Sep  7 15:22:23 CST 2025 pid: 416728
-Sun Sep  7 15:22:24 CST 2025 pid: 416728
-Sun Sep  7 15:22:25 CST 2025 pid: 416728
-Sun Sep  7 15:22:26 CST 2025 pid: 416728
-Sun Sep  7 15:22:27 CST 2025 pid: 416728
-                                        
-                                        
-Sun Sep  7 15:23:19 CST 2025 pid: 416728 <= after we run `continue`, we see the output again.
-```
-
-现在我们回到godbg调试会话中执行exit操作，此时会执行ptrace detach操作，tracee会恢复执行。但是我们知道，多字节指令被patch后是不完整的，如果调试器退出前没有显示恢复该多字节指令数据，那么后续tracee执行到这个指令时应该会遇到指令解码错误。但是在遇到这个错误之前，它一定会先执行断点指令0xCC，然后会触发SIGTRAP信号。
-
-SIGTRAP本来就是为了软件调试设计的，此时没有tracer会发生什么呢？没有tracer的情况下，内核的默认行为是杀死该tracee，也就是下面我们看到的，tracee退出了，错误码是 5 (0x00000005)。
-
-```bash
-Sun Sep  7 15:22:23 CST 2025 pid: 416728
-Sun Sep  7 15:22:24 CST 2025 pid: 416728
-Sun Sep  7 15:22:25 CST 2025 pid: 416728
-Sun Sep  7 15:22:26 CST 2025 pid: 416728
-Sun Sep  7 15:22:27 CST 2025 pid: 416728 
-                                         
-
-Sun Sep  7 15:23:19 CST 2025 pid: 416728
-
-[process exited with code 5 (0x00000005)] <= tracee exited with error
-You can now close this terminal with Ctrl+D, or press Enter to restart.
-```
-
-所以，调试器在退出之前务必要清理掉之前创建过的所有断点，否则会给tracee后续运行造成非常不良的影响。我们将在clearall时顺便提下如何做这个优化。
+关于这个问题的详细分析、测试演示以及解决方案，我们将在[调试器退出前的断点清理机制](./10-clearall-atexit.md)这一节中进行详细介绍。
 
 ### 本节小结
 
-本节主要探讨了调试器中动态断点的移除功能实现，核心内容包括断点移除与添加的对称性、ptrace系统调用的反向操作，以及删除断点时的断点编号验证、断点查找、指令恢复和断点集合清理步骤。ptrace操作PTRACE_PEEKTEXT/PTRACE_POKETEXT用于指令操作，PTRACE_PEEKDATA/PTRACE_POKEDATA用于数据操作，但实际功能相同。对于添加的断点，在调试器退出时，如果希望进程继续运行则应该主动清理掉这些断点。
+本节主要探讨了调试器中动态断点的移除功能实现，核心内容包括断点移除与添加的对称性、ptrace系统调用的反向操作，以及删除断点时的断点编号验证、断点查找、指令恢复和断点集合清理步骤。ptrace操作PTRACE_PEEKTEXT/PTRACE_POKETEXT用于指令操作，PTRACE_PEEKDATA/PTRACE_POKEDATA用于数据操作，但实际功能相同。
 
 本节内容完善了调试器断点管理的核心功能，与前面的断点添加、断点列表显示功能共同构成了完整的断点操作体系，为读者理解调试器内部机制提供了重要的实践基础。通过本节的学习，读者可以掌握断点移除的底层实现原理，为后续学习更复杂的调试器功能（如条件断点、断点修改等）奠定了技术基础。
-
