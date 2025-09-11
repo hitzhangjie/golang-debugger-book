@@ -345,21 +345,53 @@ long kernel_wait4(pid_t upid, int __user *stat_addr, int options,
 static long do_wait(struct wait_opts *wo)
 {
     ...
-    init_waitqueue_func_entry(&wo->child_wait, child_wait_callback);
-    wo->child_wait.private = current;
-    add_wait_queue(&current->signal->wait_chldexit, &wo->child_wait);
+
+    // 将当前线程加入到进程共享的等待队列中 (注意这个current->signal是进程专属字段，所有线程共享)
+    add_wait_queue(&current->signal->wait_chldexit, &wo->child_wait);   
 
     do {
+        // 将当前线程设置为可中断等待状态
         set_current_state(TASK_INTERRUPTIBLE);
         ...
+        // 执行一轮调度，当前线程让出CPU进入等待
         schedule();
     } while (1);
 
+    // 等到被唤醒并重新调度
     __set_current_state(TASK_RUNNING);
     remove_wait_queue(&current->signal->wait_chldexit, &wo->child_wait);
     return retval;
 }
 ```
+
+什么时候被唤醒呢？当tracee状态发生变化时显示通过 do_notify_parent_cldstop 通知时：
+
+```c
+static void do_notify_parent_cldstop(struct task_struct *tsk, bool for_ptracer, int why)
+{
+    ...
+    // 这个其实是发送给ptracer所属进程的，进程中任意一个线程均可以处理：
+    // - 如果是untraced线程，可以处理信号；
+    // - 如果是traced线程，会进入signal-deliver-sigstop，暂停tracee执行，
+    //   ptracer可以通过PTRACE_RESTART操作的同时inject signal给tracee（此时可以更换成别的信号）;
+    //
+    // 这个信号不一定总是生成，不一定能够唤醒ptracer进程上wait4阻塞调用！
+    __group_send_sig_info(SIGCHLD, &info, parent); 
+
+    // 唤醒ptracer进程上wait4阻塞调用，这个函数是最靠谱的，它直接唤醒parent上等待tsk状态变化的所有线程
+    __wake_up_parent(tsk, parent);
+}
+
+void __wake_up_parent(struct task_struct *p, struct task_struct *parent)
+{
+    // 唤醒ptracer所属进程上正在通过wait4等待当前tracee状态改变的所有线程
+    // parent->signal时是进程专属字段，所有线程共享
+    __wake_up_sync_key(&parent->signal->wait_chldexit,
+               TASK_INTERRUPTIBLE, p);
+}
+```
+
+OK，以上提了下阻塞和唤醒的内核中的交互式过程。
 
 父进程也可通过 `ptrace(PTRACE_COND, pid, ...)` 操作来恢复子进程执行，使其继续执行execve加载的新程序。
 
