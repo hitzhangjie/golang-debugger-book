@@ -147,8 +147,9 @@ static int ptrace_check_attach(struct task_struct *child, bool ignore_state)
 
 src详见：golang-debugger-lessons/2_process_attach。
 
-> 下面是man手册关于ptrace操作attach、detach的说明，下面要用到：
->
+
+下面是man手册关于ptrace操作attach、detach的说明，下面要用到：
+
 > **PTRACE_ATTACH**  
 > Attach to the process specified in pid, making it a tracee of
 > the calling process.  The tracee is sent a SIGSTOP, but will
@@ -161,6 +162,18 @@ src详见：golang-debugger-lessons/2_process_attach。
 > Restart the stopped tracee as for PTRACE_CONT, but first de‐
 > tach from it.  Under Linux, a tracee can be detached in this
 > way regardless of which method was used to initiate tracing.
+
+当我们通过 `ptrace(PTRACE_ATTACH, pid, ...)` 操作去跟踪一个指定的线程时，内核会给这个目标线程发送一个信号SIGSTOP。
+
+当执行SIGSTOP的信号处理时，内核会执行如下关键操作：
+
+```c
+do_signal_stop
+    set_special_state(TASK_STOPPED);                    // 暂停tracee执行
+    do_notify_parent_cldstop(current, false, notify);   // 通知ptracer tracee已经停止
+        __group_send_sig_info(SIGCHLD, &info, parent);  // 给ptracer进程发送SIGCHLD，任意线程都可以处理
+        __wake_up_parent(tsk, parent);                  // 唤醒ptracer进程中任意调用了wait4(tracee，)阻塞的线程
+```
 
 file: main.go
 
