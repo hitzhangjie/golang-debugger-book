@@ -650,9 +650,77 @@ static inline void ptrace_event(int event, unsigned long message)
 首先会创建一个线程，然后完成一些housekeeping逻辑并将新线程放入调度器的任务队列中，等待被调度，然后通过ptrace_event_pid发送SIGTRAP给这个新线程。OK，一切准备就绪，之后就是kernel_clone系统调用执行结束返回时，系统调用结束时就是内核发起新一轮调度的一个契机，如果新线程被调度器调度到、新线程返回用户态开始执行之前，首先就是要处理这个SIGTRAP信号，自然就会停下来并通知ptracer。通知ptracer的这部分我们前面已经提过了，这里不再赘述。
 
 >ps: 各种类型任务的切换时机，联想下：
+>
 >- 中断服务程序切换，指令周期的结束CPU会检查有没有新的中断控制器发来的中断请求；
 >- 线程切换，操作系统内核系统调用时钟中断、系统调用返回之前会检查是否需要执行当前任务，还是切换到另一个任务，此时还会检查有没有pending信号要处理；
 >- 协程切换，在goroutine进行网络IO、或者涉及到goroutines之间执行同步操作的交互逻辑时，检查是否需要暂停当前goroutine并调度其他goroutine来执行；
+
+### 重新思考ptrace limit
+
+前一节我们思考过ptrace limit，即当ptrace link建立后，debugger要发送给tracee的所有ptrace requests都只能通过tracer对应的线程来发送。
+
+ptrace link建立的方式有两种：
+1、一种是ptrace attach去跟踪已经运行中的线程；
+2、一种是主动启动构建好的程序，通过fork+exec的方式，子进程中主动调用ptrace traceme；
+
+这两种方式都需要考虑这里的ptrace约束：所有后续ptrace请求都只能通过一个ptracer发送。那就要求我们设计一个公共的helper函数，比如 `func execPtraceAction(func () error) error`，我们可以内部维护一个chan，这个chan会接受调用方发送来的所有ptrace操作函数，然后我们启动一个goroutine，这个goroutine一开始就设置好 `runtime.LockOSThread()` ，然后它慢慢消费这个ptrace操作函数队列，取出一个执行一个，并设置好是否发生了error。
+
+```go
+var (
+    once sync.Once
+    reqCh = make(chan func() error, 1)
+    doneCh = make(chan error, 1)
+)
+
+func execPtrace(fn func() error) error {
+    once.Do(func() {
+        go func() {
+            // ensure all ptrace requests goes via the same tracer (thread)
+            runtime.LockOSThread()
+            defer runtime.UnlockOSThread()
+
+            // polling ptrace actions and run them
+            for {
+                select {
+                case req := <-reqCh:
+                    req.errCh <- req.fn()
+                case <-p.doneCh:
+                    break
+                }
+            }
+        }()
+    })
+
+    // submit ptrace action
+    req := ptraceRequest{
+        fn:    fn,
+        errCh: make(chan error),
+    }
+    reqCh <- req
+    // wait ptrace action finished
+    return <-req.errCh
+}
+```
+
+比较特殊的是，通先启动子进程，然后子进程主动调用ptrace traceme这种方式，执行启动子进程逻辑的线程自动就成了ptracer，所以为了保证后续ptrace requests能和这个ptracer是同一个线程上执行的。我们也要将启动子进程逻辑放在上述函数中执行。比如：
+
+```go
+var err = execPtrace(func() error) {
+    // start process but don't wait it finished
+    progCmd := exec.Command(args[0])
+    progCmd.Stdin = os.Stdin
+    progCmd.Stdout = os.Stdout
+    progCmd.Stderr = os.Stderr
+    progCmd.SysProcAttr = &syscall.SysProcAttr{
+        Ptrace: true,   // this implies PTRACE_TRACEME
+    }
+
+    return progCmd.Start()
+})
+```
+
+ps：wait4不受这个ptrace limit限制，前面分析过了，ptracer所属进程中任意线程都可以调用wait4且能被正常唤醒。
+
 ### 本节小结
 
 本节深入探讨了调试器对多线程程序进行跟踪的机制，第1节介绍了调试器如何启动程序，第2节介绍了如何attach到运行中的进程，而本节则重点阐述了如何在程序启动时立即发起跟踪，以及如何实现对未来新创建线程的自动跟踪。
