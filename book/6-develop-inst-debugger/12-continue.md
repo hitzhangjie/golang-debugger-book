@@ -97,7 +97,7 @@ func init() {
 
 上述代码基于cmd/debug/step.go修改实现，详见源文件cmd/debug/continue.go。
 
-> 注：上述代码来自 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 项目。另外在 [hitzhangjie/golang-debuger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons) /11_continue 下提供了独立的continue执行示例，可单独测试修改。
+> 注：上述代码来自 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 项目。另外在 [hitzhangjie/golang-debuger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons) /12_continue 下提供了独立的continue执行示例，可单独测试修改。
 
 ### 代码测试
 

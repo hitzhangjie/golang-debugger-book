@@ -110,7 +110,7 @@ godbg> step
 
 这里会影响到调试体验，我们将在后续过程中予以完善。
 
-> ps：上述代码是 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 中的实现，我们重点介绍了step的实现。另外在 [hitzhangjie/golang-debuger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons) /10_step 下，我们也提供了一个step执行的示例，只有一个源文件，与其他demo互不影响，您也可以按照你的想法修改测试下，不用担心改坏整个 godbg的问题。
+> ps：上述代码是 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 中的实现，我们重点介绍了step的实现。另外在 [hitzhangjie/golang-debuger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons) /11_step 下，我们也提供了一个step执行的示例，只有一个源文件，与其他demo互不影响，您也可以按照你的想法修改测试下，不用担心改坏整个 godbg的问题。
 >
 >FIXME(demo) 这里的代码实际上也是godbg中的早期实现版本了，后续为了增强维护性，早就进行了大范围的重构。
 
