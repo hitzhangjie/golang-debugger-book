@@ -1,4 +1,4 @@
-## 执行控制：`attach` 跟踪运行中进程
+## 启动调试：`attach` 跟踪运行中进程
 
 ### 实现目标：`godbg attach <pid>`
 
