@@ -133,22 +133,31 @@ static int ptrace_check_attach(struct task_struct *child, bool ignore_state)
 
 调用了该函数之后，就可以满足tracee对tracer的要求：一旦tracer通过ptrace_attach了某个tracee，后续发送到该tracee的ptrace请求必须来自同一个tracer (tracee、tracer具体指的都是线程)。否则会遇到错误 `-ESRCH (No Such Process)`。
 
+当结束调试时，可以通过ptrace detach操作，让tracee恢复执行。即使不显示detach，操作系统也会代为处理，tracee也可以恢复执行。
+
 #### wait & ptrace r/w
 
 当我们调用了attach之后，attach返回时，tracee有可能还没有停下来，这个时候需要通过wait方法来等待tracee停下来，并获取tracee的状态信息。
 
 此时我们不光可以使用ptrace的其他内存读写操作、寄存器读写操作等来读取tracee的信息，比如读写内存变量值、读写寄存器信息，甚至一些更加高级的用法，比如显示当前tracee的函数调用栈。
 
-#### ptrace detach
-
-当结束调试时，可以通过detach操作，让tracee恢复执行。
+ps: 随着后面学习的深入，我们会知道tracee通知调试器从wait4阻塞状态唤醒，而调用wait4的线程不一定是建立ptracelink的tracer线程。
 
 ### 代码实现
 
-src详见：golang-debugger-lessons/2_process_attach。
+当我们通过 `ptrace(PTRACE_ATTACH, pid, ...)` 操作去跟踪一个指定的线程时，内核会给这个目标线程发送一个信号SIGSTOP。
 
+当执行SIGSTOP的信号处理时，内核会执行如下关键操作，效果就是让tracee停下来，并且通知tracer。
 
-下面是man手册关于ptrace操作attach、detach的说明，下面要用到：
+```c
+do_signal_stop
+    set_special_state(TASK_STOPPED);                    // 暂停tracee执行
+    do_notify_parent_cldstop(current, false, notify);   // 通知ptracer tracee已经停止
+        __group_send_sig_info(SIGCHLD, &info, parent);  // 给ptracer进程发送SIGCHLD，任意线程都可以处理
+        __wake_up_parent(tsk, parent);                  // 唤醒ptracer进程中任意调用了wait4(tracee，)阻塞的线程
+```
+
+下面是man手册关于ptrace操作attach、detach的说明，大家可以详细了解下：
 
 > **PTRACE_ATTACH**  
 > Attach to the process specified in pid, making it a tracee of
@@ -163,17 +172,7 @@ src详见：golang-debugger-lessons/2_process_attach。
 > tach from it.  Under Linux, a tracee can be detached in this
 > way regardless of which method was used to initiate tracing.
 
-当我们通过 `ptrace(PTRACE_ATTACH, pid, ...)` 操作去跟踪一个指定的线程时，内核会给这个目标线程发送一个信号SIGSTOP。
-
-当执行SIGSTOP的信号处理时，内核会执行如下关键操作：
-
-```c
-do_signal_stop
-    set_special_state(TASK_STOPPED);                    // 暂停tracee执行
-    do_notify_parent_cldstop(current, false, notify);   // 通知ptracer tracee已经停止
-        __group_send_sig_info(SIGCHLD, &info, parent);  // 给ptracer进程发送SIGCHLD，任意线程都可以处理
-        __wake_up_parent(tsk, parent);                  // 唤醒ptracer进程中任意调用了wait4(tracee，)阻塞的线程
-```
+完整的测试代码实现请参考：`golang-debugger-lessons/2_process_attach`。考虑到读者是刚刚接触调试器开发，建议优先学习 `golang-debugger-lessons` 中的简化示例代码，这部分示例代码每个目录对应本章一个小节。待掌握基本调试原理和概念后再学习 `hitzhangjie/godbg` 中的完整实现。
 
 file: main.go
 
