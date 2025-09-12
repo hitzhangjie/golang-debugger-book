@@ -627,3 +627,9 @@ where the leading `KEY=value` arguments set environment variables before invokin
 You can use `bisect` to debug problems in your own compilers or libraries by having them accept a hash pattern either in the environment or on the command line and then print specially formatted lines for `bisect` on standard output or standard error. The easiest way to do this is to use [the bisect package](https://pkg.go.dev/golang.org/x/tools/internal/bisect). That package is not available for direct import yet (there is a [pending proposal](https://go.dev/issue/67140) to add it to the Go standard library), but the package is only a [single file with no imports](https://cs.opensource.google/go/x/tools/+/master:internal/bisect/bisect.go), so it is easily copied into new projects or even translated to other languages. The package documentation also documents the hash pattern syntax and required output format.
 
 If you work on compilers or libraries and ever need to debug why a seemingly correct change you made broke a complex program, give `bisect` a try. It never stops feeling like magic.
+
+### 参考内容
+
+1. hash-based bisect debugging in compilers and runtimes, https://research.swtch.com/bisect
+2. vscode extension bisect, https://code.visualstudio.com/blogs/2021/02/16/extension-bisect
+3. git bisect, https://git-scm.com/docs/git-bisect
