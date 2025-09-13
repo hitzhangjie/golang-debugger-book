@@ -262,11 +262,11 @@ rsc.io/tmp/timertest/retry.TestDo()
 
 举个例子，假设程序里有十个函数，我们依次进行三轮二分搜索实验：
 
-![](https://research.swtch.com/hashbisect0func.png)
+![](assets/bisect/hashbisect0func.png)
 
 当只优化前5个函数时，测试通过；优化前7个时，测试失败；优化前6个时，测试依然通过。这说明第7个函数`sin`是导致失败的关键之一。更具体地说，优化`sin`后，列表中后面的函数无需优化，但前面的函数是否也必须优化还不确定。为了进一步确认，我们可以在剩下的前六个函数中继续二分搜索，每次都加上`sin`：
 
-![](https://research.swtch.com/hashbisect0funcstep2.png)
+![](assets/bisect/hashbisect0funcstep2.png)
 
 这次，优化前两个（加上`sin`）会失败，优化第一个（加上`sin`）则通过，说明`cos`同样是必须优化的函数。最后只剩下`add`函数需要验证，结果发现即使去掉`add`，测试依然失败。
 
@@ -276,7 +276,7 @@ rsc.io/tmp/timertest/retry.TestDo()
 
 有些人可能会下意识地采用传统二分查找的方式：每次都把列表一分为二，先测试前半部分是否会导致错误。如果前半部分通过，就直接把它排除掉，接着只在后半部分继续查找。用在我们的例子中，这种算法的流程大致如下：
 
-![](https://research.swtch.com/hashbisect0funcbad.png)
+![](assets/bisect/hashbisect0funcbad.png)
 
 第一次试验通过后，我们可能会以为问题出在列表的后半部分，于是直接舍弃了前半部分。然而，这样做的结果是，像 `cos` 这样的函数被排除在优化之外，后续的所有试验也都顺利通过，反而让我们无法再复现原本的失败。这其实暴露了一个核心问题：只有在确信某一部分对结果没有影响时，才能安全地将其移除。这个前提仅在错误由单一函数的优化引发时才成立，但实际情况往往更复杂——有时只有多个函数同时被优化才会触发问题。如果贸然丢弃一半列表，可能就把导致失败的组合也一并丢掉了。因此，二分搜索在这里应当以列表前缀的长度为基础，而不是简单地将列表一分为二。[](https://research.swtch.com/bisect#bisect-reduce)
 
@@ -452,7 +452,7 @@ Java的HotSpot C2即时（JIT）编译器提供了一套调试机制，用于控
 
 借助哈希映射，所有函数或位置实际上被组织成一棵二叉树，为后续的高效定位和归约操作奠定了基础：
 
-![](https://research.swtch.com/hashbisect1.png)
+![](assets/bisect/hashbisect1.png)
 
 定位单一问题点时，只需沿着这棵树逐步下探即可。而更通用的bisect-reduce算法，也可以很自然地迁移到哈希后缀的框架下。为此，我们需要稍作调整`buggy`的定义：它不仅要判断当前后缀对应的位置集是否会触发bug，还要返回该后缀实际匹配的位置数量，这样才能判断是否已经归约到最小单元：
 
@@ -542,7 +542,7 @@ Go中基于哈希的bisect-reduce最早的实际应用场景，就是用于函�
 
 例如，借助该二分查找工具，最终定位到`b.go:7`这一行是问题根源：
 
-![](https://research.swtch.com/hashbisect0.png)
+![](assets/bisect/hashbisect0.png)
 
 FMA指令并非大多数程序员日常会接触的内容，但一旦因其引发测试失败，能够自动识别出具体出错行的工具就显得尤为宝贵。[](https://research.swtch.com/bisect#use_case)
 
