@@ -145,6 +145,96 @@ continue ok, current PC: 0x42e2ee
 
 我们在第4条指令 `0x42e2ed test %eax,%eax` 处添加断点，然后执行 `c`（continue的别名）运行到断点处。运行结果显示当前PC值为0x42e2ee=0x42e2ed+1，这是因为被调试进程在执行了0x42e2ed处的0xCC断点指令后才停下来，完全符合预期。
 
+### 思考：这样的实现是完备的吗？
+
+我们只考虑了1个tracee线程的情况，而go程序是多线程程序，如果我们要对一个go进程进行调试，那么必须对多线程调试进行支持。否则我们只continue一个线程，而其他线程都处于stopped状态，那么这个线程可能无法正常与其他线程同步状态，可能根本就无法进行调试了。我们前面提到过类似的设计，这些tracee线程要么都停止、要么都运行，这样方便我们调试。
+
+所以当我们执行continue命令时，需要特别注意对多线程调试的支持，修改后的支持go多线程的continue实现如下：
+
+```go
+package debug
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/hitzhangjie/godbg/pkg/target"
+	"github.com/spf13/cobra"
+)
+
+var continueCmd = &cobra.Command{
+	Use:   "continue",
+	Short: "运行到下个断点",
+	Annotations: map[string]string{
+		cmdGroupAnnotation: cmdGroupCtrlFlow,
+	},
+	Aliases: []string{"c"},
+	RunE: func(cmd *cobra.Command, args []string) (err error) {
+		dbp := target.DBPProcess
+
+		// 获取当前停在断点处的线程
+		bpStoppedThreads, err := dbp.ThreadStoppedAtBreakpoint()
+		if err != nil {
+			return fmt.Errorf("check thread breakpoints error: %v", err)
+		}
+
+		// 如果没有线程停在断点处，直接继续执行即可
+		if len(bpStoppedThreads) == 0 {
+			return dbp.Continue()
+		}
+
+		// 有线程停在断点处，恢复断点，rewind线程pc，singlestep后恢复断点
+		bpCleared := make(map[uintptr]struct{})
+		for tid, bpAddr := range bpStoppedThreads {
+			fmt.Printf("Thread %d stopped at breakpoint %#x\n", tid, bpAddr)
+
+			// - rewind线程pc
+			regs, err := dbp.ReadRegister(tid)
+			if err != nil {
+				return fmt.Errorf("read register for thread %d: %v", tid, err)
+			}
+			regs.SetPC(regs.PC() - 1)
+			if err = dbp.WriteRegister(tid, regs); err != nil {
+				return fmt.Errorf("write register for thread %d: %v", tid, err)
+			}
+
+			// - 还原指令数据
+			if _, cleared := bpCleared[bpAddr]; !cleared {
+				_, err := dbp.RestoreInstruction(bpAddr)
+				if err != nil && err != target.ErrBreakpointNotExisted {
+					return fmt.Errorf("clear breakpoint at %#x error: %v", bpAddr, err)
+				}
+				bpCleared[bpAddr] = struct{}{}
+			}
+
+			// - singlestep后，要恢复断点
+			_, err = dbp.SingleStep(tid)
+			if err != nil {
+				return fmt.Errorf("single step for thread %d: %v", tid, err)
+			}
+
+			if _, err := dbp.AddBreakpoint(bpAddr); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to restore breakpoint at %#x: %v\n", bpAddr, err)
+			} else {
+				fmt.Printf("restored breakpoint at %#x\n", bpAddr)
+			}
+		}
+
+		// 然后再恢复所有tracee执行
+		if err = dbp.Continue(); err != nil {
+			return fmt.Errorf("continue error: %v", err)
+		}
+		fmt.Println("continue ok")
+
+		return nil
+	},
+}
+
+func init() {
+	debugRootCmd.AddCommand(continueCmd)
+}
+```
+
 ### 更多相关内容
 
 continue命令对于符号级调试器至关重要。在源代码向汇编指令的转换过程中，一条源代码语句可能对应多条机器指令。当我们需要：
