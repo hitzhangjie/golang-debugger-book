@@ -370,22 +370,23 @@ static long do_wait(struct wait_opts *wo)
 static void do_notify_parent_cldstop(struct task_struct *tsk, bool for_ptracer, int why)
 {
     ...
-    // 这个其实是发送给ptracer所属进程的，进程中任意一个线程均可以处理：
+    // 仅考虑for_ptracer==true的情景，此时信号是发送给ptracer所属调试器进程的，
+    // 调试器进程中不同的线程在处理信号时，它们的行为是有差异的：
     // - 如果是untraced线程，可以处理信号；
-    // - 如果是traced线程，会进入signal-deliver-sigstop，暂停tracee执行，
-    //   ptracer可以通过PTRACE_RESTART操作的同时inject signal给tracee（此时可以更换成别的信号）;
+    // - 如果是traced线程，会进入signal-deliver-sigstop，暂停该线程执行，并将该线程收到的信号告知给这个线程的调试器
+    //   这个线程的调试器则可以通过PTRACE_RESTART操作的同时inject signal给tracee（此时可以更换成别的信号）;
     //
     // 这个信号不一定总是生成，不一定能够唤醒ptracer进程上wait4阻塞调用！
     __group_send_sig_info(SIGCHLD, &info, parent); 
 
-    // 唤醒ptracer进程上wait4阻塞调用，这个函数是最靠谱的，它直接唤醒parent上等待tsk状态变化的所有线程
+    // 唤醒ptracer线程，之前ptracer因为wait4调用阻塞，这个函数是最靠谱的，它直接唤醒parent上等待tsk状态变化的所有线程
     __wake_up_parent(tsk, parent);
 }
 
 void __wake_up_parent(struct task_struct *p, struct task_struct *parent)
 {
     // 唤醒ptracer所属进程上正在通过wait4等待当前tracee状态改变的所有线程
-    // parent->signal时是进程专属字段，所有线程共享
+    // parent->signal是进程专属字段，所有线程共享
     __wake_up_sync_key(&parent->signal->wait_chldexit,
                TASK_INTERRUPTIBLE, p);
 }
