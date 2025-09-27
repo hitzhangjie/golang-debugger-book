@@ -92,7 +92,7 @@ func init() {
 }
 ```
 
-### 代码测试
+### 代码测试1：修改寄存器值并查看
 
 首先我们先执行一个简单的测试：
 
@@ -144,11 +144,13 @@ OK，这个测试演示了调试精灵setreg基本的用法和执行效果。
 
 有的读者可能会想，什么情况下我需要显示修改寄存器，真有这种情景吗？下面咱们就来看一个相对更实际的案例。
 
-### 代码测试2: 篡改返回值跳出循环
+### 代码测试2：篡改返回值跳出循环
 
-#### :) 无法修改返回变量值来跳出循环
+#### 无法修改返回变量值来跳出循环 :(
 
 我们先实现一个测试程序，该测试程序每隔1s打印一下进程pid，for-loop的循环条件是一个固定返回true的函数loop()，我们想通过修改寄存器的方式来篡改函数调用`loop()`的返回值来实现。
+
+file: main.go
 
 ```go
 package main
@@ -156,13 +158,10 @@ package main
 import (
 	"fmt"
 	"os"
-	"runtime"
 	"time"
 )
 
 func main() {
-	runtime.LockOSThread()
-
 	for loop() {
 		fmt.Println("pid:", os.Getpid())
 		time.Sleep(time.Second)
@@ -176,275 +175,151 @@ func loop() bool {
 
 ```
 
-这里的挑战点在于，`for loop() {}` 而不是 `for v := true; v ; v = loop() {}`，在loop函数体内部是 `return true` 而不是 `v := true; return v`。我们既不能通过 `set <var> <value>` 来修改loop返回值的值，也不能修改函数体内部return的变量值。
+这里的挑战点在于，`for loop() {}` 而不是 `for v := true; v ; v = loop() {}`，在loop函数体内部是 `return true` 而不是 `v := true; return v`。我们既不能通过 `set <varName> <Value>` 来修改loop()返回值的值，也不能修改loop函数体内部return的值。
 
 此时我们只能在返回前修改ret指令的操作数的值，或者loop函数调用返回后修改返回值寄存器的值。修改ret指令的操作数寄存器也可以，我们这里演示修改返回值寄存器RAX。
 
-#### 写个程序模拟下篡改返回值的操作
+#### 修改返回值寄存器RAX来跳出循环
 
-TODO: 改成使用godbg进行调试，代替这里冗长的单文件测试。
+我们首先上述目标程序编译构建，然后运行起来：
 
-下面是我们写的调试程序，它首先attach被调试进程，然后提示我们获取并输入loop()函数调用的返回地址，然后它就会通过添加断点、运行到该断点位置，然后调整寄存器RAX的值（loop()返回值就存在RAX），再然后恢复执行，我们将看到程序跳出了循环。
-
-```go
-package main
-
-import (
-	"fmt"
-	"os"
-	"os/exec"
-	"runtime"
-	"strconv"
-	"syscall"
-	"time"
-)
-
-var usage = `Usage:
-	go run main.go <pid>
-
-	args:
-	- pid: specify the pid of process to attach
-`
-
-func main() {
-	runtime.LockOSThread()
-
-	if len(os.Args) != 2 {
-		fmt.Println(usage)
-		os.Exit(1)
-	}
-
-	// pid
-	pid, err := strconv.Atoi(os.Args[1])
-	if err != nil {
-		panic(err)
-	}
-
-	if !checkPid(int(pid)) {
-		fmt.Fprintf(os.Stderr, "process %d not existed\n\n", pid)
-		os.Exit(1)
-	}
-
-	// step1: supposing running dlv attach here
-	fmt.Fprintf(os.Stdout, "===step1===: supposing running `dlv attach pid` here\n")
-
-	// attach
-	err = syscall.PtraceAttach(int(pid))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "process %d attach error: %v\n\n", pid, err)
-		os.Exit(1)
-	}
-	fmt.Fprintf(os.Stdout, "process %d attach succ\n\n", pid)
-
-	// check target process stopped or not
-	var status syscall.WaitStatus
-	var options int
-	var rusage syscall.Rusage
-
-	_, err = syscall.Wait4(int(pid), &status, options, &rusage)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "process %d wait error: %v\n\n", pid, err)
-		os.Exit(1)
-	}
-	if !status.Stopped() {
-		fmt.Fprintf(os.Stderr, "process %d not stopped\n\n", pid)
-		os.Exit(1)
-	}
-	fmt.Fprintf(os.Stdout, "process %d stopped\n\n", pid)
-
-	regs := syscall.PtraceRegs{}
-	if err := syscall.PtraceGetRegs(int(pid), &regs); err != nil {
-		fmt.Fprintf(os.Stderr, "get regs fail: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Fprintf(os.Stdout, "tracee stopped at %0x\n", regs.PC())
-
-	// step2: supposing running `dlv> b <addr>`  and `dlv> continue` here
-	time.Sleep(time.Second * 2)
-	fmt.Fprintf(os.Stdout, "===step2===: supposing running `dlv> b <addr>`  and `dlv> continue` here\n")
-
-	// read the address
-	var input string
-	fmt.Fprintf(os.Stdout, "enter return address of loop()\n")
-	_, err = fmt.Fscanf(os.Stdin, "%s", &input)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "read address fail\n")
-		os.Exit(1)
-	}
-	addr, err := strconv.ParseUint(input, 0, 64)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Fprintf(os.Stdout, "you entered %0x\n", addr)
-
-	// add breakpoint and run there
-	var orig [1]byte
-	if n, err := syscall.PtracePeekText(int(pid), uintptr(addr), orig[:]); err != nil || n != 1 {
-		fmt.Fprintf(os.Stderr, "peek text fail, n: %d, err: %v\n", n, err)
-		os.Exit(1)
-	}
-	if n, err := syscall.PtracePokeText(int(pid), uintptr(addr), []byte{0xCC}); err != nil || n != 1 {
-		fmt.Fprintf(os.Stderr, "poke text fail, n: %d, err: %v\n", n, err)
-		os.Exit(1)
-	}
-	if err := syscall.PtraceCont(int(pid), 0); err != nil {
-		fmt.Fprintf(os.Stderr, "ptrace cont fail, err: %v\n", err)
-		os.Exit(1)
-	}
-
-	_, err = syscall.Wait4(int(pid), &status, options, &rusage)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "process %d wait error: %v\n\n", pid, err)
-		os.Exit(1)
-	}
-	if !status.Stopped() {
-		fmt.Fprintf(os.Stderr, "process %d not stopped\n\n", pid)
-		os.Exit(1)
-	}
-	fmt.Fprintf(os.Stdout, "process %d stopped\n\n", pid)
-
-	// step3: supposing change register RAX value from true to false
-	time.Sleep(time.Second * 2)
-	fmt.Fprintf(os.Stdout, "===step3===: supposing change register RAX value from true to false\n")
-	if err := syscall.PtraceGetRegs(int(pid), &regs); err != nil {
-		fmt.Fprintf(os.Stderr, "ptrace get regs fail, err: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Fprintf(os.Stdout, "before RAX=%x\n", regs.Rax)
-
-	regs.Rax &= 0xffffffff00000000
-	if err := syscall.PtraceSetRegs(int(pid), &regs); err != nil {
-		fmt.Fprintf(os.Stderr, "ptrace set regs fail, err: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Fprintf(os.Stdout, "after RAX=%x\n", regs.Rax)
-
-	// step4: let tracee continue and check it behavior (loop3.go should exit the for-loop)
-	if n, err := syscall.PtracePokeText(int(pid), uintptr(addr), orig[:]); err != nil || n != 1 {
-		fmt.Fprintf(os.Stderr, "restore instruction data fail: %v\n", err)
-		os.Exit(1)
-	}
-	if err := syscall.PtraceCont(int(pid), 0); err != nil {
-		fmt.Fprintf(os.Stderr, "ptrace cont fail, err: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-// checkPid check whether pid is valid process's id
-//
-// On Unix systems, os.FindProcess always succeeds and returns a Process for
-// the given pid, regardless of whether the process exists.
-func checkPid(pid int) bool {
-	out, err := exec.Command("kill", "-s", "0", strconv.Itoa(pid)).CombinedOutput()
-	if err != nil {
-		panic(err)
-	}
-
-	// output error message, means pid is invalid
-	if string(out) != "" {
-		return false
-	}
-
-	return true
-}
-
+```bash
+$ go build -gcflags 'all=-N -l' -o main ./main.go
+$ ./main
+pid: 2746680
+pid: 2746680
+pid: 2746680
+pid: 2746680
+pid: 2746680
+...
 ```
 
-### 代码测试
+我们需要先借助dlv来帮助我们确定下函数调用loop()时的返回指令地址：
 
-测试方法：
+```bash
+$ dlv attach 2746680
+```
 
-1、首先我们准备一个测试程序，loop3.go，该程序每隔1s输出一下pid，循环由固定返回true的loop()函数控制
-   详见 `testdata/loop3.go`。
+然后我们需要在main.go:10这行设置断点，这行也就是调用loop()的地方：
 
-2、按照ABI调用惯例，这里的函数调用loop()的返回值会通过RAX寄存器返回，所以我们想在loop()函数调用返回后，通过修改RAX寄存器的值来篡改返回值为false。
+```bash
+$ break main.go:10
+Breakpoint 1 set at 0x49b5d4 for main.main() ./fuck/test/main.go:10
+```
 
-那我们先确定下loop()函数的返回地址，这个只要我们通过dlv调试器在loop3.go:13添加断点，然后disass，就可以确定返回地址为 0x4af15e。
+然后执行到断点处：
 
-确定完返回地址后我们即可detach tracee，恢复其执行。
+```bash
+$ continue
+> [Breakpoint 1] main.main() ./fuck/test/main.go:10 (hits goroutine(1):1 total:1) (PC: 0x49b5d4)
+     5:		"os"
+     6:		"time"
+     7:	)
+     8:	
+     9:	func main() {
+=>  10:		for loop() {
+    11:			fmt.Println("pid:", os.Getpid())
+    12:			time.Sleep(time.Second)
+    13:		}
+    14:	}
+```
+
+现在我们需要等这个loop()函数调用返回，我们需要知道返回后的返回地址，并在返回地址处设置断点：
 
 ```bash
 (dlv) disass
-Sending output to pager...
-TEXT main.main(SB) /home/zhangjie/debugger101/golang-debugger-lessons/testdata/loop3.go
-        loop3.go:10     0x4af140        493b6610                cmp rsp, qword ptr [r14+0x10]
-        loop3.go:10     0x4af144        0f8601010000            jbe 0x4af24b
-        loop3.go:10     0x4af14a        55                      push rbp
-        loop3.go:10     0x4af14b        4889e5                  mov rbp, rsp
-        loop3.go:10     0x4af14e        4883ec70                sub rsp, 0x70
-        loop3.go:11     0x4af152        e8e95ef9ff              call $runtime.LockOSThread
-        loop3.go:13     0x4af157        eb00                    jmp 0x4af159
-=>      loop3.go:13     0x4af159*       e802010000              call $main.loop
-        loop3.go:13     0x4af15e        8844241f                mov byte ptr [rsp+0x1f], al
-        ...
-(dlv) quit
+TEXT main.main(SB) /root/fuck/test/main.go
+	main.go:9	0x49b5c0	493b6610		cmp rsp, qword ptr [r14+
+0x10]
+	main.go:9	0x49b5c4	0f86fb000000		jbe 0x49b6c5
+	main.go:9	0x49b5ca	55			push rbp
+	main.go:9	0x49b5cb	4889e5			mov rbp, rsp
+	main.go:9	0x49b5ce	4883ec70		sub rsp, 0x70
+	main.go:10	0x49b5d2	eb00			jmp 0x49b5d4
+=>	main.go:10	0x49b5d4*	e807010000		call $main.loop
+	main.go:10	0x49b5d9	8844241f		mov byte ptr [rsp+0x1f],al
+```
+
+现在我们知道 `call $main.loop` 后的返回地址为0x49b5d9，现在可以退出dlv并保持tracee运行：
+
+```bash
+(dlv) exit
 Would you like to kill the process? [Y/n] n
 ```
 
-3、如果我们不加干扰，loop3会每隔1s不停地输出pid信息。
+然后，我们后续使用godbg在这个地址处设置断点，注意我们也没有启用ALSR，所以这个地址是不变的：
 
 ```bash
-$ ./loop3
-pid: 4946
-pid: 4946
-pid: 4946
-pid: 4946
-pid: 4946
+godbg attach 2746680
+process 2746680 attached succ
+process 2746680 stopped: true
+godbg> break 0x49b5d9
+godbg> 
+```
+
+然后我们需要执行到这个断点处，此处loop()刚刚返回，根据ABI调用约定，RAX中存储着loop()的返回值，我们再通过setreg来修改rax的值为“false”。
+
+```bash
+godbg> continue
+thread 2746680 continued succ
+thread 2746681 continued succ
+thread 2746682 continued succ
+thread 2746683 continued succ
+thread 2746684 continued succ
+thread 2746680 status: stopped: trace/breakpoint trap
+```
+
+然后修改寄存器的值：
+
+```bash
+godbg> pregs
+Register    R15         0x9                   
+Register    R14         0xc0000061c0          
+Register    R13         0x20                  
+Register    R12         0x7ffe2df6ce18        
+Register    Rbp         0xc0000c6f68          
+Register    Rbx         0x43cdfc              
+Register    R11         0x206                 
+Register    R10         0x0                   
+Register    R9          0x0                   
+Register    R8          0x0                   
+Register    Rax         0x1          // <= true
 ...
-zhangjie🦀 testdata(master) $
+godbg> setreg rax 0xffffffff00000000 // <= false
 ```
 
-4、现在运行我们编写的调试工具 ./16_set_regs 4946,
+然后continue恢复执行，观察到恢复执行后有些线程开始退出了，但是也还有继续运行到断点的线程：
 
 ```bash
-$ ./15_set_regs 4946
-===step1===: supposing running `dlv attach pid` here
-process 4946 attach succ
-process 4946 stopped
-tracee stopped at 476263
-
-===step2===: supposing running `dlv> b <addr>`  and `dlv> continue` here
-enter return address of loop()
-0x4af15e
-
-you entered 4af15e
-process 4946 stopped
-
-===step3===: supposing change register RAX value from true to false
-before RAX=1
-after RAX=0                   <= 我们篡改了返回值为0
-```
-
-
-```bash
-
-```
-
-
-```bash
+godbg> continue
+warn: thread 2746681 exited
+warn: thread 2746682 exited
+warn: thread 2746683 exited
 ...
-pid: 4946
-pid: 4946
-pid: 4946                      <= 因为篡改了loop()的返回值为false，循环跳出，程序结束
-zhangjie🦀 testdata(master) $
+continue ok
 ```
+
+我们结束调试，结束调试时会清理断点并将暂停在断点处的线程rewind PC (PC=PC-1)，然后detach，这样被调试进程会恢复执行：
 
 ```bash
-(dlv) disass
-TEXT main.loop(SB) /home/zhangjie/debugger101/golang-debugger-lessons/testdata/loop3.go
-        loop3.go:20     0x4af260        55              push rbp
-        loop3.go:20     0x4af261        4889e5          mov rbp, rsp
-=>      loop3.go:20     0x4af264*       4883ec08        sub rsp, 0x8
-        loop3.go:20     0x4af268        c644240700      mov byte ptr [rsp+0x7], 0x0
-        loop3.go:21     0x4af26d        c644240701      mov byte ptr [rsp+0x7], 0x1
-        loop3.go:21     0x4af272        b801000000      mov eax, 0x1 <== 返回值是用eax来存的
-        loop3.go:21     0x4af277        4883c408        add rsp, 0x8
-        loop3.go:21     0x4af27b        5d              pop rbp
-        loop3.go:21     0x4af27c        c3              ret
+godbg> exit
+before detached, clearall created breakpoints.warn: thread 3037322 exited
 ```
 
-至此，通过这个实例演示了如何设置寄存器值，我们将在 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 中实现godbg> `set reg value` 命令来修改寄存器值。
+此时，再来观察被调试程序及其输出：
+
+```bash
+$ ./main
+pid: 2746680
+pid: 2746680
+pid: 2746680
+pid: 2746680
+pid: 2746680 <= 调试器修改了loop()调用的返回值为FALSE，该返回值存储在寄存器RAX
+$            <= 然后循环条件检测不通过，退出了循环，程序结束
+```
+
+我们通过调试器篡改函数调用返回值，让程序执行跳出了for循环。
 
 ### 本节小结
 
-本节我们也介绍了如何修改寄存器的值，也通过具体实例演示了通过修改寄存器来篡改函数返回值的案例，当然你如果对栈帧构成了解的够细致，结合读写寄存器、内存操作，也可以修改函数调用参数、返回地址。
+本节主要探讨了调试器中修改寄存器数据的功能实现，核心内容包括：通过`ptrace(PTRACE_SET_REGS,...)`系统调用实现寄存器修改；使用反射机制动态定位和修改特定寄存器字段；结合`setreg`命令实现通用的寄存器修改功能。本节通过篡改函数返回值寄存器RAX的实例，演示了如何利用寄存器修改来控制程序执行流程，为读者展示了指令级调试中修改程序状态的强大能力。这种技术不仅适用于修改函数返回值，还可以结合栈帧知识修改函数参数和返回地址，为深入的程序调试和逆向分析提供了重要工具。
