@@ -44,6 +44,9 @@ var clearallCmd = &cobra.Command{
         }
 
         breakpoints = map[uintptr]*target.Breakpoint{}
+
+        ...
+
         fmt.Println("清空断点成功")
         return nil
     },
@@ -97,6 +100,64 @@ godbg>
 现在已经没有剩余断点了，我们的添加、清空断点的功能是正常的。
 
 OK ，截止到现在，我们已经实现了添加断点、列出断点、删除指定断点、清空断点的功能，但是我们还没有演示过断点的效果（执行到断点处停下来）。接下来我们就将实现step（执行1条指令）、continue（运行到断点处）操作。
+
+### 思考：仅还原指令数据就可以吗？
+
+与clear命令类似，清理断点只还原指令数据仅仅算完成了第一步，还需要将停在这些断点处的线程的pc--。clearall由于是移除所有断点，受影响的线程数量比clear移除单个断点影响的线程数量要更多，所以更要注意处理。否则很可能clearall执行一次，后续就没法进行调试了，因为各个线程执行时的机器指令CPU已经无法正常译码了。
+
+godbg中修改后的clearall命令实现，如下所示，您也可以查看 [hitzhangjie/godbg]：
+
+```go
+var clearallCmd = &cobra.Command{
+	Use:   "clearall",
+	Short: "清除所有的断点",
+	Long:  `清除所有的断点`,
+	Annotations: map[string]string{
+		cmdGroupAnnotation: cmdGroupBreakpoints,
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		//fmt.Println("clearall")
+		if err := target.DBPProcess.ClearAll(); err != nil {
+			return fmt.Errorf("清除断点失败: %v", err)
+		}
+
+		fmt.Println("清空断点成功")
+		return nil
+	},
+}
+
+// ClearAll 删除所有已添加的断点
+func (p *DebuggedProcess) ClearAll() error {
+	// 首先检查所有线程是否停在断点处
+	stopped, err := p.ThreadStoppedAtBreakpoint()
+	if err != nil {
+		return fmt.Errorf("check thread breakpoints error: %v", err)
+	}
+
+	for _, bp := range p.Breakpoints {
+		if _, err := p.RestoreInstruction(bp.Addr); err != nil {
+			return fmt.Errorf("clear breakpoint at %#x error: %v", bp.Addr, err)
+		}
+	}
+
+	// 如果有线程停在断点处，需要先处理这些线程
+	// 回退所有停在断点的线程的PC
+	for tid := range stopped {
+		regs, err := p.ReadRegister(tid)
+		if err != nil {
+			return fmt.Errorf("read register for thread %d: %v", tid, err)
+		}
+
+		// 回退PC到断点指令之前
+		regs.SetPC(regs.PC() - 1)
+		if err = p.WriteRegister(tid, regs); err != nil {
+			return fmt.Errorf("write register for thread %d: %v", tid, err)
+		}
+	}
+
+	return nil
+}
+```
 
 ### 思考：如果tracer退出前不清理断点？
 

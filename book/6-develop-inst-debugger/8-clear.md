@@ -129,7 +129,9 @@ breakpoint[3] 0x4653c2
 
 大家考虑这么一种特殊情况：存在某个线程线程已经停在了要删除的断点处，换言之，它已经执行了被patched指令的第1字节0xCC，当前PC指向第2字节，如果我们对这个线程的PC不做回退，那么当我们执行continue恢复其执行时，CPU取指令、指令译码将从上述还原后的完整指令的第2字节开始，而不是第1字节。这样，显然CPU指令译码时会出错。
 
-所以上述clear命令的实现是不完备的，需要额外补充如下这段代码逻辑：
+所以上述clear命令的实现是不完备的，需要补充查找受影响的线程列表，以及rewind线程PC的逻辑。
+
+godbg中clearCmd的后续实现代码如下，您可以查看 [hitzhangjie/godbg]：
 
 ```go
 var clearCmd = &cobra.Command{
@@ -138,31 +140,116 @@ var clearCmd = &cobra.Command{
 	Long:  `清除指定编号的断点`,
     ...
 	RunE: func(cmd *cobra.Command, args []string) error {
-        // 还原断点处指令数据
-        ...
-
-		// 是否有线程需要rewind pc
-		bpStoppedThreads, err := target.DBPProcess.ThreadStoppedAtBreakpoint()
+		//fmt.Printf("clear %s\n", strings.Join(args, " "))
+		id, err := cmd.Flags().GetUint64("n")
 		if err != nil {
-			return fmt.Errorf("检查线程停在断点处失败: %v", err)
+			return err
 		}
-		for tid, bpAddr := range bpStoppedThreads {
-			if bpAddr != brk.Addr {
+
+		// 查找断点
+		var brk *target.Breakpoint
+		for _, b := range target.DBPProcess.Breakpoints {
+			if b.ID != id {
 				continue
 			}
-			regs, err := target.DBPProcess.ReadRegister(tid)
-			if err != nil {
-				return fmt.Errorf("读取寄存器失败: %v", err)
-			}
-			regs.SetPC(regs.PC() - 1)
-			if err = target.DBPProcess.WriteRegister(tid, regs); err != nil {
-				return fmt.Errorf("写入寄存器失败: %v", err)
-			}
+			brk = b
+			break
+		}
+
+		if brk == nil {
+			return errors.New("断点不存在")
+		}
+
+		// 移除断点
+		_, err = target.DBPProcess.ClearBreakpoint(brk.Addr)
+		if err != nil {
+			return err
 		}
 
 		fmt.Println("移除断点成功")
 		return nil
 	},
+}
+
+// ClearBreakpoint 移除指定地址处断点，并rewind受影响的thread
+func (p *DebuggedProcess) ClearBreakpoint(addr uintptr) (*Breakpoint, error) {
+	brk, err := p.RestoreInstruction(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	// 是否有线程需要rewind pc
+	bpStoppedThreads, err := p.ThreadStoppedAtBreakpoint()
+	if err != nil {
+		return nil, fmt.Errorf("检查线程停在断点处失败: %v", err)
+	}
+	for tid, bpAddr := range bpStoppedThreads {
+		if bpAddr != brk.Addr {
+			continue
+		}
+		regs, err := p.ReadRegister(tid)
+		if err != nil {
+			return nil, fmt.Errorf("读取寄存器失败: %v", err)
+		}
+		regs.SetPC(regs.PC() - 1)
+		if err = p.WriteRegister(tid, regs); err != nil {
+			return nil, fmt.Errorf("写入寄存器失败: %v", err)
+		}
+	}
+	return brk, nil
+}
+
+// ThreadStoppedAtBreakpoint 检查所有线程是否停在断点处
+func (p *DebuggedProcess) ThreadStoppedAtBreakpoint() (map[int]uintptr, error) {
+	threadStoppedAtBP := make(map[int]uintptr)
+
+	if len(p.Threads) == 0 {
+		return threadStoppedAtBP, nil
+	}
+
+	for tid, thread := range p.Threads {
+		regs, err := p.ReadRegister(thread.Tid)
+		if err != nil {
+			// 线程可能已经退出，跳过
+			if err == syscall.ESRCH {
+				fmt.Fprintf(os.Stderr, "warn: thread %d exited\n", tid)
+				continue
+			}
+			return nil, fmt.Errorf("read register for thread %d: %v", tid, err)
+		}
+
+		// 检查PC-1位置是否有断点（因为断点指令已经执行）
+		pc := regs.PC()
+		if bp, exists := p.Breakpoints[uintptr(pc-1)]; exists {
+			threadStoppedAtBP[tid] = bp.Addr
+		}
+	}
+
+	return threadStoppedAtBP, nil
+}
+
+// 移除断点，还原指令数据+从断点列表中移除
+func (p *DebuggedProcess) RestoreInstruction(addr uintptr) (*Breakpoint, error) {
+	brk, ok := p.Breakpoints[addr]
+	if !ok {
+		return nil, ErrBreakpointNotExisted
+	}
+
+	// 移除断点
+	pid := p.Process.Pid
+
+	err := p.ExecPtrace(func() error {
+		n, err := syscall.PtracePokeData(pid, brk.Addr, []byte{brk.Orig})
+		if err != nil || n != 1 {
+			return fmt.Errorf("ptrace poke data err: %v", err)
+		}
+		delete(p.Breakpoints, brk.Addr)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return brk, nil
 }
 
 ```
