@@ -68,6 +68,8 @@ var clearCmd = &cobra.Command{
         }
         delete(breakpoints, brk.Addr)
 
+        ...
+
         fmt.Println("移除断点成功")
         return nil
     },
@@ -122,6 +124,48 @@ breakpoint[3] 0x4653c2
 ```
 
 现在断点2已经被移除了，我们的添加、移除断点的功能是正常的。
+
+### 思考：仅还原指令数据就可以吗
+
+大家考虑这么一种特殊情况：存在某个线程线程已经停在了要删除的断点处，换言之，它已经执行了被patched指令的第1字节0xCC，当前PC指向第2字节，如果我们对这个线程的PC不做回退，那么当我们执行continue恢复其执行时，CPU取指令、指令译码将从上述还原后的完整指令的第2字节开始，而不是第1字节。这样，显然CPU指令译码时会出错。
+
+所以上述clear命令的实现是不完备的，需要额外补充如下这段代码逻辑：
+
+```go
+var clearCmd = &cobra.Command{
+	Use:   "clear <breakpoint no.>",
+	Short: "清除指定编号的断点",
+	Long:  `清除指定编号的断点`,
+    ...
+	RunE: func(cmd *cobra.Command, args []string) error {
+        // 还原断点处指令数据
+        ...
+
+		// 是否有线程需要rewind pc
+		bpStoppedThreads, err := target.DBPProcess.ThreadStoppedAtBreakpoint()
+		if err != nil {
+			return fmt.Errorf("检查线程停在断点处失败: %v", err)
+		}
+		for tid, bpAddr := range bpStoppedThreads {
+			if bpAddr != brk.Addr {
+				continue
+			}
+			regs, err := target.DBPProcess.ReadRegister(tid)
+			if err != nil {
+				return fmt.Errorf("读取寄存器失败: %v", err)
+			}
+			regs.SetPC(regs.PC() - 1)
+			if err = target.DBPProcess.WriteRegister(tid, regs); err != nil {
+				return fmt.Errorf("写入寄存器失败: %v", err)
+			}
+		}
+
+		fmt.Println("移除断点成功")
+		return nil
+	},
+}
+
+```
 
 ### 本节小结
 

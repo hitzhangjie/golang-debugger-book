@@ -285,7 +285,7 @@ Register    R9          0x0
 Register    R8          0x0                   
 Register    Rax         0x1          // <= true
 ...
-godbg> setreg rax 0xffffffff00000000 // <= false
+godbg> setreg rax 0x0                // <= false
 ```
 
 然后continue恢复执行，观察到恢复执行后有些线程开始退出了，但是也还有继续运行到断点的线程：
