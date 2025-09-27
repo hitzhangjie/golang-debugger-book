@@ -70,21 +70,52 @@ func (s *DebugSession) Start() {
 ```go
 // Cleanup 清理所有断点的函数
 func Cleanup() {
-    fmt.Println("正在清理断点...")
-    
-    for _, brk := range breakpoints {
-        n, err := syscall.PtracePokeData(TraceePID, brk.Addr, []byte{brk.Orig})
-        if err != nil || n != 1 {
-            fmt.Printf("清理断点失败: %v\n", err)
-            continue
-        }
-    }
-    
-    // 清空断点集合
-    breakpoints = map[uintptr]*target.Breakpoint{}
-    fmt.Println("断点清理完成")
+    var (
+		dbp = target.DBPProcess
+		err error
+	)
+
+	// 先清理掉之前创建的断点
+	fmt.Printf("before detached, clearall created breakpoints.")
+	if err := target.DBPProcess.ClearAll(); err != nil {
+		fmt.Fprintf(os.Stderr, "clearall failed err: %v\n", err)
+	}
+
+	// 根据被调试进程创建的方式，debug、exec or attach，来决定如何做善后处理
+	// - debug: kill traced process, delete generated binary
+	// - exec: kill traced process
+	// - attach: detach traced process
+	if err = dbp.Detach(); err != nil {
+		fmt.Fprintf(os.Stderr, "detach tracee: %d, err: %v\n", dbp.Process.Pid, err)
+		return
+	}
+
+	switch dbp.Kind {
+	case target.DEBUG:
+		fmt.Fprintf(os.Stdout, "tracee is is built and run by tracer, remove binary and kill it: %d\n", dbp.Kind)
+
+		if err = os.RemoveAll(dbp.Command); err != nil {
+			fmt.Fprintf(os.Stderr, "remove built binary %s, err: %v\n", dbp.Command, err)
+			return
+		}
+		if err = syscall.Kill(dbp.Process.Pid, syscall.SIGKILL); err != nil {
+			fmt.Fprintf(os.Stderr, "kill tracee: %d, err: %v\n", dbp.Process.Pid, err)
+			return
+		}
+		fallthrough
+	case target.EXEC:
+		fmt.Fprintf(os.Stdout, "tracee is is run by tracer, kill it: %d\n", dbp.Kind)
+		if err = syscall.Kill(dbp.Process.Pid, syscall.SIGKILL); err != nil {
+			fmt.Fprintf(os.Stderr, "kill tracee: %d, err: %v\n", dbp.Process.Pid, err)
+			return
+		}
+	default:
+		fmt.Fprintf(os.Stdout, "tracee is an attached process, leave it running")
+	}
 }
 ```
+
+特别注意的是 `target.DBPProcess.ClearAll()` 执行过程中，不光会还原断点处指令数据，还会rewind所有受影响的线程的PC，保证调试器退出后各个线程可以继续正常执行。同时考虑了attach、debug两种方式下对于tracee的不同处理，后者会杀死，前者会询问是否要继续执行。
 
 #### 4. 调试会话的创建和使用
 
