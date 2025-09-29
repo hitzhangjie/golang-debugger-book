@@ -1,6 +1,6 @@
-## 启动调试：`exec` 启动新进程
+## 启动调试：启动进程
 
-### 实现目标：`godbg exec <prog>`
+### 实现目标：`godbg exec <prog>` 启动新进程
 
 调试器执行调试，首先得确定要调试的目标。它可能是一个进程实例，或者是一个core文件。为了便利性，调试器也可以代为执行编译操作，如 `dlv debug [main module] | [test package]`，会自动对main module或者test package进行编译构建。
 
@@ -134,7 +134,6 @@ func main() {
 
 ./godbg exec <prog>
 ```
-
 
 后续随着功能越来越多，我们会分包分文件管理，此时就需要对整个module进行go build再测试，或者直接go install之后再测试。当前示例代码只有一个简单的源文件，`go run main.go` 就可以快速测试，如在目录golang-debugger-lessons/1_start-process下执行 `GO111MODULE=off go run main.go exec ls` 。
 

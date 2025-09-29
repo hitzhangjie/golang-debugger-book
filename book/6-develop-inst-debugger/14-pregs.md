@@ -1,6 +1,6 @@
-## 查看进程状态: `pregs` 查看寄存器
+## 查看进程状态: 查看寄存器数据
 
-### 实现目标：pregs查看寄存器
+### 实现目标：`godbg> pregs` 查看寄存器数据
 
 这一小节，我们来实现pregs命令，方便调试进程时查看进程寄存器数据。对于指令级调试而言，我们通过反汇编看到待执行的汇编指令，为了搞清楚指令的操作数，我们需要借助pmem来查看内存数据，也需要pregs来查看寄存器数据。这就好比符号级调试器看到源码后需要知道对应的变量值一样。
 
@@ -72,33 +72,33 @@ $ godbg attach 116
 process 116 attached succ
 process 116 stopped: true
 godbg> pregs
-Register    R15         0x400             
-Register    R14         0x3               
-Register    R13         0xa               
-Register    R12         0x4be86f          
-Register    Rbp         0x7ffc5095bd50    
-Register    Rbx         0x555900          
-Register    R11         0x286             
-Register    R10         0x0               
-Register    R9          0x0               
-Register    R8          0x0               
+Register    R15         0x400           
+Register    R14         0x3             
+Register    R13         0xa             
+Register    R12         0x4be86f        
+Register    Rbp         0x7ffc5095bd50  
+Register    Rbx         0x555900        
+Register    R11         0x286           
+Register    R10         0x0             
+Register    R9          0x0             
+Register    R8          0x0             
 Register    Rax         0xfffffffffffffe00  
-Register    Rcx         0x464fc3          
-Register    Rdx         0x0               
-Register    Rsi         0x80              
-Register    Rdi         0x555a48          
-Register    Orig_rax    0xca              
-Register    Rip         0x464fc3          
-Register    Cs          0x33              
-Register    Eflags      0x286             
-Register    Rsp         0x7ffc5095bd08    
-Register    Ss          0x2b              
-Register    Fs_base     0x555990          
-Register    Gs_base     0x0               
-Register    Ds          0x0               
-Register    Es          0x0               
-Register    Fs          0x0               
-Register    Gs          0x0               
+Register    Rcx         0x464fc3        
+Register    Rdx         0x0             
+Register    Rsi         0x80            
+Register    Rdi         0x555a48        
+Register    Orig_rax    0xca            
+Register    Rip         0x464fc3        
+Register    Cs          0x33            
+Register    Eflags      0x286           
+Register    Rsp         0x7ffc5095bd08  
+Register    Ss          0x2b            
+Register    Fs_base     0x555990        
+Register    Gs_base     0x0             
+Register    Ds          0x0             
+Register    Es          0x0             
+Register    Fs          0x0             
+Register    Gs          0x0             
 godbg> 
 ```
 

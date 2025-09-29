@@ -1,6 +1,6 @@
-## 启动调试：`exec` 启动并跟踪进程
+## 启动调试：启动&跟踪进程
 
-### 实现目标：启动进程并attach
+### 实现目标：`godbg exec <prog>` 启动并跟踪进程
 
 #### 思考：如何让进程刚启动就停止？
 
@@ -205,7 +205,7 @@ static inline bool ptrace_event_enabled(struct task_struct *task, int event)
 }
 ```
 
-在Linux下面，SIGTRAP信号处理函数将使得进程暂停执行，并向父进程通知自身的状态变化，然后父进程通过wait系统调用来获取子进程状态的变化信息。ptrace_event中这两个分支都可以实现对tracee通知SIGTRAP的目的。结合我们的上述示例，子进程执行`ptrace(PTRACE_TRACEME, ...)` 操作，然后再执行execve替换掉代码段和数据段内容，最终实际上是通过第2个分支 `send_sig(SIGTRAP, current, 0)` 来发送SIGTRAP信号给tracee。
+在Linux下面，SIGTRAP信号处理函数将使得进程暂停执行，并向父进程通知自身的状态变化，然后父进程通过wait系统调用来获取子进程状态的变化信息。ptrace_event中这两个分支都可以实现对tracee通知SIGTRAP的目的。结合我们的上述示例，子进程执行 `ptrace(PTRACE_TRACEME, ...)` 操作，然后再执行execve替换掉代码段和数据段内容，最终实际上是通过第2个分支 `send_sig(SIGTRAP, current, 0)` 来发送SIGTRAP信号给tracee。
 
 我们先展开第1个分支来看看：
 
@@ -301,6 +301,7 @@ arch_do_signal_or_restart(struct pt_regs *regs, bool has_signal)
 ```
 
 OK，大致就是这样一个流程，大家能消化的了最好，消化不了知道个大概也不影响我们继续本节内容。
+
 ##### tracer从wait4中被唤醒
 
 那么tracer（或者父进程）wait4 的实现，是怎么实现的呢? 我们这里也进行了一个精简版的总结：
@@ -650,11 +651,11 @@ static inline void ptrace_event(int event, unsigned long message)
 
 首先会创建一个线程，然后完成一些housekeeping逻辑并将新线程放入调度器的任务队列中，等待被调度，然后通过ptrace_event_pid发送SIGTRAP给这个新线程。OK，一切准备就绪，之后就是kernel_clone系统调用执行结束返回时，系统调用结束时就是内核发起新一轮调度的一个契机，如果新线程被调度器调度到、新线程返回用户态开始执行之前，首先就是要处理这个SIGTRAP信号，自然就会停下来并通知ptracer。通知ptracer的这部分我们前面已经提过了，这里不再赘述。
 
->ps: 各种类型任务的切换时机，联想下：
+> ps: 各种类型任务的切换时机，联想下：
 >
->- 中断服务程序切换，指令周期的结束CPU会检查有没有新的中断控制器发来的中断请求；
->- 线程切换，操作系统内核系统调用时钟中断、系统调用返回之前会检查是否需要执行当前任务，还是切换到另一个任务，此时还会检查有没有pending信号要处理；
->- 协程切换，在goroutine进行网络IO、或者涉及到goroutines之间执行同步操作的交互逻辑时，检查是否需要暂停当前goroutine并调度其他goroutine来执行；
+> - 中断服务程序切换，指令周期的结束CPU会检查有没有新的中断控制器发来的中断请求；
+> - 线程切换，操作系统内核系统调用时钟中断、系统调用返回之前会检查是否需要执行当前任务，还是切换到另一个任务，此时还会检查有没有pending信号要处理；
+> - 协程切换，在goroutine进行网络IO、或者涉及到goroutines之间执行同步操作的交互逻辑时，检查是否需要暂停当前goroutine并调度其他goroutine来执行；
 
 ### 重新思考ptrace limit
 
@@ -733,6 +734,7 @@ ps：wait4不受这个ptrace limit限制，前面分析过了，ptracer所属进
 **内核层面的信号处理**：本节还深入分析了Linux内核中信号处理的细节，包括同步信号与异步信号的区别、`SIGTRAP` 信号的特殊处理机制，以及内核如何通过来实现进程暂停和通知唤醒机制。
 
 通过本节的学习，读者不仅掌握了调试器开发中进程跟踪的核心技术，还深入理解了Linux操作系统在信号处理和进程管理方面的底层实现细节。现在我们已经掌握了如何跟踪程序，接下来就应该建立调试会话，调试会话中维护了一系列实用的调试命令，我们可以通过添加断点、执行到断点、打印变量、寄存器、线程切换、协程切换等等调试命令来自由调试。下一节我们将学习如何建立一个既实用便捷又可以灵活扩展调试命令的调试会话。
+
 ### 参考内容
 
 - Playing with ptrace, Part I, Pradeep Padala, https://www.linuxjournal.com/article/6100

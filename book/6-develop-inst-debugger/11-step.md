@@ -1,6 +1,6 @@
-## 执行控制：`step` 逐指令执行
+## 执行控制：逐指令执行
 
-### 实现目标：step逐指令执行
+### 实现目标：`godbg> step` 逐指令执行
 
 在实现了反汇编以及添加移除断点功能后，我们将开始进一步探索如何控制调试进程的执行，如step逐指令执行、continue运行到断点位置，在后面符号级调试器开发章节，我们还会实现next逐语句执行。
 
@@ -120,7 +120,7 @@ godbg> step
 
 > ps：上述代码是 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 中的实现，我们重点介绍了step的实现。另外在 [hitzhangjie/golang-debuger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons) /11_step 下，我们也提供了一个step执行的示例，只有一个源文件，与其他demo互不影响，您也可以按照你的想法修改测试下，不用担心改坏整个 godbg的问题。
 >
->FIXME(demo) 这里的代码实际上也是godbg中的早期实现版本了，后续为了增强维护性，早就进行了大范围的重构。
+> FIXME(demo) 这里的代码实际上也是godbg中的早期实现版本了，后续为了增强维护性，早就进行了大范围的重构。
 
 ### 代码测试
 
@@ -157,7 +157,7 @@ godbg>
 
 我们执行了step指令3次，step每次执行一条指令之后，会输出执行指令后的PC值，依次是0x40ab4e、0x40ab53、0x40ab58，依次是下条指令的首地址。
 
-不禁要问，执行系统调用 `ptrace(PTRACE_SINGLESTEP,...)` 时，内核是如何实现逐指令执行的？只执行一条机器指令后立即停下来，有点奇妙！ 
+不禁要问，执行系统调用 `ptrace(PTRACE_SINGLESTEP,...)` 时，内核是如何实现逐指令执行的？只执行一条机器指令后立即停下来，有点奇妙！
 
 ### 更多相关内容：SINGLESTEP
 
@@ -208,4 +208,3 @@ ps：这就是Intel平台下单步执行的一些细节信息，读者如果对�
 本节主要探讨了调试器中step逐指令执行功能的实现原理与具体实现，核心内容包括：通过ptrace(PTRACE_SINGLESTEP)系统调用实现单步执行；处理断点恢复的特殊情况，确保PC值正确性；理解Intel平台下基于EFLAGS.TF标志位的硬件单步执行机制。
 
 本节内容为读者深入理解调试器执行控制机制以及后续实现continue、next等高级调试命令奠定了重要基础。
-

@@ -1,6 +1,6 @@
-## 启动调试：`attach` 跟踪运行中进程
+## 启动调试：跟踪进程
 
-### 实现目标：`godbg attach <pid>`
+### 实现目标：`godbg attach <pid>` 跟踪运行中进程
 
 如果进程已经在运行了，要对其进行调试需要先通过attach操作跟踪进程，待其停止执行后，再执行查看修改数据、控制程序执行的操作。常见的调试器如dlv、gdb等都支持传递pid参数来对运行中的进程进行跟踪调试。
 
@@ -19,10 +19,8 @@ tracee，指的是被调试的线程，而不是进程。对于一个多线程�
 注意，这里有几个点需要提前跟大家明确下：
 
 - 同一个线程只允许被一个调试器跟踪调试，如果希望启动多个独立的调试器实例对目标线程进行跟踪，操作系统会检测到该线程已经被某个调试器进程跟踪调试中，会拒绝其他调试器实例的ptrace请求。
-
 - 在前后端分离式调试器架构下，也就是说只允许1个debugger backend实例attach被调试线程，但是我们可以启动多个debugger frontend来同时进行并发调试，这部分在第9章允许
-multiclient访问debugger backend时会介绍。
-
+  multiclient访问debugger backend时会介绍。
 - 为了方便调试期间观察各个线程的状态，调试器通常会采用All-stop Mode，即默认跟踪进程中的所有线程。要运行所有线程都运行，要停止所有线程都停止。这种方式更方便调试人员调试。
 
 #### tracer
@@ -159,7 +157,7 @@ do_signal_stop
 
 下面是man手册关于ptrace操作attach、detach的说明，大家可以详细了解下：
 
-> **PTRACE_ATTACH**  
+> **PTRACE_ATTACH**
 > Attach to the process specified in pid, making it a tracee of
 > the calling process.  The tracee is sent a SIGSTOP, but will
 > not necessarily have stopped by the completion of this call;
@@ -167,7 +165,7 @@ do_signal_stop
 > use waitpid(2) to wait for the tracee to stop.  See the "At‐
 > taching and detaching" subsection for additional information.
 >
-> **PTRACE_DETACH**  
+> **PTRACE_DETACH**
 > Restart the stopped tracee as for PTRACE_CONT, but first de‐
 > tach from it.  Under Linux, a tracee can be detached in this
 > way regardless of which method was used to initiate tracing.
@@ -301,18 +299,19 @@ func checkPid(pid int) bool {
 
 这里的程序逻辑也比较简单：
 
-1. 程序运行时，首先检查命令行参数，  
-    - `godbg attach <pid>`，至少有3个参数，如果参数数量不对，直接报错退出；
-    - 接下来校验第2个参数，如果是无效的subcmd，也直接报错退出；
-    - 如果是attach，那么pid参数应该是个整数，如果不是也直接退出；
+1. 程序运行时，首先检查命令行参数，
+   - `godbg attach <pid>`，至少有3个参数，如果参数数量不对，直接报错退出；
+   - 接下来校验第2个参数，如果是无效的subcmd，也直接报错退出；
+   - 如果是attach，那么pid参数应该是个整数，如果不是也直接退出；
 2. 参数正常情况下，开始校验pid进程是否存在，存在则开始尝试attach到tracee，建立ptrace link；
 3. attach之后，tracee并不一定立即就会停下来，需要wait来获取其状态变化情况；
 4. 等tracee停下来之后，我们休眠10s钟，假定此时自己正在执行些调试操作；
 5. 10s钟之后调试结束，tracer尝试detach tracee，解除ptrace link，让tracee继续恢复执行。
 
->我们在Linux平台上实现时，需要考虑Linux平台本身的问题，具体包括：
->- 检查pid是否对应着一个有效的进程，通常会通过 `exec.FindProcess(pid)`来检查，但是在Unix平台下，这个函数总是返回OK，所以是行不通的。因此我们借助了 `kill -s 0 pid`这一比较经典的做法来检查pid合法性。
->- tracer、tracee进行detach操作的时候，我们是用了ptrace系统调用，这个也和平台有关系，如Linux平台下的man手册有说明，必须确保一个tracee的所有的ptrace requests来自相同的tracer线程，实现时就需要注意这点。
+> 我们在Linux平台上实现时，需要考虑Linux平台本身的问题，具体包括：
+>
+> - 检查pid是否对应着一个有效的进程，通常会通过 `exec.FindProcess(pid)`来检查，但是在Unix平台下，这个函数总是返回OK，所以是行不通的。因此我们借助了 `kill -s 0 pid`这一比较经典的做法来检查pid合法性。
+> - tracer、tracee进行detach操作的时候，我们是用了ptrace系统调用，这个也和平台有关系，如Linux平台下的man手册有说明，必须确保一个tracee的所有的ptrace requests来自相同的tracer线程，实现时就需要注意这点。
 
 ### 代码测试
 
@@ -409,6 +408,7 @@ func main() {
 ```
 
 解释这个事情，有几个事实需要阐明：
+
 1. go程序天然是多线程程序，sysmon、gc等等都可能会用到独立线程，我们执行 `attach <pid>` 只是跟踪了进程中的主线程，其他的线程仍然是没有被调踪的，是可以继续执行的。
 2. go运行时采用GMP调度机制，同一个goroutine在生命周期能可能会在多个thread上先后执行一部分代码逻辑，比如某个goroutine执行阻塞系统调用后，会创建出新的线程，如果系统调用返回后，goroutine也要恢复执行，此时有可能会去找之前的thread，但是根据调度负载情况、原先M、原先P空闲情况，非常有可能这个goroutine会在另一个thread中继续执行，而该thread没有被调试器跟踪，依然可以继续执行。
 3. 具体到我们示例中，ptrace指定的pid到底是主线程pid，main.main是main goroutine的入口函数，但是main goroutine却不一定在main thread中执行。
@@ -447,7 +447,7 @@ func newosproc(mp *m) {
 }
 ```
 
->ps: 关于clone选项的更多作用，您可以通过查看man手册 `man 2 clone`来了解。
+> ps: 关于clone选项的更多作用，您可以通过查看man手册 `man 2 clone`来了解。
 
 #### 问题：想确保执行main.main的线程停下来？
 
@@ -474,7 +474,7 @@ func (p *DebuggedProcess) loadThreadList() ([]int, error) {
 
 对进程内每个线程逐个执行ptrace attach，所有线程也就都停下来了。All-stop Mode很重要，这里也算是提前了解下。
 
->调试活动通常是带有目的性的调试，而不是漫无目的地闲逛，这样调试效率才会高。调试很重要的一点就是，在可疑代码处先提前设置好断点，执行到此位置的线程自然会停下来。如果没有提前设置好断点，可疑位置代码已经执行过了，就只能重新开始调试会话了。对于多线程程序，为了方便观察多个线程的运行情况甚至是线程间的交互情况，通常这些线程要么全部运行要么全部停止。
+> 调试活动通常是带有目的性的调试，而不是漫无目的地闲逛，这样调试效率才会高。调试很重要的一点就是，在可疑代码处先提前设置好断点，执行到此位置的线程自然会停下来。如果没有提前设置好断点，可疑位置代码已经执行过了，就只能重新开始调试会话了。对于多线程程序，为了方便观察多个线程的运行情况甚至是线程间的交互情况，通常这些线程要么全部运行要么全部停止。
 
 #### 问题：如何判断进程是否是多线程程序？
 
@@ -487,10 +487,10 @@ func (p *DebuggedProcess) loadThreadList() ([]int, error) {
   ```bash
   $ top -H -p 5293
   ........
-  PID USER      PR  NI    VIRT    RES    SHR S %CPU %MEM     TIME+ COMMAND                                                     
-   5293 root      20   0  702968   1268    968 S  0.0  0.0   0:00.04 loop                                                        
-   5294 root      20   0  702968   1268    968 S  0.0  0.0   0:00.08 loop                                                        
-   5295 root      20   0  702968   1268    968 S  0.0  0.0   0:00.03 loop                                                        
+  PID USER      PR  NI    VIRT    RES    SHR S %CPU %MEM     TIME+ COMMAND                                                   
+   5293 root      20   0  702968   1268    968 S  0.0  0.0   0:00.04 loop                                                      
+   5294 root      20   0  702968   1268    968 S  0.0  0.0   0:00.08 loop                                                      
+   5295 root      20   0  702968   1268    968 S  0.0  0.0   0:00.03 loop                                                      
    5296 root      20   0  702968   1268    968 S  0.0  0.0   0:00.03 loop
   ```
 
@@ -505,7 +505,6 @@ func (p *DebuggedProcess) loadThreadList() ([]int, error) {
   ```
 
   通过状态 **'T'** 可以识别多线程程序中哪些线程正在被调试跟踪。
-  
 - `ls /proc/<pid>/task`
 
   ```bash
