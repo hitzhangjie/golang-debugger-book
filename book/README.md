@@ -36,18 +36,24 @@ Hi，我是张杰，目前就职于腾讯（深圳）科技有限公司，后台
 
 ## 1.4 示例代码
 
-本书对应的示例代码，您可以通过以下两种方式获得：
+**本书对应的示例代码，包括指令级调试器godbg、符号级调试器tinydbg、以及探索测试类代码golang-debugger-lessons：**
 
-1. [**golang-debugger-lessons**](https://github.com/hitzhangjie/golang-debugger-lessons)，读者可以按照章节对应关系来查看示例代码，目录；
-2. [**godbg-debugger-lessons/0-godbg**](https://github.com/hitzhangjie/godbg)，该submodule提供了一个功能相对完整的“指令级”调试器，供读者体验功能、了解整体代码组织；
+1. [**hitzhangjie/godbg**](https://github.com/hitzhangjie/godbg)，该项目提供了一个功能相对完整的 “**指令级调试器**” 实现，供读者测试、学习了解整体代码组织；
+2. [**hitzhangjie/tinydbg**](https://github.com/hitzhangjie/tinydbg)，该项目提供了一个可用标准的 ”**符号级调试器**“ 实现，由 [dlv](https://github.com/go-delve/delve) 裁剪调整而来（剔除了与linux/amd64无关扩展，及高级功能）；
+3. [**hitzhangjie/golang-debugger-lessons**](https://github.com/hitzhangjie/golang-debugger-lessons)，该项目按章节组织目录，每节实现目标在godbg、tinydbg落地前，会先在此项目中编写demo进行验证；
 
-   > ps: 项目中提供了vscode的devcontainer配置，采用的是centos+go1.13。如果您升级go版本则可能导致程序出现问题，比如go1.14引入抢占问题，意味着调试器必须解决抢占问题，这可能导致调试器工作不符合预期。
-   >
-   > 另外，如果您使用其他版本，书中内容描述可能与真实情况有差异，比如go1.13编译后会将DWARF信息写入.zdebug_ sections，但是go1.19则会将不会写入.zdebug_ sections（写入的事.debug_ sections）。
-   >
-   > 强烈建议您先试用提供的开发容器进行测试、学习，当您掌握了一些基础之后，再按需升级go版本不迟。
-   >
-3. [**hitzhangjie/tinydbg**](https://github.com/hitzhangjie/tinydbg)，该项目由go-delve/delve裁剪而来，剔除了与linux/amd64无关的扩展，裁剪了部分不常用功能，优化了部分设计实现，以方便作为教学示例来讲述与符号级调试器最核心的原理、实现细节。
+ps: [**hitzhangjie/godbg-debugger-lessons/0-godbg**](https://github.com/hitzhangjie/godbg)，该submodule即hitzhangjie/godbg。
+
+**关于示例代码对应测试环境的一些补充说明**：
+
+- godbg项目中提供了vscode的容器化开发配置 (详见./devcontainer/devcontainer.json)，指定的基础开发镜像是CentOS Stream9+go1.22.4。如果您更喜欢使用容器开发环境，您可以在vscode中安装插件 "Dev Conatiners"，在准备就绪后可以唤出Command Palette并选择 "Dev Containers: Reopen in Container"。
+- 您也可以直接在Linux虚拟机或者Linux物理机中进行测试，请务必注意开发环境设置。
+  - Go版本不能低于go1.22，否则可能有些新版本才有的标准库实现无法正常编译。
+    即使能侥幸编译通过，实际情况也可能会与书中内容描述有所差异，比如：
+    - go1.13编译后会将调试信息写入.zdebug_ sections，但是go1.19则会将不会写入.zdebug_ sections（写入的是.debug_ sections并通过flag指明是否开压缩）。
+    - go1.14引入SIGURG支持抢占，如果您使用更古老的go版本呢，可能会看到一些SIGURG处理相关的代码，但是永远不会被触发，可能会影响你的阅读和理解。
+  - Go版本必须低于go1.25，因为go1.25已经推进到了DWARF v5，而本书基于Go1.13~Go1.24编写，这期间Go工具链使用的是DWARF v4；
+- 所有示例代码都是在linux/amd64平台架构下进行的测试，请您使用相同的环境进行测试。
 
 ## 1.5 联系方式
 
