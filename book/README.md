@@ -47,13 +47,16 @@ ps: [**hitzhangjie/godbg-debugger-lessons/0-godbg**](https://github.com/hitzhang
 **关于示例代码对应测试环境的一些补充说明**：
 
 - godbg项目中提供了vscode的容器化开发配置 (详见./devcontainer/devcontainer.json)，指定的基础开发镜像是CentOS Stream9+go1.22.4。如果您更喜欢使用容器开发环境，您可以在vscode中安装插件 "Dev Conatiners"，在准备就绪后可以唤出Command Palette并选择 "Dev Containers: Reopen in Container"。
-- 您也可以直接在Linux虚拟机或者Linux物理机中进行测试，请务必注意开发环境设置。
-  - Go版本不能低于go1.22，否则可能有些新版本才有的标准库实现无法正常编译。
-    即使能侥幸编译通过，实际情况也可能会与书中内容描述有所差异，比如：
-    - go1.13编译后会将调试信息写入.zdebug_ sections，但是go1.19则会将不会写入.zdebug_ sections（写入的是.debug_ sections并通过flag指明是否开压缩）。
-    - go1.14引入SIGURG支持抢占，如果您使用更古老的go版本呢，可能会看到一些SIGURG处理相关的代码，但是永远不会被触发，可能会影响你的阅读和理解。
-  - Go版本必须低于go1.25，因为go1.25已经推进到了DWARF v5，而本书基于Go1.13~Go1.24编写，这期间Go工具链使用的是DWARF v4；
+- 您也可以直接在Linux虚拟机或者Linux物理机中进行测试，请务必注意开发环境设置，Go版本必须>=go1.22并且<go1.25。
 - 所有示例代码都是在linux/amd64平台架构下进行的测试，请您使用相同的环境进行测试。
+
+> ps：关于上述Go版本约束的相关说明
+>
+> 1. Go版本不能低于go1.22：新版本才有的标准库函数旧版本无法正常编译，即使侥幸编译通过，实际产物也可能与书中内容描述有差异：
+>    - go1.13将调试信息写入.zdebug_ sections，但go1.19不再写入.zdebug_ sections（写入的是.debug_ sections并通过flag指明是否开压缩）；
+>    - go1.14引入SIGURG支持抢占，如果使用更古老的go版本测试，这些SIGURG处理相关的代码永远不会被触发，可能会影响读者阅读和理解。
+>
+> 2. Go版本必须低于go1.25：因为go1.25已经推进到了DWARF v5，而本书基于Go1.13~Go1.24编写，这期间Go工具链使用的是DWARF v4；
 
 ## 1.5 联系方式
 
