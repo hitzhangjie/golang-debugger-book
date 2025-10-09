@@ -407,7 +407,7 @@ func main() {
 }
 ```
 
-解释这个事情，有几个事实需要阐明：
+有几个go语言相关的细节需要先说明：
 
 1. go程序天然是多线程程序，sysmon、gc等等都可能会用到独立线程，我们执行 `attach <pid>` 只是跟踪了进程中的主线程，其他的线程仍然是没有被调踪的，是可以继续执行的。
 2. go运行时采用GMP调度机制，同一个goroutine在生命周期能可能会在多个thread上先后执行一部分代码逻辑，比如某个goroutine执行阻塞系统调用后，会创建出新的线程，如果系统调用返回后，goroutine也要恢复执行，此时有可能会去找之前的thread，但是根据调度负载情况、原先M、原先P空闲情况，非常有可能这个goroutine会在另一个thread中继续执行，而该thread没有被调试器跟踪，依然可以继续执行。
@@ -487,10 +487,10 @@ func (p *DebuggedProcess) loadThreadList() ([]int, error) {
   ```bash
   $ top -H -p 5293
   ........
-  PID USER      PR  NI    VIRT    RES    SHR S %CPU %MEM     TIME+ COMMAND                                                   
-   5293 root      20   0  702968   1268    968 S  0.0  0.0   0:00.04 loop                                                      
-   5294 root      20   0  702968   1268    968 S  0.0  0.0   0:00.08 loop                                                      
-   5295 root      20   0  702968   1268    968 S  0.0  0.0   0:00.03 loop                                                      
+  PID USER      PR  NI    VIRT    RES    SHR S %CPU %MEM     TIME+ COMMAND                                                 
+   5293 root      20   0  702968   1268    968 S  0.0  0.0   0:00.04 loop                                                    
+   5294 root      20   0  702968   1268    968 S  0.0  0.0   0:00.08 loop                                                    
+   5295 root      20   0  702968   1268    968 S  0.0  0.0   0:00.03 loop                                                    
    5296 root      20   0  702968   1268    968 S  0.0  0.0   0:00.03 loop
   ```
 

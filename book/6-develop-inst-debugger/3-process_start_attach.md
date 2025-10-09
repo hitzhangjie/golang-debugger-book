@@ -721,7 +721,7 @@ var err = execPtrace(func() error) {
 })
 ```
 
-ps：wait4不受这个ptrace limit限制，前面分析过了，ptracer所属进程中任意线程都可以调用wait4且能被正常唤醒。
+**ps：注意wait4不受这个ptrace limit限制，前面分析过了，ptracer所属进程中任意线程都可以调用wait4且能被正常唤醒。**
 
 ### 本节小结
 
