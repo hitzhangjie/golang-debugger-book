@@ -1,14 +1,31 @@
-## 扩展阅读：如何跟踪已经创建的线程
+## 多线程调试：如何跟踪已经创建的线程
+
+### 多线程调试调试的挑战
+
+被调试进程是多线程程序，我们希望调试时更够更加便利点：
+
+- 挑战1：我们不想手动枚举进程中的所有已有线程，然后手动逐个attach
+- 挑战2：进程中在后续执行时还会创建新线程、新进程，我们不想定期轮询方式去感知线程创建、进程创建，然后再手动attach
+- 挑战3：多线程程序中的线程之间存在一些线程同步逻辑，如加解锁、信号量等等，只放行其中1个程序可能会导致相关任务无法正常执行
+- 挑战4：多线程程序中的线程之间存在协作关系，如果某个线程命中断点停下了，但是其他相关线程还在执行，不利于观察进程整体执行情况
+
+这就要求我们做到下面几点，调试时才会便利：
+
+- `godbg attach <pid>`，调试器跟踪进程时，希望能帮我们处理进程包含的所有其他线程的 attach 操作，包括已经创建的、将来才会创建的；
+- 在此基础上，还希望执行 `continue` 等操作时能够放飞所有被跟踪且暂停执行的线程，让它们都获得执行机会以正常执行某些同步操作；
+- 并且在任意线程执行时命中断点后，能够让所有线程都尽快停下来，尽管它们某些并没有命中断点，以方便调试人员观察此时的执行状态。
 
 ### 实现目标：跟踪已经创建的线程
 
-被调试进程是多线程程序，在我们准备开始调试时，这些线程就已经被创建并在运行了。我们执行调试器 attach 操作时，也不会枚举所有线程然后手动去 attach 每个线程，为了方便我们只会去手动 attach 进程，然后希望程序侧能帮我们处理进程内非主线程以外其他线程的 attach 操作。
+在我们准备开始调试时，有些线程就已经被创建并在运行了，如何枚举并跟踪进程中已有的线程呢？
 
 以dlv为例，不一定 `dlv attach <pid>` 之后就立即枚举所有线程然后逐个attach，但是要具备这个能力，比如当调试人员希望跟踪某个特定线程时，我们能够方便地执行这个操作，比如 `dlv>threads` 查看线程列表后，可以继续 `dlv> thread <n>` 来指名道姓地跟踪特定线程。
 
 Go程序天然是多线程程序，而且是提供给开发者的是goroutine并发接口，并不是thread并发相关的接口，所以即使dlv有这个能力，也不一定经常会用到thread相关的调试命令，因为gmp调度模型的存在，你也不确定同一个thread上执行的到底是啥，它执行的goroutine会切换来切换去。反倒是 `dlv> goroutines` 和 `dlv> goroutine <n>` 使用频率更高。
 
 anyway，我们必须说明的是，我们还是希望能了解多线程调试的相关底层细节，你可能将来会为其他语言开发调试器，对吧？并不一定是go语言，如果那种语言是面向thread的并发，那这些知识的实用性价值还是存在的。
+
+ps: 篇幅原因，godbg中对多线程调试的调试器支持代码这里不做展示，您可以查看 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 源码进行了解。
 
 ### 基础知识
 
@@ -92,104 +109,104 @@ int main() {
 package main
 
 import (
-	"fmt"
-	"os"
-	"os/exec"
-	"runtime"
-	"strconv"
-	"syscall"
-	"time"
+    "fmt"
+    "os"
+    "os/exec"
+    "runtime"
+    "strconv"
+    "syscall"
+    "time"
 )
 
 var usage = `Usage:
-	go run main.go <pid>
+    go run main.go <pid>
 
-	args:
-	- pid: specify the pid of process to attach
+    args:
+    - pid: specify the pid of process to attach
 `
 
 func main() {
-	runtime.LockOSThread()
+    runtime.LockOSThread()
 
-	if len(os.Args) != 2 {
-		fmt.Println(usage)
-		os.Exit(1)
-	}
+    if len(os.Args) != 2 {
+        fmt.Println(usage)
+        os.Exit(1)
+    }
 
-	fmt.Fprintf(os.Stdout, "===step1===: check target process existed or not\n")
-	// pid
-	pid, err := strconv.Atoi(os.Args[1])
-	if err != nil {
-		panic(err)
-	}
+    fmt.Fprintf(os.Stdout, "===step1===: check target process existed or not\n")
+    // pid
+    pid, err := strconv.Atoi(os.Args[1])
+    if err != nil {
+        panic(err)
+    }
 
-	if !checkPid(int(pid)) {
-		fmt.Fprintf(os.Stderr, "process %d not existed\n\n", pid)
-		os.Exit(1)
-	}
+    if !checkPid(int(pid)) {
+        fmt.Fprintf(os.Stderr, "process %d not existed\n\n", pid)
+        os.Exit(1)
+    }
 
-	// enumerate all threads
-	fmt.Fprintf(os.Stdout, "===step2===: enumerate created threads by reading /proc\n")
+    // enumerate all threads
+    fmt.Fprintf(os.Stdout, "===step2===: enumerate created threads by reading /proc\n")
 
-	// read dir entries of /proc/<pid>/task/
-	threads, err := readThreadIDs(pid)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Fprintf(os.Stdout, "threads: %v\n", threads)
+    // read dir entries of /proc/<pid>/task/
+    threads, err := readThreadIDs(pid)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Fprintf(os.Stdout, "threads: %v\n", threads)
 
-	// prompt user which thread to attach
-	var last int64
+    // prompt user which thread to attach
+    var last int64
 
-	// attach thread <n>, or switch thread to another one thread <m>
-	for {
-		fmt.Fprintf(os.Stdout, "===step3===: supposing running `dlv> thread <n>` here\n")
-		var target int64
-		n, err := fmt.Fscanf(os.Stdin, "%d\n", &target)
-		if n == 0 || err != nil || target <= 0 {
-			panic("invalid input, thread id should > 0")
-		}
+    // attach thread <n>, or switch thread to another one thread <m>
+    for {
+        fmt.Fprintf(os.Stdout, "===step3===: supposing running `dlv> thread <n>` here\n")
+        var target int64
+        n, err := fmt.Fscanf(os.Stdin, "%d\n", &target)
+        if n == 0 || err != nil || target <= 0 {
+            panic("invalid input, thread id should > 0")
+        }
 
-		if last > 0 {
-			if err := syscall.PtraceDetach(int(last)); err != nil {
-				fmt.Fprintf(os.Stderr, "switch from thread %d to thread %d error: %v\n", last, target, err)
-				os.Exit(1)
-			}
-			fmt.Fprintf(os.Stderr, "switch from thread %d thread %d\n", last, target)
-		}
+        if last > 0 {
+            if err := syscall.PtraceDetach(int(last)); err != nil {
+                fmt.Fprintf(os.Stderr, "switch from thread %d to thread %d error: %v\n", last, target, err)
+                os.Exit(1)
+            }
+            fmt.Fprintf(os.Stderr, "switch from thread %d thread %d\n", last, target)
+        }
 
-		// attach
-		err = syscall.PtraceAttach(int(target))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "thread %d attach error: %v\n\n", target, err)
-			os.Exit(1)
-		}
-		fmt.Fprintf(os.Stdout, "process %d attach succ\n\n", target)
+        // attach
+        err = syscall.PtraceAttach(int(target))
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "thread %d attach error: %v\n\n", target, err)
+            os.Exit(1)
+        }
+        fmt.Fprintf(os.Stdout, "process %d attach succ\n\n", target)
 
-		// check target process stopped or not
-		var status syscall.WaitStatus
-		var rusage syscall.Rusage
-		_, err = syscall.Wait4(int(target), &status, 0, &rusage)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "process %d wait error: %v\n\n", target, err)
-			os.Exit(1)
-		}
-		if !status.Stopped() {
-			fmt.Fprintf(os.Stderr, "process %d not stopped\n\n", target)
-			os.Exit(1)
-		}
-		fmt.Fprintf(os.Stdout, "process %d stopped\n\n", target)
+        // check target process stopped or not
+        var status syscall.WaitStatus
+        var rusage syscall.Rusage
+        _, err = syscall.Wait4(int(target), &status, 0, &rusage)
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "process %d wait error: %v\n\n", target, err)
+            os.Exit(1)
+        }
+        if !status.Stopped() {
+            fmt.Fprintf(os.Stderr, "process %d not stopped\n\n", target)
+            os.Exit(1)
+        }
+        fmt.Fprintf(os.Stdout, "process %d stopped\n\n", target)
 
-		regs := syscall.PtraceRegs{}
-		if err := syscall.PtraceGetRegs(int(target), &regs); err != nil {
-			fmt.Fprintf(os.Stderr, "get regs fail: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Fprintf(os.Stdout, "tracee stopped at %0x\n", regs.PC())
+        regs := syscall.PtraceRegs{}
+        if err := syscall.PtraceGetRegs(int(target), &regs); err != nil {
+            fmt.Fprintf(os.Stderr, "get regs fail: %v\n", err)
+            os.Exit(1)
+        }
+        fmt.Fprintf(os.Stdout, "tracee stopped at %0x\n", regs.PC())
 
-		last = target
-		time.Sleep(time.Second)
-	}
+        last = target
+        time.Sleep(time.Second)
+    }
 }
 
 // checkPid check whether pid is valid process's id
@@ -197,36 +214,36 @@ func main() {
 // On Unix systems, os.FindProcess always succeeds and returns a Process for
 // the given pid, regardless of whether the process exists.
 func checkPid(pid int) bool {
-	out, err := exec.Command("kill", "-s", "0", strconv.Itoa(pid)).CombinedOutput()
-	if err != nil {
-		panic(err)
-	}
+    out, err := exec.Command("kill", "-s", "0", strconv.Itoa(pid)).CombinedOutput()
+    if err != nil {
+        panic(err)
+    }
 
-	// output error message, means pid is invalid
-	if string(out) != "" {
-		return false
-	}
+    // output error message, means pid is invalid
+    if string(out) != "" {
+        return false
+    }
 
-	return true
+    return true
 }
 
 // reads all thread IDs associated with a given process ID.
 func readThreadIDs(pid int) ([]int, error) {
-	dir := fmt.Sprintf("/proc/%d/task", pid)
-	files, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
+    dir := fmt.Sprintf("/proc/%d/task", pid)
+    files, err := os.ReadDir(dir)
+    if err != nil {
+        return nil, err
+    }
 
-	var threads []int
-	for _, file := range files {
-		tid, err := strconv.Atoi(file.Name())
-		if err != nil { // Ensure that it's a valid positive integer
-			continue
-		}
-		threads = append(threads, tid)
-	}
-	return threads, nil
+    var threads []int
+    for _, file := range files {
+        tid, err := strconv.Atoi(file.Name())
+        if err != nil { // Ensure that it's a valid positive integer
+            continue
+        }
+        threads = append(threads, tid)
+    }
+    return threads, nil
 }
 ```
 
@@ -315,6 +332,6 @@ MiB Swap:   8192.0 total,   8192.0 free,      0.0 used.  27333.2 avail Mem
 
 OK，ctrl+c杀死 ./21_trace_old_threads 进程，然后我们继续观察线程的状态，会自动从t变为S，因为内核会负责善后，即在tracer退出后，将所有的tracee恢复执行。
 
-### 引申一下
+### 思考一下：调试器应该默认跟踪所有线程吗
 
 大家在进行多线程调试时，有可能会只跟踪一个线程，也可能会同时跟踪多个线程，最终实现形式取决于调试器的交互设计，比如命令行形式的调试器因为界面交互的原因往往更倾向于跟踪一个线程，但是有些图形化界面的IDE可能会倾向于提供同时跟踪多个线程的能力（以前使用Eclipse调试Java多线程程序时就经常这么玩）。我们这里演示了这个能力该如何实现，读者对于如何实现同时跟踪多个线程应该也能自己实现了。
