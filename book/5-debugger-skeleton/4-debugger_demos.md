@@ -1,4 +1,4 @@
-## 调试器开发：功能演示和实现效果
+## 功能演示和实现效果
 
 结合前面的思考，我们初步实现了一个调试器的雏形 `godbg`，它大致包含了我们需要的交互能力。后面我们将在此基础上一步步实现指令级调试器、符号级调试器。
 
@@ -68,30 +68,30 @@ godbg> help
 interactive debugging commands
 
 [breakpoint]
-break <locspec> :	在源码中添加断点
-clear <n>       :	清除指定编号的断点
-clearall <n>    :	清除所有的断点
+break <locspec> : 在源码中添加断点
+clear <n>       : 清除指定编号的断点
+clearall <n>    : 清除所有的断点
 
 [code]
-disass <locspec>:	反汇编机器指令
-list <linespec> :	查看源码信息
+disass <locspec>: 反汇编机器指令
+list <linespec> : 查看源码信息
 
 [ctrlflow]
-finish          :	退出当前函数
-next            :	执行一条语句
-step            :	执行一条指令
+finish          : 退出当前函数
+next            : 执行一条语句
+step            : 执行一条指令
 
 [information]
-bt              :	打印调用栈信息
-display <var|reg>:	始终显示变量或寄存器值
-frame           :	选择调用栈中栈帧
-print <var|reg> :	打印变量或寄存器值
-ptypes <variable>:	打印变量类型信息
-set <var|reg>=<value>:	设置变量或寄存器值
+bt              : 打印调用栈信息
+display <var|reg>: 始终显示变量或寄存器值
+frame           : 选择调用栈中栈帧
+print <var|reg> : 打印变量或寄存器值
+ptypes <variable>: 打印变量类型信息
+set <var|reg>=<value>: 设置变量或寄存器值
 
 [other]
-exit            :	结束调试会话
-help [command]  :	Help about any command
+exit            : 结束调试会话
+help [command]  : Help about any command
 ```
 
 如果想详细了解某一个调试命令如何使用，可以运行“**godbg> help `cmd`**”，如想查看break命令的使用运行“**godbg> help break**”。
@@ -127,7 +127,7 @@ godbg                         : 项目根目录
 │   ├── core.go
 │   ├── exec.go
 │   ├── debug                 ：调试会话中可使用的调试命令
-│   │   ├── root_debug.go	  : debugRootCmd绑定了众多调试会话调试命令
+│   │   ├── root_debug.go   : debugRootCmd绑定了众多调试会话调试命令
 │   │   ├── backtrace.go
 │   │   ├── break.go
 │   │   ├── clear.go
@@ -164,7 +164,7 @@ package main
 import "godbg/cmd"
 
 func main() {
-	cmd.Execute()
+ cmd.Execute()
 }
 ```
 
@@ -172,17 +172,17 @@ godbg下各个子命令exec、debug、core分别对应cmd/exec.go、cmd/debug.go
 
 ```go
 var rootCmd = &cobra.Command{
-	Use:   "godbg",
-	Short: "godbg是一个面向go语言的符号级调试器",
-	Long: `
+ Use:   "godbg",
+ Short: "godbg是一个面向go语言的符号级调试器",
+ Long: `
 godbg是一个go程序符号级调试器，它是以学习为目的驱动开发的调试器，
 希望我们的工作可以为更多人打开一个认识计算机世界的大门，不谢！`,
-	// Uncomment the following line if your bare application
-	// has an action associated with it:
-	Run: func(cmd *cobra.Command, args []string) {
-		// TODO comment out this, this should be enabled only in debugging phase
-		debug.NewDebugShell().Run()
-	},
+ // Uncomment the following line if your bare application
+ // has an action associated with it:
+ Run: func(cmd *cobra.Command, args []string) {
+  // TODO comment out this, this should be enabled only in debugging phase
+  debug.NewDebugShell().Run()
+ },
 }
 ```
 
@@ -190,19 +190,19 @@ godbg是一个go程序符号级调试器，它是以学习为目的驱动开发�
 
 ```go
 var execCmd = &cobra.Command{
-	Use:   "exec <prog>",
-	Short: "调试可执行程序",
-	Long:  `调试可执行程序`,
-	Run: func(cmd *cobra.Command, args []string) {
+ Use:   "exec <prog>",
+ Short: "调试可执行程序",
+ Long:  `调试可执行程序`,
+ Run: func(cmd *cobra.Command, args []string) {
         // TODO start process and attach
-		fmt.Printf("exec %s\n", strings.Join(args, ""))
+  fmt.Printf("exec %s\n", strings.Join(args, ""))
       
-		debug.NewDebugShell().Run()
-	},
+  debug.NewDebugShell().Run()
+ },
 }
 
 func init() {
-	rootCmd.AddCommand(execCmd)
+ rootCmd.AddCommand(execCmd)
 }
 ```
 
@@ -218,34 +218,34 @@ godbg/cmd/debug/root_debug.go中是使用cobra-prompt构建的一个命令管理
 // NewDebugShell 创建一个debug专用的交互管理器
 func NewDebugShell() *cobraprompt.CobraPrompt {
 
-	fn := func() func(cmd *cobra.Command) error {
-		return func(cmd *cobra.Command) error {
-			usage := groupDebugCommands(cmd)
-			fmt.Println(usage)
-			return nil
-		}
-	}
-	debugRootCmd.SetUsageFunc(fn())
+ fn := func() func(cmd *cobra.Command) error {
+  return func(cmd *cobra.Command) error {
+   usage := groupDebugCommands(cmd)
+   fmt.Println(usage)
+   return nil
+  }
+ }
+ debugRootCmd.SetUsageFunc(fn())
 
-	return &cobraprompt.CobraPrompt{
-		RootCmd:                debugRootCmd,
-		DynamicSuggestionsFunc: dynamicSuggestions,
-		ResetFlagsFlag:         true,
-		GoPromptOptions: []prompt.Option{
-			prompt.OptionTitle(description),
-			prompt.OptionPrefix(prefix),
-			prompt.OptionSuggestionBGColor(prompt.DarkBlue),
-			prompt.OptionDescriptionBGColor(prompt.DarkBlue),
-			prompt.OptionSelectedSuggestionBGColor(prompt.Red),
-			prompt.OptionSelectedDescriptionBGColor(prompt.Red),
-			// here, hide prompt dropdown list
-			// TODO do we have a better way to show/hide the prompt dropdown list?
-			prompt.OptionMaxSuggestion(10),
-			prompt.OptionShowCompletionAtStart(),
-		},
-		EnableSilentPrompt: true,
-		EnableShowAtStart:  true,
-	}
+ return &cobraprompt.CobraPrompt{
+  RootCmd:                debugRootCmd,
+  DynamicSuggestionsFunc: dynamicSuggestions,
+  ResetFlagsFlag:         true,
+  GoPromptOptions: []prompt.Option{
+   prompt.OptionTitle(description),
+   prompt.OptionPrefix(prefix),
+   prompt.OptionSuggestionBGColor(prompt.DarkBlue),
+   prompt.OptionDescriptionBGColor(prompt.DarkBlue),
+   prompt.OptionSelectedSuggestionBGColor(prompt.Red),
+   prompt.OptionSelectedDescriptionBGColor(prompt.Red),
+   // here, hide prompt dropdown list
+   // TODO do we have a better way to show/hide the prompt dropdown list?
+   prompt.OptionMaxSuggestion(10),
+   prompt.OptionShowCompletionAtStart(),
+  },
+  EnableSilentPrompt: true,
+  EnableShowAtStart:  true,
+ }
 }
 ```
 
@@ -263,10 +263,10 @@ func dynamicSuggestions(annotation string, _ prompt.Document) []prompt.Suggest {
 
 // list 输入list时返回候选源文件名作为提示补全信息
 func GetSourceFiles() []prompt.Suggest {
-	return []prompt.Suggest{
-		{Text: "main.go", Description: "main.go"},
-		{Text: "helloworld.go", Description: "helloworld.go"},
-	}
+ return []prompt.Suggest{
+  {Text: "main.go", Description: "main.go"},
+  {Text: "helloworld.go", Description: "helloworld.go"},
+ }
 }
 ```
 

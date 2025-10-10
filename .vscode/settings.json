@@ -5,5 +5,6 @@
         "**/book.en": true
     },
     "explorer.sortOrderReverse": false,
-    "editor.detectIndentation": false
+    "editor.detectIndentation": false,
+    "markdown.validate.enabled": true
 }
