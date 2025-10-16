@@ -1,22 +1,14 @@
 ## 调试多线程程序 - 跟踪新创建线程
 
-### 实现目标
+### 实现目标：感知新线程创建并跟踪
 
-前面演示调试器操作时，为了简化多线程调试的挑战，有些测试场景我们使用了单线程程序来进行演示。但是真实场景下，我们的程序往往是多线程程序。
+进程执行过程中有可能会创建新线程，尤其是像Go程序这样，为了充分利用多核CPU资源，会自动创建新线程来执行goroutine。当某些goroutine执行阻塞型系统调用导致线程阻塞时，Go运行时为了维持GMP调度的正常运转，还会重新新建线程出来。在Go进程初始化时，也会创建专门的线程来执行sysmon任务，轮询netpoller、timer、强制GC等任务 …… OK，Go语言提供了遍历的面向goroutine粒度的并发控制能力，但是背后还是依赖线程，依赖操作系统对线程的调度控制能力，再然后才是GMP中work-stealing的方式线程执行goroutine的逻辑。
 
-我们的调试器必须具备多线程调试的能力，这里有几类场景需要特别强调下：
-
-- 父子进程，在调试器实现过程中，跟踪父子进程和跟踪进程内的线程，实现技术上差别不大。
-  因为这是一款面向go调试器的书籍，所以我们只专注多线程调试。多进程调试我们会点一下，但是不会专门开一节来介绍。
-- 线程的创建时机问题，可能是在我们attach之前创建出来的，也可能是我们attach之后线程通过clone又新创建出来的。
-  - 对于进程已经创建的线程，我们需要具备枚举并且发起跟踪、切换不同线程跟踪的能力；
-  - 对于进程调试期间新创建的线程，我们需要具备即时感知线程创建，并提示用户选择跟踪哪个线程的能力，方便用户对感兴趣的事件进行观察。
-
-本节我们就先看下如何跟踪新创建的线程，并获取新线程的tid并发起跟踪，下一节我们看下如何枚举已经创建的线程并选择性跟踪指定线程。
-
-ps: 篇幅原因，godbg中对多线程调试的调试器支持代码这里不做展示，您可以查看 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 源码进行了解。
+说这么多，只是为了强调Go进程执行过程中，可能会随时创建一些新线程出来。作为调试器，我们需要具备感知新线程创建、主动跟踪的能力。我们需要了解线程是什么，Linux是如何创建线程的，Go运行时是如何创建线程的，有那些系统层面的支持能够方便我们感知新线程创建了，并对新线程的执行进行即时的跟踪控制。本节我们就来看看如何实现这个目标。
 
 ### 基础知识
+
+#### 线程是如何创建的
 
 newosproc创建一个新的线程（newproc创建一个新的goroutine)，是通过 `clone` 系统调用来完成的，注意看cloneFlags以及clone操作实现。
 
@@ -196,8 +188,6 @@ nog2:
 
 #### 准备多线程测试程序
 
-这部分实现代码，详见 [hitzhangjie/golang-debugger-lessons/20_trace_new_threads](https://github.com/hitzhangjie/golang-debugger-lessons/tree/master/20_trace_new_threads)。
-
 首先为了后面测试方便，我们先用C语言来实现一个多线程程序，程序逻辑很简单，就是每隔一段时间就创建个新线程，线程函数就是打印当前线程的pid，以及线程LWP的pid。
 
 ```c
@@ -239,6 +229,8 @@ int main() {
 #### 调试器跟踪新线程创建
 
 然后我们再来看调试器部分的代码逻辑，这里主要是为了演示tracer（debugger）如何对多线程程序中新创建的线程进行感知，并能自动追踪，必要时还可以实现类似 gdb `set follow-fork-mode=child/parent/ask` 的调试效果呢。
+
+这部分实现代码，详见 [hitzhangjie/golang-debugger-lessons/20_trace_new_threads](https://github.com/hitzhangjie/golang-debugger-lessons/tree/master/20_trace_new_threads)。
 
 ```go
 package main

@@ -35,6 +35,7 @@
     * [6.20.3 线程执行控制 - 挂起策略](6-develop-inst-debugger/20-multithread/3-suspend_policy.md)
     * [6.20.4 线程执行控制 - continue](6-develop-inst-debugger/20-multithread/4-continue.md)
     * [6.20.5 线程执行控制 - breakpoint](6-develop-inst-debugger/20-multithread/5-breakpoint.md)
+  * [6.21 调试多进程程序](6-develop-inst-debugger/21-multiprocess/README.md)
   * [6.80 认识ASLR](6-develop-inst-debugger/80-aslr.md)
   * [6.99 More...](6-develop-inst-debugger/99-more.md)
 * [7 挺进符号级调试器](7-headto-sym-debugger/README.md)
