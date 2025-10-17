@@ -180,6 +180,32 @@ tracer如果确定了是clone导致的以后，可以进一步通过 `newpid, _ 
 
 3、拿到线程pid之后就可以将新线程纳入跟踪，我们可以选择放行新线程，或者暂停新线程、读写数据、观察并控制执行。
 
+#### 关于syscall.PtraceGetEventMsg的说明
+
+如果我们使用ptrace的PTRACE_GETEVENTMSG操作来获取新创建线程的tid，应该注意些什么呢？
+
+- 这个event会存多久，
+- 这个event什么时候会被清空，
+- 当检测到一个新线程创建时需要理解执行该操作吗？
+- 可以wait到N(N>1)个线程创建后，再执行该操作吗？
+
+这几个问题促使我们思考event的生成、存储、清空机制，这里我们进行了一个简单的总结：
+
+| 触发情况                             | 消息是否被清除 | 说明                           |
+| ------------------------------------ | -------------- | ------------------------------ |
+| `PTRACE_CONT` 或 `PTRACE_DETACH` | **是**   | 子进程继续执行，内核清空缓冲区 |
+| 再次出现 `PTRACE_EVENT`            | **是**   | 新事件写入时覆盖旧消息         |
+| 进程退出                             | **是**   | 进程结束，内核销毁结构         |
+| `PTRACE_GETEVENTMSG`               | **否**   | 只读取，不清空                 |
+
+> **最佳实践**：
+>
+> 1. **在每次 `waitpid()` 返回 `SIGTRAP|0x80`（即 ptrace 事件）后立即读取事件消息**。
+> 2. **随后立即发 `PTRACE_CONT`**，完成一轮“事件‑读取‑继续”循环。
+> 3. 这样既能拿到所有事件消息，又能避免消息被后续事件或 `CONT` 覆盖。
+
+这样设计，ptrace 调试过程才能顺利、准确地捕获所有 `PTRACE_EVENT` 的信息
+
 #### 关于线程tid、pid的说明
 
 当我们提tid的时候，其实是想说线程ID，当提pid的时候是想提线程所属进程的pid。但是有些系统调用似乎却不是这样的惯例，比如ptrace系统调用 `ptrace(pid, ...)` 尽管它的操作对象是线程，但是却用了pid这样的命名，为什么呢？这要从内核设计实现来说起。
@@ -242,7 +268,7 @@ int main() {
 
 #### 调试器跟踪新线程创建
 
-然后我们再来看调试器部分的代码逻辑，这里主要是为了演示tracer（debugger）如何对多线程程序中新创建的线程进行感知，并能自动追踪，必要时还可以实现类似 gdb `set follow-fork-mode=child/parent/ask` 的调试效果呢。
+然后我们再来看调试器部分的代码逻辑，这里主要是为了演示tracer（debugger）如何对多线程程序中新创建的线程进行感知，并能自动追踪。
 
 这部分实现代码，详见 [hitzhangjie/golang-debugger-lessons/20_trace_new_threads](https://github.com/hitzhangjie/golang-debugger-lessons/tree/master/20_trace_new_threads)。
 
@@ -320,7 +346,8 @@ func main() {
     // step2: setup to trace all new threads creation events
     time.Sleep(time.Second * 2)
 
-    opts := syscall.PTRACE_O_TRACEFORK | syscall.PTRACE_O_TRACEVFORK | syscall.PTRACE_O_TRACECLONE
+    //opts := syscall.PTRACE_O_TRACEFORK | syscall.PTRACE_O_TRACEVFORK | syscall.PTRACE_O_TRACECLONE
+    opts := syscall.PTRACE_O_TRACECLONE
     if err := syscall.PtraceSetOptions(int(pid), opts); err != nil {
         fmt.Fprintf(os.Stderr, "set options fail: %v\n", err)
         os.Exit(1)
@@ -390,7 +417,7 @@ func checkPid(pid int) bool {
 
 主线程、其他线程创建出来后都会打印该线程对应的pid、tid（这里的tid就是对应的lwp的pid）
 
-```
+```bash
 zhangjie🦀 testdata(master) $ ./fork 
 process: 35573, thread: 35573
 process: 35573, thread: 35574
@@ -404,16 +431,16 @@ process: 35573, thread: 36398
 ...
 ```
 
-2、我们同时观察 ./20_trace_new_threads `<上述fork程序进程pid> 的执行情况`
+2、我们同时观察 `./20_trace_new_threads $(pidof fork)` 的执行情况
 
-```
+```bash
 zhangjie🦀 20_trace_new_threads(master) $ ./20_trace_new_threads 35573
 ===step1===: supposing running `dlv attach pid` here
 process 35573 attach succ
 
 process 35573 stopped
-
 tracee stopped at 7f318346f098
+
 tracee stopped, tracee pid:35573, status: trace/breakpoint trap, trapcause is clone: true
 eventmsg: new thread lwp pid: 35716
 tracee stopped, tracee pid:35573, status: trace/breakpoint trap, trapcause is clone: true
@@ -441,21 +468,37 @@ eventmsg: new thread lwp pid: 36398
 
 如果是clone事件，我们可以继续通过syscall.PtraceGetEventMsg(...)来获取新clone出来的线程的LWP的pid。
 
-检查是不是clone事件呢，参考 man 2 ptrace手册对选项PTRACE_O_TRACECLONE的介绍部分，有解释clone状况下的status值如何编码。
+检查是不是clone事件呢，参考 `man 2 ptrace` 手册对选项PTRACE_O_TRACECLONE的介绍部分，有解释clone状况下的status值如何编码。
 
 4、另外设置了选项PTRACE_O_TRACECLONE之后，新线程会自动被trace，所以新线程也会被暂停执行，此时如果希望新线程恢复执行，我们需要显示将其syscall.PtraceDetach或者执行syscall.PtraceContinue操作来让新线程恢复执行。
 
-### 思考一下：如果更友好地调试多进程程序
+### 思考：线程上下文切换特性支持
 
-至此，测试方法介绍完了，我们可以引申下，在我们这个测试的基础上我们可以提示用户，你想跟踪当前线程呢，还是想跟踪新线程呢？其实也是可以做到的，不过对于go语言而言，可能意义不大，下面我们会探讨。
+#### Go语言GMP调度的特殊性
 
-在调试多进程程序时非常有用的，调试人员希望能有一种控制能力，当执行 `fork` 后能选择自动跟踪父进程还是子进程。联想下gdb中的 `set follow-fork-mode` ，我们可以选择 parent、child、ask 中的一种，并且允许在调试期间在上述选项之间进行切换，如果我们调试时需要跟踪子进程去调试，这个功能特性就非常的有用。
+不同于C\C++多线程编程操作时面向线程的，线程函数即业务逻辑，而在go语言中，并不是这样。对于go语言而言，线程有着特殊的意义。go提供的是面向协程goroutine级别的并发，比如chan sendrecv、mutex加解锁等等。由于GMP调度设计的原因，实际上我们也很难知道某个特定的goroutine会在哪个thread上执行，同一个goroutine的完整代码逻辑实际上也不一定会固定在同一个thread上执行 …… 调试go程序时，我们可能极少有诉求去跟踪某个特定的线程的执行情况。
 
-比如我们要跟踪 `protoc` 编译器的插件实现 `protoc-gen-go`，protocolbuffers编译器protoc及其非内置支持语言的工具支持是通过插件机制来完成的，protoc编译器负责读取并解析 `*.proto` 文件，并生成一个代码生成请求发送给插件，方式就是在 `$PATH` 中搜索 `protoc-gen-go` 并启动它，然后通过stdin, stdout来传递请求并获取结果。如果你对此感兴趣，可以阅读 [Protoc及其插件工作原理](https://www.hitzhangjie.pro/blog/2017-05-23-protoc%E5%8F%8A%E6%8F%92%E4%BB%B6%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90%E7%B2%BE%E5%8D%8E%E7%89%88/)。
+#### 什么时候需要在线程间切换
 
-### 思考一下：dlv是否支持多进程调试呢
+dlv实际上是提供了 `threads` 和 `thread` 调试命令，来允许调试人员查看当前存在的线程以及在它们之间进行切换。那什么调试情景下我需要用到这个线程切换能力呢？
 
-dlv也支持类似的调试模式：`target follow-exec [-on [regex]] | [-off]`
+现在主流调试器对于进程内线程管理，基本上都是采用Stop-all、Start-all Mode（原因就是方便观察、避免线程间同步逻辑异常），所以当我们提到线程间切换的时候，其实指的是将当前调试器命令执行时的上下文（context），切换为目标线程的上下文（context），比如执行命令pregs时就是打了当前线程的硬件上下文信息，而不是其他被跟踪的线程的硬件上下文信息。
+
+如果调试的线程执行的是cgo代码（这部分代码逻辑不会像goroutine逻辑那样会在线程间迁移），如果调试的goroutine执行了runtime.LockOSThread()，如果需要查看go运行时的底层逻辑，比如GMP调度，或者需要调试看下不同线程的线程可见性问题 …… 确实还是会有些场景需要用到线程上下文切换能力的支持。
+
+### 思考：需要自动切换到新线程吗
+
+在调试多进程程序时，当执行 `fork` 创建子进程后，调试人员希望能选择跟踪父进程还是子进程。
+
+举个例子，比如我们要跟踪 `protoc` 编译器的插件实现 `protoc-gen-go`，protocolbuffers编译器protoc及其非内置支持语言的工具支持是通过插件机制来完成的，protoc编译器负责读取并解析 `*.proto` 文件，并生成一个代码生成请求发送给插件，方式就是在 `$PATH` 中搜索 `protoc-gen-go` 并启动它，然后通过stdin, stdout来传递请求并获取结果。如果你对此感兴趣，可以阅读 [Protoc及其插件工作原理](https://www.hitzhangjie.pro/blog/2017-05-23-protoc%E5%8F%8A%E6%8F%92%E4%BB%B6%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90%E7%B2%BE%E5%8D%8E%E7%89%88/)。
+
+如果我们用gdb对protoc进行调试（protoc编译器是用C++写的)，并且希望对插件实现protoc-gen-go进行调试，就可以通过gdb中的 `set follow-fork-mode childk` 来选择跟踪子进程。这个功能是非常方便的，你不需要担心子进程执行过快越过想调试的代码部分。如果你不知道这个调试特性，可能会在子进程初始化逻辑中设置一个forloop然后attach后再跳出forloop才能对感兴趣的代码进行调试。
+
+OK，那对于多线程程序而言，我们跟踪到一个新线程时，是否需要允许用户选择，你需要切换到某个线程上下文去吗？意义应该不大。首先Go主要是面向goroutine级别的并发控制操作，调试时切换线程作用不大。即使前面提到确实有些场景需要线程切换支持，我们也可以手动执行命令 `thread <n>` 来切换，所以没有必要支持自动跟踪并切换到新线程的特性。
+
+### 思考：dlv是否支持多进程调试
+
+前面提到gdb支持对子进程进行自动跟踪，其实dlv也支持类似的调试模式：`target follow-exec [-on [regex]] | [-off]`
 
 ```bash
 (dlv) help target
@@ -470,26 +513,6 @@ Enables or disables follow exec mode. When follow exec mode Delve will automatic
 
 当通过exec.Command启动一个子进程时，如果您希望跟踪子进程，则可以通过上述 `target follow-exec` 操作来实现，并且还允许你通过正则的形式来对子进程名进行匹配检查，匹配则自动跟踪子进程。
 
-### 思考一下：如果要在线程之间进行切换呢
-
-#### 所有线程都已经纳入跟踪
-
-dlv `target follow-exec` 支持自动跟踪子进程调试，但是却不支持自动跟踪并切换到新创建的线程。既然都可以跟踪子进程了，其实也是可以跟踪新创建的线程的。
-
-其实，对于多线程程序调试，比较友好的就是 Stop-all Mode，就是所有线程要么都停止，要么都运行，以避免一些正常的线程间同步无法正常执行，以及方便调试人员观察，这个我们之前就提过了。所以，对于进程内的线程，不管是attach时已经创建出来的线程，还是attach后新创建的线程，这些线程都会纳入我们调试器的管理范畴。
-
-#### Go语言GMP调度的特殊性
-
-不同于C\C++多线程编程操作时面向线程的，线程函数即业务逻辑，而在go语言中，并不是这样。对于go语言而言，线程有着特殊的意义。go提供的是面向协程goroutine级别的并发，比如chan sendrecv、mutex加解锁等等。由于GMP调度设计的原因，实际上我们也很难知道某个特定的goroutine会在哪个thread上执行，同一个goroutine的完整代码逻辑实际上也不一定会固定在同一个thread上执行 …… 调试go程序时，我们可能极少有诉求去跟踪某个特定的线程的执行情况。
-
-#### 什么时候需要在线程间切换
-
-dlv实际上是提供了 `threads` 和 `thread` 调试命令，来允许调试人员查看当前存在的线程以及在它们之间进行切换。那什么调试情景下我需要用到这个线程切换能力呢？
-
-现在主流调试器对于进程内线程管理，基本上都是采用Stop-all、Start-all Mode（原因就是方便观察、避免线程间同步逻辑异常），所以当我们提到线程间切换的时候，其实指的是将当前调试器命令执行时的上下文（context），切换为目标线程的上下文（context），当我们执行命令pregs时那么就是切换到的线程的执行上下文信息。
-
-如果调试的线程执行的是cgo代码（这部分代码逻辑不会像goroutine逻辑那样会在线程间迁移），如果调试的goroutine执行了runtime.LockOSThread()，如果需要查看go运行时的底层逻辑，比如GMP调度 …… 那确实还是会用到这部分能力的。
-
 ### 本节小结
 
-本节深入探讨了调试器跟踪新创建线程的核心技术实现，重点阐述了三个关键技术点：通过 `PTRACE_O_TRACECLONE` 选项让内核自动跟踪clone系统调用；利用 `waitpid()` 和 `PTRACE_EVENT_CLONE` 事件机制感知新线程创建；通过 `PtraceGetEventMsg()` 获取新线程的LWP ID并将其纳入调试器管理。此外，本节还分析了多进程跟踪与多线程跟踪的实现差异，以及Go语言GMP调度模型对线程调试的特殊影响。这些内容为读者构建了完整的多线程调试知识体系奠定了坚实基础。
+本节主要探讨了调试器如何感知和跟踪新创建线程的技术实现，核心内容包括：通过 `PTRACE_O_TRACECLONE` 选项让内核自动跟踪clone系统调用；利用 `waitpid()` 和 `PTRACE_EVENT_CLONE` 事件机制感知新线程创建；通过 `PtraceGetEventMsg()` 获取新线程的LWP ID并将其纳入调试器管理。本节还深入分析了Linux内核中线程与进程的本质区别，以及Go语言GMP调度模型对线程调试的特殊影响，为读者理解多线程、多进程调试的底层机制提供了重要基础。
