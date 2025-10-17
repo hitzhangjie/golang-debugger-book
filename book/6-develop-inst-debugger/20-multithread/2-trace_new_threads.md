@@ -129,60 +129,74 @@ nog2:
 在执行完上述设置之后，tracee在执行clone操作时，tracer便会收到通知。
 
 1. tracee执行clone系统调用时，内核会给tracee发送一个SIGTRAP信号，内核会暂停tracee执行，并通知tracer。
-
 2. tracer需要主动去感知这个事件的发生，有两个办法：
 
-   - 通过SIGCHLD信号去感知这个事件的发生，内核会发送信号SIGCHLD给tracer，并通过si_status字段说明是调试动作导致的SIGTRAP引起。而如果想进一步获取是因为哪个系统调用导致的，则可以通过 `syscall.PtraceGetRegs` 来从寄存器中获取系统调用编号，再与clone的系统调用编号进行比较。
+**方法1**： 通过SIGCHLD信号去感知这个事件的发生
 
-     ```c
-     siginfo_t {
-            int      si_signo;     /* Signal number */
-            int      si_errno;     /* An errno value */
-            int      si_code;      /* Signal code */
-            int      si_trapno;    /* Trap number that caused
+内核会发送信号SIGCHLD给tracer，并通过si_status==SIGTRAP来说明是调试引起的。想进一步获取是因为哪个系统调用导致的，则可以通过 `syscall.PtraceGetRegs` 来从寄存器中获取系统调用编号，通过与clone系统调用编号比较即可判断当前tracee是否执行的是clone操作。si_pid字段则包含了新创建的线程pid，也就是新线程的tid。
+
+```c
+siginfo_t {
+        int      si_signo;     /* Signal number */
+        int      si_errno;     /* An errno value */
+        int      si_code;      /* Signal code */
+        int      si_trapno;    /* Trap number that caused
                                       hardware-generated signal
                                       (unused on most architectures) */
-            pid_t    si_pid;       /* Sending process ID */
-            uid_t    si_uid;       /* Real user ID of sending process */
-            int      si_status;    /* Exit value or signal */
-            ...
-     }
+        pid_t    si_pid;       /* Sending process ID */
+        uid_t    si_uid;       /* Real user ID of sending process */
+        int      si_status;    /* Exit value or signal */
+        ...
+}
  
-     SIGCHLD fills in si_pid, si_uid, si_status, si_utime, and
-       si_stime, providing information about the child.  The si_pid
-       field is the process ID of the child; si_uid is the child's
-       real user ID.  The si_status field contains the exit status of
-       the child (if si_code is CLD_EXITED), or the signal number that
-       caused the process to change state.     
-     ```
+SIGCHLD fills in si_pid, si_uid, si_status, si_utime, and
+    si_stime, providing information about the child.  The si_pid
+    field is the process ID of the child; si_uid is the child's
+    real user ID.  The si_status field contains the exit status of
+    the child (if si_code is CLD_EXITED), or the signal number that
+    caused the process to change state.   
+```
 
-   - 通过waitpid()去感知到tracee的运行状态发生了改变，并通过waitpid返回的status来判断是否是PTRACE_EVENT_CLONE事件。
+**方法2**：通过waitpid()去感知这个事件的发生
 
-     see: `man 2 ptrace` 中关于选项 PTRACE_O_TRACECLONE 的说明
+通过waitpid()是更常用的感知tracee的运行状态发生了改变的方法，执行clone系统调用的线程完成该操作后会暂停，waitpid会在status字段中记录发生了PTRACE_EVENT_CLONE事件，这样tracer就可以判断出是tracee执行clone系统调用导致的。然后就可以借助 `newpid, syscall.PtraceGetEventMsg(pid)`来获取新线程的pid信息。
 
-     ```bash
-     PTRACE_O_TRACECLONE (since Linux 2.5.46)
-            Stop the tracee at the next clone(2) and automatically start tracing the newly cloned process, which will start with a SIGSTOP, or PTRACE_EVENT_STOP if PTRACE_SEIZE was used.  A  waitpid(2)
-            by the tracer will return a status value such that
+see: `man 2 ptrace` 中关于选项 PTRACE_O_TRACECLONE 的说明
 
-              status>>8 == (SIGTRAP | (PTRACE_EVENT_CLONE<<8))
+```bash
+PTRACE_O_TRACECLONE (since Linux 2.5.46)
+    Stop the tracee at the next clone(2) and automatically start tracing the newly cloned process, which will start with a SIGSTOP, or PTRACE_EVENT_STOP if PTRACE_SEIZE was used.  A  waitpid(2)
+    by the tracer will return a status value such that
 
-            The PID of the new process can be retrieved with PTRACE_GETEVENTMSG.
+    status>>8 == (SIGTRAP | (PTRACE_EVENT_CLONE<<8))
 
-            This  option  may not catch clone(2) calls in all cases.  If the tracee calls clone(2) with the CLONE_VFORK flag, PTRACE_EVENT_VFORK will be delivered instead if PTRACE_O_TRACEVFORK is set;
-            otherwise if the tracee calls clone(2) with the exit signal set to SIGCHLD, PTRACE_EVENT_FORK will be delivered if PTRACE_O_TRACEFORK is set.
-     ```
+    The PID of the new process can be retrieved with PTRACE_GETEVENTMSG.
 
-3、tracer如果确定了是clone导致的以后，可以进一步通过 `newpid, _ = syscall.PtraceGetEventMsg(pid)` 拿到新线程的pid信息。
+    This  option  may not catch clone(2) calls in all cases.  If the tracee calls clone(2) with the CLONE_VFORK flag, PTRACE_EVENT_VFORK will be delivered instead if PTRACE_O_TRACEVFORK is set;
+    otherwise if the tracee calls clone(2) with the exit signal set to SIGCHLD, PTRACE_EVENT_FORK will be delivered if PTRACE_O_TRACEFORK is set.
+```
 
-4、拿到线程pid之后就可以将新线程纳入跟踪，我们可以选择放行新线程，或者暂停新线程、读写数据、观察并控制执行。
+tracer如果确定了是clone导致的以后，可以进一步通过 `newpid, _ = syscall.PtraceGetEventMsg(pid)` 拿到新线程的pid信息。
 
-> ps: 关于个别线程tid、pid这两个术语的混用说明
->
-> 会偶尔混用pid、tid信息，对于线程，Linux下其实是LWP（轻量级进程，Light Weight Process），进程通过执行clone创建出来的LWP。但是当我想描述一个线程的ID时，应该用tid这个术语，而不是pid这个术语。但是因为某些函数调用参数命名为pid且适用于线程id的原因，我可能偶尔会用pid来表示线程的tid，比如attach一个线程的时候，传递的参数应该是tid，而非这个线程所属进程的pid（如果不是主线程，线程tid和pid值也是不一样的)。
->
-> - 这个线程所属的进程pid，这样获取 `getpid()`
-> - 这个线程的线程tid（或者表述成对应的LWP的pid），通过这样获取 `syscall(SYS_gettid)`
+3、拿到线程pid之后就可以将新线程纳入跟踪，我们可以选择放行新线程，或者暂停新线程、读写数据、观察并控制执行。
+
+#### 关于线程tid、pid的说明
+
+当我们提tid的时候，其实是想说线程ID，当提pid的时候是想提线程所属进程的pid。但是有些系统调用似乎却不是这样的惯例，比如ptrace系统调用 `ptrace(pid, ...)` 尽管它的操作对象是线程，但是却用了pid这样的命名，为什么呢？这要从内核设计实现来说起。
+
+在 Linux 内核里，**所有的可调度实体都是 `task_struct`**。“进程”并不是一种独立的结构，而是 **一组共享相同内存（`mm_struct`）的线程** 的集合——这组线程被称为 **线程组（thread group）**。
+
+- **线程组的首个成员（线程组首领）** 的 `pid` 与 `tgid` 相等，我们习惯叫法是 “主线程"；
+- **其它成员**（即主线程以外的“线程”）的 `pid` 与 `tgid` 不相等，它们的 `tgid` 与组首领的 `pid` 相同。
+
+不管是进程还是线程，它们都由各自的task_struct来表示，它们共享的内存区域则由task_struct->mm_struct来表示，其他共享的信息则通过task_struct->thread_group来描述。因为线程是通过clone时指定一些特殊的共享选项来创建出来的，task_struct中的很多信息共享自主线程，是比较轻量的，所以也经常称之为LWP（轻量级进程，Light Weight Process)。`/proc/processID/task/threadID`，threadID其实就是每个线程对应的task_struct->pid，而进程processID就是线程对应的task_struct->tgid。
+
+系统调用里面有些函数参数定义为pid，这种一般指的是各个线程的task_struct->pid这个概念，比如ptrace系统调用。但是也有些系统调用或者库函数命名上容易让人产生歧义：
+
+- getpid，获取调用方所属的进程的pid，也就是线程所属进程的进程pid，或者说线程的tgid；
+- gettid，获取线程的pid（线程对应的task_struct->pid）；
+
+有时候文中会混用pid、tid概念，请读者朋友根据语境区分我们指的是线程所属进程的pid，还是线程自身的pid。
 
 ### 设计实现
 
@@ -479,5 +493,3 @@ dlv实际上是提供了 `threads` 和 `thread` 调试命令，来允许调试�
 ### 本节小结
 
 本节深入探讨了调试器跟踪新创建线程的核心技术实现，重点阐述了三个关键技术点：通过 `PTRACE_O_TRACECLONE` 选项让内核自动跟踪clone系统调用；利用 `waitpid()` 和 `PTRACE_EVENT_CLONE` 事件机制感知新线程创建；通过 `PtraceGetEventMsg()` 获取新线程的LWP ID并将其纳入调试器管理。此外，本节还分析了多进程跟踪与多线程跟踪的实现差异，以及Go语言GMP调度模型对线程调试的特殊影响。这些内容为读者构建了完整的多线程调试知识体系奠定了坚实基础。
-
-
