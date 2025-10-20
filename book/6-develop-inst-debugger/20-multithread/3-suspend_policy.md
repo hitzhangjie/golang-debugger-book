@@ -43,8 +43,10 @@ OK，这里不妨展开介绍下GDB中与挂起策略相关的几个选项设置
 
 **设置2：set schedule_multiple on/off (默认值off)**：如果是多进程程序，是否恢复所有进程内的线程的执行。
 
-- off: 只暂停当前选中线程，其他线程继续执行。
-- on: 暂停所有线程，当执行continue,next,step操作时恢复所有线程执行。
+- off: 当执行continue,next,step操作时只恢复当前进程内的线程执行；
+- on: 当执行continue,next,step操作时恢复所有进程内的线程执行；
+
+这里可以被恢复的线程集合，进一步可以由`scheduler_locking`选项来控制。
 
 **设置3：set scheduler_locking on/off/step/replay (默认值off)**：决定在程序运行、单步或继续时，GDB 是否会把其他线程“锁定”（即暂停），只让当前选中的线程执行。这对定位线程间交互、排查竞争、实现确定性重放都非常重要。
 
@@ -59,10 +61,10 @@ non-stop、schedule_multiple都很好理解，我们介绍下scheduler_locking�
 这会导致：
 
 - 单步调试时可能会切到别的线程，导致你走了你不想走的代码路径。
-- 设置断点时，任何线程都可能触发，导致“偶发性”中断。
+- 设置断点时，任何线程都可能触发，导致“偶发性”调试流程中断。
 - 有些竞态条件在你“锁定”调试时可能根本不会出现。
 
-`scheduler-locking` 给我们一个可控的调试模式，让我们决定 **是否需要把调度器锁定**，从而让调试行为更可预测。GDB record/replay特性是不依赖Mozilla rr的，但是由于是指令级记录，性能上损耗比较大。GDB也可以通过gdb serial协议访问rr来进行录制重放。
+`scheduler-locking` 给我们一个可控的调试模式，让我们决定 **是否需要把调度器锁定**，从而让调试行为更可预测。GDB record/replay特性是不依赖Mozilla rr的，但是由于是指令级记录，性能开销比rr大。GDB也可以通过gdb serial协议访问rr来进行录制重放。
 
 #### LLDB
 
