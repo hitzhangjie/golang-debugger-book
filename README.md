@@ -1,4 +1,4 @@
-# The Art of Debugging: Debugger Internals
+# The Art of Debugging: Go Debugger Internals
 
 Ever wondered how to develop a Go debugger? Curious about how debuggers work under the hood? This book provides comprehensive insights into these topics. Read the Chinese version online at: https://www.hitzhangjie.pro/debugger101.io/
 
