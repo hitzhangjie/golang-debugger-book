@@ -1,4 +1,4 @@
-# 1 Go语言调试器开发
+# 1 软件调试的艺术：Go语言调试器设计实现内幕
 
 <img alt="封面图片" src="bookcover.jpeg" width="320px" />
 
