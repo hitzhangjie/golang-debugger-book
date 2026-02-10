@@ -19,54 +19,70 @@
 
 如果观测到调试器正在调试当前进程，则可以强制程序运行异常、做些诡异的逻辑，把正在调试的人绕晕。 调试器是个独特的工具，因为它使用户可以从中立的角度来观察程序。 通过插入类似chk的代码，可以迫使用户进入一个扭曲的量子宇宙，在该宇宙中，精心构造的诡异行为、输出，可以有效保护您的程序，避免或者延缓被逆向。
 
+对调试器使用有经验的读者，很快就可以发现上述方法，并不总是可靠，有经验的调试人员可以通过gdb启动进程并在main、chk位置添加断点，待chk返回前篡改寄存器EAX中的值来绕过该检查。所以这个方法并不总是奏效，有可能将chk()低调行事隐藏在一堆看似正常的代码中，反而有助于戏弄调试人员。有没有更靠谱的做法呢？
+
+我们也可以使用 `NtQueryInformationProcess` 系统调用来判断当前进程是否正在被调试，这是一个内核态的系统调用，可以获取进程的详细信息，包括是否正在被调试。这个检查逻辑可以在整个生命周期内持续进行，不容易被绕过，一旦检测到正在被调试，就可以立即退出程序。
+
+```
+__kernel_entry NTSTATUS NtQueryInformationProcess(
+  [in]            HANDLE           ProcessHandle,
+  [in]            PROCESSINFOCLASS ProcessInformationClass,
+  [out]           PVOID            ProcessInformation,
+  [in]            ULONG            ProcessInformationLength,
+  [out, optional] PULONG           ReturnLength
+);
+```
+
+可以指定PROCESSINFOCLASS ProcessInformationClass = ProcessBasicInformation，此时会返回一个PEB结构来描述当前进程是否正在被调试器调试。
+
+see: https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntqueryinformationprocess
+
 #### 4.3.1.2 Linux
 
-在Linux下，也有类似的方式，通常可以借助“`/proc/self/status`”中的“`TracePid`”属性来判断是否有调试器正在调试当前进程。
+在Linux下，也有类似Windows的方式，通常可以借助“`/proc/self/status`”中的“`TracePid`”属性来判断是否有调试器正在调试当前进程。
 
 下面是个示例，检查当前进程是否正在被调试。
 
-> 被调试程序：
->
-> ```go
-> package main
-> 
-> import "fmt"
-> import "os"
-> 
-> func main() {
-> fmt.Println("vim-go, pid: %d", os.Getpid())
-> }
-> ```
->
-> 执行调试操作：
->
-> ```bash
-> $ dlv debug main.go
-> dlv> b main.main
-> dlv> c
-> dlv> n
-> dlv> n
-> dlv> vim-go, pid: 746
-> ```
->
-> 检查TracePid：
->
-> ```bash
-> >cat /proc/746/status | grep TracePid
-> TracePid: 688
-> > cat /proc/688/cmdline
-> dlv debug main.go
-> ```
->
-> 现在我们可以判断出当前进程正在被pid=688的调试器进程调试，并且该调试器是dlv。
+**被调试程序：**
 
-如果不希望程序被调试，就可以在检测到 `TracePid != 0` 时直接退出，同样的这个过程要尽可能快的执行。
+```go
+package main
+
+import "fmt"
+import "os"
+
+func main() {
+    fmt.Println("vim-go, pid: %d", os.Getpid())
+}
+```
+
+**执行调试操作：**
+
+```bash
+$ dlv debug main.go
+dlv> b main.main
+dlv> c
+dlv> n
+dlv> n
+dlv> vim-go, pid: 746
+```
+
+**检查TracePid：**
+
+```bash
+cat /proc/746/status | grep TracePid
+TracePid: 688
+cat /proc/688/cmdline
+dlv debug main.go
+```
+
+现在我们可以判断出当前进程正在被pid=688的调试器进程调试，并且该调试器是dlv。
+
+如果不希望程序被调试，就可以在检测到 `TracePid != 0` 时直接退出。我们可以将检查逻辑隐藏在一堆看似正常的代码中，并尽量在程序启动后立即执行，或者在整个生命周期内持续进行。这样就不容易被绕过。
 
 #### 4.3.1.3 其他平台
 
 其他平台下，应该也有对应的解决方法，读者感兴趣可以自行查阅相关资料。
-
-值得一提的是，前面Windows、Linux平台下的例子，都提及了反调试检查要尽快执行，实际上不一定总能达成效果。后面的示例大家可以看到，调试器启动被调试进程，进程会停在第一条指令处，就是说并没有立即执行完检查并退出。调试人员如果逆向分析能力很强，仍然有机会跳过反调试的检查逻辑。
 
 ### 4.3.2 移除调试信息
 
