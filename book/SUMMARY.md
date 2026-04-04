@@ -133,6 +133,7 @@
   * [10.6 eBPF发展历程](10-extras/6-development-of-ebpf.md)
   * [10.7 录制重放发展历程](10-extras/7-development-of-replay.md)
   * [10.8 分布式调试发展历程](10-extras/8-development-of-debug-dsys.md)
+  * [10.9 AI辅助调试](10-extras/9-ai-assisted-debugging.md)
 * [11 致谢](11-thanks/README.md)
 * [12 附录](12-appendix/README.md)
   * [12.1 go程序启动流程](12-appendix/1-go-programme-start.md)
