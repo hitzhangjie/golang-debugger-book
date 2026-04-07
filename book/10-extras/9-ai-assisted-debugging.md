@@ -558,7 +558,7 @@ Command failed: could not find symbol value for i
 Command failed: could not find symbol value for i
 ```
 
-**说明**：前两条错误是因为在变量完全初始化前尝试打印。后续的错误是在循环条件判断时尝试打印尚未进入循环体的 `i`。
+**说明**：前两条错误是因为在变量完全初始化前尝试打印。后续的错误是在循环条件判断时尝试打印尚未进入循环体的 `i`。如果读者感兴趣可以手动模拟下上述调试过程，感受下LLM+toolcall+调试器IO重定向基础上的自动化调试的威力。
 
 ---
 
@@ -622,8 +622,6 @@ A: 需要让 a 完成赋值，然后用 print 命令查看其值。
 
 ### 关键技术要点
 
-#### 1. 行缓冲与同步
-
 调试器的I/O是行缓冲的（line-buffered），这意味着：
 
 - 调试器从stdin读取一行
@@ -631,137 +629,13 @@ A: 需要让 a 完成赋值，然后用 print 命令查看其值。
 - 将输出写入stdout（通常包含多行）
 - 重复
 
-AI Agent需要考虑这种缓冲特性，不能假设命令与响应是原子操作。
-
-#### 2. 变量生命周期
-
-在启用了优化的Go程序中，变量在其作用域之外可能不存在。这导致：
-
-```go
-func main() {
-    a := []int{...}   // ← a 在这里才真正存在
-    // 即使调试器停在函数入口，a 也可能不可访问
-}
-```
-
-AI Agent需要理解这一点，不能过早地查询变量。
-
-#### 3. 断点与单步的区别
-
-- **`continue`**：在当前点恢复执行，直到遇到下一个断点或异常
-- **`step`**：执行单条语句，然后停下
-- **`stepin` vs `stepout`**：函数调用时的选择
-
-不同的策略适用于不同的调试场景。
-
-#### 4. 异常处理
+AI Agent需要考虑这种缓冲特性，不能假设命令与响应是原子操作。这样LLM才能够不断地观察、调整接下来的动作，最终找到bug。
 
 当程序触发panic时，调试器会捕获该异常点，并进入"paused at panic"状态。AI Agent可以：
 
 - 检查panic信息
 - 回溯call stack
 - 定位触发panic的确切位置
-
----
-
-### 实现AI Agent的建议
-
-#### 伪代码框架
-
-```python
-class AutoDebugger:
-    def __init__(self, program, llm_client):
-        self.program = program
-        self.llm = llm_client
-        self.commands_history = []
-        self.outputs_history = []
-      
-    def run_debugging_session(self):
-        # 1. 启动调试器进程
-        self.start_debugger()
-      
-        # 2. 多轮推理与行动
-        for round in range(MAX_ITERATIONS):
-            # 2.1 收集当前调试器输出
-            current_output = self.read_latest_output()
-          
-            # 2.2 调用LLM进行推理
-            reasoning = self.llm.reason(
-                program_code=self.get_source(),
-                debugging_output=current_output,
-                history=self.outputs_history,
-                objective="Locate the bug in this program"
-            )
-          
-            # 2.3 从LLM推理结果提取下一步命令
-            next_command = self.llm.extract_command(reasoning)
-          
-            # 2.4 如果LLM判定bug已找到或应该退出
-            if next_command == "exit" or self.llm.is_bug_found(reasoning):
-                self.send_command("exit")
-                break
-          
-            # 2.5 发送命令到调试器
-            self.send_command(next_command)
-            self.commands_history.append(next_command)
-          
-            # 2.6 等待响应
-            time.sleep(RESPONSE_DELAY)
-          
-        # 3. 收集完整的调试记录
-        self.save_session_records()
-      
-    def send_command(self, cmd):
-        """追加命令到stdin"""
-        self.stdin_file.write(cmd + "\n")
-        self.stdin_file.flush()
-      
-    def read_latest_output(self):
-        """读取最新的调试输出"""
-        return self.read_file("stdout.txt")
-```
-
-#### LLM Prompt模板
-
-```
-You are an expert Go debugger. Given the following:
-- Program source code
-- Current debugger state (output)
-- Debugging history
-
-Analyze the program and the current debugging status. Then:
-
-1. Explain what you observe in the current state
-2. Identify what you still need to know to locate the bug
-3. Decide the next debugging action (step, continue, print, etc.)
-4. Provide the exact command to send to the debugger
-
-Format your response as JSON:
-{
-    "observation": "...",
-    "reasoning": "...",
-    "next_command": "step" or "continue" or "print <var>" or "break <loc>",
-    "bug_found": true/false,
-    "bug_description": "..."  # if bug_found is true
-}
-```
-
----
-
-### 性能与优化
-
-#### 优化指标
-
-1. **收敛速度**：达到bug定位需要的轮次
-2. **命令精确性**：AI生成的有效命令占比
-3. **误判率**：错误的bug假设占比
-
-#### 优化策略
-
-1. **智能断点**：根据程序结构自动设置关键断点，而非只用 `main`
-2. **状态缓存**：缓存已检查过的程序状态，避免重复查询
-3. **并行探索**：维护多个假设，并并行调试验证
-4. **领域特定知识**：针对常见bug类型（NPE、OOB、race condition等）预设策略
 
 ---
 
@@ -772,7 +646,7 @@ Format your response as JSON:
 1. **复杂并发场景**：多goroutine的race condition仍难以定位
 2. **非确定性bug**：timing-dependent的问题难以稳定复现
 3. **黑盒库代码**：无源码的依赖库中的bug难以调试
-4. **大规模程序**：程序超大时，状态空间爆炸
+4. **大规模程序**：程序超大时，状态空间爆炸，可能超过LLM的上下文长度或者toolcall轮数限制，但是如果AI Agent可以定制某些toolcall次数，应该可以提高解决问题的上限。
 
 #### 未来方向
 
