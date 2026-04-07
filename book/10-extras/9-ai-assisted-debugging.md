@@ -1,4 +1,4 @@
-## Latest: 借助LLM+调试器IO重定向实现自动化调试
+## Latest: LLM+toolcall自动化调试
 
 ### 背景：自动化调试的必要性
 
