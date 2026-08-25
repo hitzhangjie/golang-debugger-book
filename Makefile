@@ -5,23 +5,26 @@ deploy := https://github.com/hitzhangjie/debugger101.io
 tmpdir := /tmp/debugger101.io
 book := book
 
-.PHONY: english chinese stat clean deploy
+.PHONY: english chinese .ensure-gitbook stat clean deploy
 
 PWD := $(shell pwd -P)
 
-# english:
-# 	rm -rf book.en/_book
-# 	#gitbook install book.en
-# 	#gitbook serve book.en
-# 	docker run --name gitbook --rm -v ${PWD}/book.en:/root/gitbook hitzhangjie/gitbook-cli:latest gitbook install .
-# 	docker run --name gitbook --rm -v ${PWD}/book.en:/root/gitbook -p 4000:4000 -p 35729:35729 hitzhangjie/gitbook-cli:latest gitbook serve .
+# leading dot: hidden from `make <tab>` completion
+.ensure-gitbook:
+	@if ! which gitbook >/dev/null 2>&1; then \
+		echo "gitbook not found, installing github.com/hitzhangjie/gitbook..."; \
+		go install github.com/hitzhangjie/gitbook@latest; \
+	fi
 
-chinese:
+chinese: .ensure-gitbook
 	rm -rf book/_book
-#	#gitbook install book
-#	#gitbook serve book
-	docker run --name gitbook --rm -v ${PWD}/book:/root/gitbook hitzhangjie/gitbook-cli:latest gitbook install .
-	docker run --name gitbook --rm -v ${PWD}/book:/root/gitbook -p 4000:4000 -p 35729:35729 hitzhangjie/gitbook-cli:latest gitbook serve .
+	gitbook serve book
+# docker run --name gitbook --rm -v ${PWD}/book:/root/gitbook hitzhangjie/gitbook-cli:latest gitbook install .
+# docker run --name gitbook --rm -v ${PWD}/book:/root/gitbook -p 4000:4000 -p 35729:35729 hitzhangjie/gitbook-cli:latest gitbook serve .
+
+stat:
+	@echo "Chinese version, words: ${chineseWordsCnt}"
+#	@echo "English version, words: ${englishWordsCnt}"
 
 # pdfchinese:
 # 	@echo "Warn: must do it mannually so far for lack of proper docker image,"
@@ -32,14 +35,7 @@ chinese:
 # 	@echo "- run 'gitbook pdf <book> <book.pdf>'"
 # 	@echo ""
 
-stat:
-	@echo "Chinese version, words: ${chineseWordsCnt}"
-#	@echo "English version, words: ${englishWordsCnt}"
-
 clean:
 	rm -rf book/_book
 #	#rm -rf book.en/_book
 #	#rm -rf ./node_modules
-
-deploy:
-	./deploy.sh
