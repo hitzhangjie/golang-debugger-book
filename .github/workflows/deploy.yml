@@ -28,9 +28,20 @@ jobs:
         
         echo "🚀 Starting GitBook build and deployment..."
         
-        # 克隆目标仓库（使用带token的HTTPS URL）
+        # 校验部署凭据（公开仓库 clone 可不鉴权，push 必须有有效 token）
+        if [ -z "${{ secrets.DEPLOY_TOKEN }}" ]; then
+          echo "❌ DEPLOY_TOKEN secret is empty or not configured"
+          echo "   Add a PAT with write access to hitzhangjie/debugger101.io"
+          echo "   at Settings → Secrets and variables → Actions → DEPLOY_TOKEN"
+          exit 1
+        fi
+
+        # x-access-token:TOKEN 避免 Git 把 token 当 username 后继续要 Password
+        REPO_URL="https://x-access-token:${{ secrets.DEPLOY_TOKEN }}@github.com/hitzhangjie/debugger101.io.git"
+
+        # 克隆目标仓库
         echo "📥 Cloning target repository..."
-        git clone --depth 1 https://${{ secrets.DEPLOY_TOKEN }}@github.com/hitzhangjie/debugger101.io $tmpdir
+        git clone --depth 1 "$REPO_URL" "$tmpdir"
 
         # 使用Docker构建GitBook
         echo "🔨 Building GitBook with Docker..."
@@ -50,9 +61,13 @@ jobs:
         git config --local user.name "hitzhangjie"
         git config --local user.email "hit.zhangjie@gmail.com"
         git add .
+        # 无变更时跳过，避免空 commit 导致失败
+        if git diff --cached --quiet; then
+          echo "ℹ️ No content changes, skip deploy"
+          exit 0
+        fi
         git commit -m "Auto-deploy: $(date)"
-        # 使用 URL 重写方式推送，避免写入凭证文件
-        git remote set-url origin https://${{ secrets.DEPLOY_TOKEN }}@github.com/hitzhangjie/debugger101.io
+        git remote set-url origin "$REPO_URL"
         git push -f -u origin master
         cd -
         
