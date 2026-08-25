@@ -1,58 +1,59 @@
 # The Art of Debugging: Go Debugger Internals
 
-Ever wondered how to develop a Go debugger? Curious about how debuggers work under the hood? This book provides comprehensive insights into these topics. Read the Chinese version online at: https://www.hitzhangjie.pro/debugger101.io/
+Ever wondered how to develop a Go debugger? Curious about how debuggers work under the hood? This book provides comprehensive insights into these topics.
+Read the book:
 
-> English version available at: https://www.hitzhangjie.pro/debugger101-en.io/
-> And the repo: https://github.com/hitzhangjie/golang-debugger-book-en .
+- Chinese version: [www.hitzhangjie.pro/debugger101.io](https://www.hitzhangjie.pro/debugger101.io)
+- English version: [www.hitzhangjie.pro/debugger101-en.io](https://www.hitzhangjie.pro/debugger101-en.io/)
 
-<p align="center">
-<img alt="" src="./book/bookcover.jpeg" width="360px" />
-</p>
+> ps: The English version repo: [https://github.com/hitzhangjie/golang-debugger-book-en](https://github.com/hitzhangjie/golang-debugger-book-en) .
 
 ## Introduction
 
-This project delves into the development of a Go debugger, exploring various aspects including:
+This project explores the development of a Go debugger, covering a wide range of topics, including:
 
-- Operating System support mechanisms
+- Operating system support mechanisms
 - Coordination between compiler, linker, and debugger
-- Debugging information standards
-- How to develop an instruction level debugger
-- How to develop an symbolic level debugger
-- How does the mordern debugger architect looks like
-- How do to debug in modern software development
+- Debugging information standards that guide the compiler, linker, and debugger
+- How to develop an instruction-level debugger
+- How to develop a symbolic-level debugger
+- What a modern debugger architecture looks like
+- Debugging in modern software development (SSH remote, Kubernetes containers)
+- Deterministic debugging
+- Debugging with LLM agents
 - And much more
 
-Special thanks to [delve](https://github.com/go-delve/delve) and its author [derek parker](https://twitter.com/derkthedaring?lang=en), maintainer [aarzilli](https://github.com/aarzilli), along with all contributors. Their work has been instrumental in my learning journey, and I'm excited to share this knowledge with developers interested in debugging.
+Special thanks to Delve and its author, Derek Parker, maintainer aarzilli, along with all contributors. Their work has been instrumental in my learning journey, and I'm excited to share this knowledge with developers interested in debugging.
 
 Developing a symbolic debugger requires a deep understanding of:
 
-- Operating Systems (e.g., Linux ptrace and OS scheduler)
-- CPU semantics, instructions (e.g., instruction patching), hardware breakpoints register, eflags
-- Compilers, linkers, and loaders, and the debugger? How do they work together to help debugging
-- Executable file formats and debugging information storage
-- The description of different languages features, data, types on different OS, Archs
-- Programming language-specific features (e.g., goroutines)
+- Operating systems (e.g., Linux ptrace and the OS scheduler)
+- CPU semantics and instructions (e.g., instruction patching), hardware breakpoint registers, and eflags
+- Compilers, linkers, and loaders—and how they work with the debugger to support debugging
+- Executable file formats and debug information storage
+- How language features, data, and types are described across different OSes and architectures
+- Programming language–specific features (e.g., interfaces, goroutines)
 
-This project serves as an excellent opportunity to enhance your understanding of computer systems and their underlying technologies.
+This project is an excellent opportunity to deepen your understanding of computer systems and the technologies that power them.
 
 ## Sample Code
 
-The project includes a companion repository "**[golang-debugger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons)**" containing sample code that corresponds to each chapter. The "[**0-godbg**](https://github.com/hitzhangjie/godbg)" directory provides a complete implementation of a insctruction-level debugger for Go."[**tinydbg**](https://github.com/hitzhangjie/tinydbg/tree/tinydbg_minimal)" repository is a [go-delve/delve](https://github.com/go-delve/delve) fork and simplified version for **Linux/Amd64** to help you quickly understand the core concepts and code.
+The project includes a companion repository "**[golang-debugger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons)**" containing sample code that corresponds to each chapter. The "**[0-godbg](https://github.com/hitzhangjie/godbg)**" directory provides a complete implementation of a insctruction-level debugger for Go."**[tinydbg](https://github.com/hitzhangjie/tinydbg/tree/tinydbg_minimal)**" repository is a [go-delve/delve](https://github.com/go-delve/delve) fork and simplified version for **Linux/Amd64** to help you quickly understand the core concepts and code.
 
-While established debuggers like GDB and Delve exist for Go, developing a debugger from scratch serves as an excellent learning exercise. It not only helps understand how the debugger works, but also helps integrate knowledge across various domains:
+While established debuggers like GDB and Delve already exist for Go, building one from scratch is an excellent learning exercise. It not only demystifies how debuggers work but also connects knowledge across many domains:
 
 - Go language internals (type system, goroutine scheduling)
-- Go commandline utities development, especially uses spf13/cobra
-- System level programming, understand how build toolchain works, how kernel works, how CPU works
-- Go ebpf tracing utilities programming
-- Operating system kernel concepts (virtual memory, task scheduling, system calls, instruction patching)
-- etc.
+- Developing Go command-line tools with spf13/cobra
+- System-level programming, including how the build toolchain, kernel, and CPU work
+- Writing eBPF tracing utilities for Go
+- Operating system kernel mechanisms (virtual memory, task scheduling, system calls, instruction patching)
+- And more
 
-> Perhaps more than understanding how debuggers work, deepening my knowledge of Computer Systems was the fundamental motivation behind writing this book. And, I wish this book could help more readers, too.
+Ultimately, my motivation for writing this book was less about understanding debuggers and more about deepening my understanding of computer systems. I hope it helps many readers do the same.
 
 ## Reading Locally
 
-The book follows GitBook's structure, but since gitbook-cli is deprecated, we offer two methods to read the book locally:
+The book follows GitBook's structure. The original Node.js gitbook-cli is deprecated; we offer three methods to read the book locally:
 
 ### Using Docker (Recommended)
 
@@ -65,6 +66,23 @@ docker run --name gitbook --rm -v ${PWD}/book:/root/gitbook -p 4000:4000 -p 3572
 
 For convenience, these commands are available in the Makefile - simply run `make english` to start the server.
 
+### Using gitbook (Go rewrite)
+
+[hitzhangjie/gitbook](https://github.com/hitzhangjie/gitbook) is a Go rewrite of gitbook-cli. Usage is the same as the original CLI. Search, table of contents, and other features that previously required plugins are built in.
+
+1. Install:
+
+```bash
+go install github.com/hitzhangjie/gitbook@latest
+```
+
+1. Serve the book:
+
+```bash
+cd book
+gitbook serve
+```
+
 ### Using Legacy gitbook-cli
 
 1. Clone the repository:
@@ -73,20 +91,19 @@ For convenience, these commands are available in the Makefile - simply run `make
 git clone https://github.com/hitzhangjie/golang-debugger-book-en
 ```
 
-2. Serve the book:
+1. Serve the book:
 
 ```bash
 cd book
 gitbook install && gitbook serve
 ```
 
-> Note: Installing gitbook-cli directly may encounter compatibility issues with recent Node.js and graceful-fs versions. To avoid these issues, we recommend using our Docker image `hitzhangjie/gitbook-cli:latest` instead of npm or homebrew installation.
+> Note: Installing gitbook-cli directly may encounter compatibility issues with recent Node.js and graceful-fs versions. To avoid these issues, we recommend using our Docker image `hitzhangjie/gitbook-cli:latest` or the Go rewrite above, instead of npm or homebrew installation.
 
 ## Contact
 
-For any questions or feedback, please email me at **hit.zhangjie@gmail.com**. I'll respond as soon as possible.
+For any questions or feedback, please email me at **[hit.zhangjie@gmail.com](mailto:hit.zhangjie@gmail.com)**. I'll respond as soon as possible.
 
 ### License
 
-<a rel="license" href="http://creativecommons.org/licenses/by-nd/4.0/"><img alt="Creative Commons License" style="border-width:0" src="https://i.creativecommons.org/l/by-nd/4.0/88x31.png" /></a><br/>
-This work is licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-nd/4.0/">Creative Commons Attribution-NoDerivatives 4.0 International License </a>.
+This work is licensed under a [Creative Commons Attribution-NoDerivatives 4.0 International License](http://creativecommons.org/licenses/by-nd/4.0/).
