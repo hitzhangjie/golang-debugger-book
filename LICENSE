@@ -1,0 +1,46 @@
+Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International
+
+Copyright (c) 2018-present 张杰 (hitzhangjie)
+
+This work (the book text, images, and other content in this repository)
+is licensed under the Creative Commons Attribution-NonCommercial-
+NoDerivatives 4.0 International License.
+
+The author retains all commercial rights, including the right to
+publish print and paid electronic editions. This license only
+describes what others may do; it does not restrict the author's
+own use of the work.
+
+You are free to:
+
+  Share — copy and redistribute the material in any medium or format.
+
+Under the following terms:
+
+  Attribution — You must give appropriate credit, provide a link to the
+  license, and indicate if changes were made. You may do so in any
+  reasonable manner, but not in any way that suggests the licensor
+  endorses you or your use.
+
+  NonCommercial — You may not use the material for commercial purposes.
+
+  NoDerivatives — If you remix, transform, or build upon the material,
+  you may not distribute the modified material.
+
+The licensor cannot revoke these freedoms as long as you follow the
+license terms.
+
+To view a copy of this license, visit:
+
+  https://creativecommons.org/licenses/by-nc-nd/4.0/
+
+The full legal code is at:
+
+  https://creativecommons.org/licenses/by-nc-nd/4.0/legalcode
+
+SPDX-License-Identifier: CC-BY-NC-ND-4.0
+
+A plain-language explanation (English and Chinese) is in README.md
+under "Copyright and License". Companion sample-code repositories
+(godbg, tinydbg, golang-debugger-lessons) are separate projects and
+follow the licenses published in those repositories.

@@ -8,6 +8,8 @@ Read the book:
 
 > ps: The English version repo: [https://github.com/hitzhangjie/golang-debugger-book-en](https://github.com/hitzhangjie/golang-debugger-book-en) .
 
+© 2018–present 张杰 (hitzhangjie). Licensed under [CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/). You may share unmodified copies for non-commercial purposes with attribution. You may not sell this work, distribute modified versions, or present it as your own. The author reserves all commercial publishing rights. See [Copyright and License](#copyright-and-license) for details.
+
 ## Introduction
 
 This project explores the development of a Go debugger, covering a wide range of topics, including:
@@ -100,10 +102,33 @@ gitbook install && gitbook serve
 
 > Note: Installing gitbook-cli directly may encounter compatibility issues with recent Node.js and graceful-fs versions. To avoid these issues, we recommend using our Docker image `hitzhangjie/gitbook-cli:latest` or the Go rewrite above, instead of npm or homebrew installation.
 
+## Copyright and License
+
+© 2018–present 张杰 (hitzhangjie).
+
+This is a free textbook for reading and non-commercial sharing. You are welcome to read it and post an **unmodified** copy on your own website, as long as you do not charge for it. Officially, this work is licensed under the [Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International License](https://creativecommons.org/licenses/by-nc-nd/4.0/). 
+
+[![CC BY-NC-ND 4.0](https://licensebuttons.net/l/by-nc-nd/4.0/88x31.png)](https://creativecommons.org/licenses/by-nc-nd/4.0/)
+
+The author retains all commercial rights, including the right to publish print and paid electronic editions. This license only describes what *others* may do; it does not restrict the author's own use of the work.
+
+In plain language:
+
+**You may**
+
+- Copy and redistribute unmodified copies for **non-commercial** purposes, including posting them on your own site
+- Quote short excerpts with proper citation
+
+**You may not**
+
+- Sell this book, or otherwise use it for commercial advantage (including wrapping it as a paid course, paid reprint, or other commercial product)
+- Distribute modified, remixed, abridged, or rewritten versions of this book (including publishing a translation as a new work)
+- Remove, replace, or obscure the author's name
+- Present this work, in whole or in substantial part, as your own
+- Strip the copyright notice or license terms when you share it
+
+If you need permission beyond this license (for example, to publish a translation, or to include substantial portions in another book or a paid course), email [hit.zhangjie@gmail.com](mailto:hit.zhangjie@gmail.com).
+
 ## Contact
 
 For any questions or feedback, please email me at **[hit.zhangjie@gmail.com](mailto:hit.zhangjie@gmail.com)**. I'll respond as soon as possible.
-
-### License
-
-This work is licensed under a [Creative Commons Attribution-NoDerivatives 4.0 International License](http://creativecommons.org/licenses/by-nd/4.0/).

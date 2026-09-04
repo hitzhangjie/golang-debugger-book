@@ -91,3 +91,30 @@ ps: [**hitzhangjie/godbg-debugger-lessons/0-godbg**](https://github.com/hitzhang
 希望该书及相关示例，能顺利完成，也算是我磨练心性、自我提高的一种方式，如果能对大家确实起到帮助的作用那是再好不过了。借此机会，我也想向 go-delve/delve 的维护人员 [derekparker](https://github.com/derekparker)、[aarzilli](https://github.com/aarzilli) 以及其他贡献者致以诚挚的敬意，没有你们多年来的贡献、沉淀，我也没有什么好学习总结分享的。
 
 如果喜欢本书，请点个 [Star](https://github.com/hitzhangjie/golang-debugger-book) 对作者予以支持 :)
+
+## 1.6 版权说明
+
+© 2018–present 张杰（hitzhangjie）。
+
+本书是免费公开的技术读物，供阅读和非商业分享。欢迎阅读，也欢迎将**未修改的完整副本**发布到你自己的网站，但不得借此收费或用于商业牟利。本书采用[知识共享署名-非商业性使用-禁止演绎 4.0 国际许可协议（CC BY-NC-ND 4.0）](https://creativecommons.org/licenses/by-nc-nd/4.0/deed.zh-hans)。
+
+[![CC BY-NC-ND 4.0](https://licensebuttons.net/l/by-nc-nd/4.0/88x31.png)](https://creativecommons.org/licenses/by-nc-nd/4.0/)
+
+**作者保留全部商业权利**，包括未来正式出版纸质书、电子书或其他付费版本。本许可只约束他人如何使用本书，并不限制作者本人对作品的使用。
+
+用更直白的话说：
+
+**你可以**
+
+- 以任何媒介、任何形式**非商业地**复制、传播本书未修改的内容，包括发布到个人或机构网站
+- 在注明出处的前提下引用、摘录本书片段
+
+**你不可以**
+
+- 出售本书，或将其用于商业牟利（包括包装成付费课程、付费转载、商业出版物等）
+- 将本书改写、删减、翻译后作为新作品公开发布或传播
+- 删除、替换作者署名，或把本书（全部或实质性部分）宣称为你自己的作品
+- 在传播时去掉版权声明或许可协议
+
+如果需要超出本许可范围的授权（例如出版译本、将大段内容收入其他书籍或付费课程），请发邮件至 [hit.zhangjie@gmail.com](mailto:hit.zhangjie@gmail.com) 联系作者。
+
