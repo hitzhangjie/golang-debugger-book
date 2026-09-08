@@ -1,6 +1,6 @@
 # 1 软件调试的艺术：Go语言调试器设计实现内幕
 
-<img alt="封面图片" src="bookcover.jpeg" width="320px" />
+![封面图片](bookcover.jpeg)
 
 ## 1.1 作者简介
 
@@ -10,7 +10,7 @@
 
 同事领导普遍认同我技术扎实，其实并非我故意要钻的深，而是我喜欢确定性，琐碎的技术细节于我便不再只是麻烦，而是某种宝贵的阅历。一次成功的Linux内核、Go运行时代码探秘、调试跟踪过程，能一扫积压心头多天的困惑，那种满足感以及对日后解决问题的帮助促进，是难以言表的。积累到一定程度之后，也自然会解锁一项项核心能力，”能工摹形，巧匠窃意“，从模仿走向创造。我多么希望能有一双“上帝之眼”，助我更高效地看清问题本质，这个念头驱使着我将DEBUG带入了各种情景中。
 
-从高中毕业接触计算机编程开始，再经过大学系统性学习、毕业工作至今，一转眼十几年过去了。但是，计算机技术的发展始终吸引着我去学习、思考、探索更广阔的应用场景来丰富现实生活，而且乐此不疲。这个过程中，“开源”让我接触了更大的世界，我很欣赏那种技术精湛、乐于分享甚至连指尖都洋溢着才华与天赋的工程师，并将这类人作为我的榜样。“**在开源中学习，在开源中贡献**”，写博客、写书、分享，也算是我对这种理念的一种支持和坚守吧。
+从高中毕业接触计算机编程开始，再经过大学系统性学习、毕业工作至今，一转眼十几年过去了，但是，计算机技术的发展始终吸引着我去探索更广阔的应用场景来丰富现实生活，而且乐此不疲。这个过程中，“开源”让我接触了更大的世界，我很欣赏那种技术精湛、乐于分享甚至连指尖都洋溢着才华与天赋的工程师，并将他们作为我的榜样。“**在开源中学习，在开源中贡献**”，写博客、写书、分享，也算是我对这种理念的一种支持和坚守吧。
 
 ## 1.2 为什么要写这本书
 
@@ -21,7 +21,7 @@
 - 2016年开始接触go，起初还有点抵触，比如坚持用C来模拟Go特性，详见 [C实现Go风格并发](https://www.hitzhangjie.pro/libmill-book/)；
 - 2018年 c\c++\java 服务器开发有了些沉淀，认识到go的优雅并开始在项目中使用；
 - 多年实操、go源码、设计提案、调试跟踪等方式深入了解了go的设计实现，详见 [Go设计实现内幕](https://www.hitzhangjie.pro/go-internals-v0/)；
-- 2025年开始，将过去多年的项目踩坑经验整理成书，陆续更新到公众号，详见 [Go&#34;安全&#34;编程](https://mp.weixin.qq.com/mp/appmsgalbum?__biz=MzU2NjY3MTc3MQ==&action=getalbum&album_id=3544414370141700100#wechat_redirect)；
+- 2025年开始，将过去多年的项目踩坑经验整理成书，陆续更新到公众号，详见 [Go"安全"编程](https://mp.weixin.qq.com/mp/appmsgalbum?__biz=MzU2NjY3MTc3MQ==&action=getalbum&album_id=3544414370141700100#wechat_redirect)；
 
 如今go语言越来越完善、生态越来越好，go语言已经成为最受欢迎的编程语言之一。
 
@@ -64,11 +64,11 @@
 
 **本书对应的示例代码，包括指令级调试器godbg、符号级调试器tinydbg、以及探索测试类代码golang-debugger-lessons：**
 
-1. [**hitzhangjie/godbg**](https://github.com/hitzhangjie/godbg)，该项目提供了一个功能相对完整的 “**指令级调试器**” 实现，供读者测试、学习了解整体代码组织；
-2. [**hitzhangjie/tinydbg**](https://github.com/hitzhangjie/tinydbg)，该项目提供了一个可用标准的 ”**符号级调试器**“ 实现，由 [dlv](https://github.com/go-delve/delve) 裁剪调整而来（剔除了与linux/amd64无关扩展，及高级功能）；
-3. [**hitzhangjie/golang-debugger-lessons**](https://github.com/hitzhangjie/golang-debugger-lessons)，该项目按章节组织目录，每节实现目标在godbg、tinydbg落地前，会先在此项目中编写demo进行验证；
+1. **[hitzhangjie/godbg](https://github.com/hitzhangjie/godbg)**，该项目提供了一个功能相对完整的 “**指令级调试器**” 实现，供读者测试、学习了解整体代码组织；
+2. **[hitzhangjie/tinydbg](https://github.com/hitzhangjie/tinydbg)**，该项目提供了一个可用标准的 ”**符号级调试器**“ 实现，由 [dlv](https://github.com/go-delve/delve) 裁剪调整而来（剔除了与linux/amd64无关扩展，及高级功能）；
+3. **[hitzhangjie/golang-debugger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons)**，该项目按章节组织目录，每节实现目标在godbg、tinydbg落地前，会先在此项目中编写demo进行验证；
 
-ps: [**hitzhangjie/godbg-debugger-lessons/0-godbg**](https://github.com/hitzhangjie/godbg)，该submodule即hitzhangjie/godbg。
+ps: **[hitzhangjie/godbg-debugger-lessons/0-godbg](https://github.com/hitzhangjie/godbg)**，该submodule即hitzhangjie/godbg。
 
 **关于示例代码对应测试环境的一些补充说明**：
 
@@ -79,9 +79,8 @@ ps: [**hitzhangjie/godbg-debugger-lessons/0-godbg**](https://github.com/hitzhang
 > ps：关于上述Go版本约束的相关说明
 >
 > 1. Go版本不能低于go1.22：新版本才有的标准库函数旧版本无法正常编译，即使侥幸编译通过，实际产物也可能与书中内容描述有差异：
->
->    - go1.13将调试信息写入.zdebug_sections，但go1.19不再写入.zdebug_ sections（写入的是.debug_ sections并通过flag指明是否开压缩）；
->    - go1.14引入SIGURG支持抢占，如果使用更古老的go版本测试，这些SIGURG处理相关的代码永远不会被触发，可能会影响读者阅读和理解。
+>   - go1.13将调试信息写入.zdebug_sections，但go1.19不再写入.zdebug_ sections（写入的是.debug_ sections并通过flag指明是否开压缩）；
+>   - go1.14引入SIGURG支持抢占，如果使用更古老的go版本测试，这些SIGURG处理相关的代码永远不会被触发，可能会影响读者阅读和理解。
 > 2. Go版本必须低于go1.25：因为go1.25已经推进到了DWARF v5，而本书基于Go1.13~Go1.24编写，这期间Go工具链使用的是DWARF v4；
 
 ## 1.5 联系方式
@@ -117,4 +116,3 @@ ps: [**hitzhangjie/godbg-debugger-lessons/0-godbg**](https://github.com/hitzhang
 - 在传播时去掉版权声明或许可协议
 
 如果需要超出本许可范围的授权（例如出版译本、将大段内容收入其他书籍或付费课程），请发邮件至 [hit.zhangjie@gmail.com](mailto:hit.zhangjie@gmail.com) 联系作者。
-
