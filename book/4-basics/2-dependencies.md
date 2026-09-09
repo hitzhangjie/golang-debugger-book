@@ -14,7 +14,7 @@
 
 #### 4.2.1.1 存储在目标文件自身
 
-例如，[ELF](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format) 文件格式包含了DWARF调试信息对应的section，一般以".debug”或”.zdebug”开头。.debug前缀开头的section表示数据未压缩，.zdebug前缀开头的section表示数据经过了压缩。
+例如，[ELF](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format) 文件格式包含了DWARF调试信息对应的section，一般以".debug”或”.zdebug”开头。.debug前缀开头的section表示数据未压缩，.zdebug前缀开头的section表示数据经过了压缩（注：这种 `.zdebug_` 前缀命名约定已被新版 Go 取代，各版本行为差异详见附录 [12.6 Go调试信息版本矩阵](../12-appendix/6-go-dwarf-version-matrix.md)）。
 
 > 这里给个实例，__debug_bin是一个由 `dlv debug`生成的可执行程序，包含了调试符号信息，`readelf`可以用来读取ELF文件中的section header，下面我们看一下ELF文件中包含的调试信息相关的 section。
 >
@@ -33,27 +33,24 @@
 > [20] .zdebug_ranges    PROGBITS         00000000005e982d  001cb82d
 > ```
 
-> ps: 作者开始写这本电子书的时候非常早，当时2018年还是用的1.13，现在这么多年过去，发生了很多变化。
+> ps: 上面 `readelf` 的输出是本书早期基于 go1.13 环境采集的，`.zdebug_` 前缀的 sections 是那个时代的产物。多年过去，调试信息的组织方式已经发生过多次变化，例如：
 >
-> - 首先，go1.13中确实是这样的，zlib压缩后写入.zdebug_ sections (see: https://github.com/golang/go/issues/11799#issuecomment-399564050)；
-> - 由于没有一次性完成该电子书，后续go1.19中作者再次尝试运行已有代码、校对内容时，发现已经不会写入.zdebug_ sections了 （上述linker flag失效了）；
-> - 截止到今天2025.2.14再次续写本书内容，继续求证后发现，go1.22中已经明确废弃了 `.zdebug_` sections，而是以 `.debug_` section中内容是否带有 SHM_COMPRESSED flag来确定是否开启了压缩。
->   see: https://github.com/golang/go/issues/58254#issuecomment-1421624004
->   see: https://sourcegraph.com/github.com/golang/go/-/commit/75136fc14c0d3ec64a2f6728e96fc86066d853c9
+> - `.zdebug_*` 前缀命名已被取代：go1.19 起 ELF 上改为 `.debug_*` + `SHF_COMPRESSED` flag 标记压缩，而 Mach-O 上则一直沿用 `__zdebug_*` 前缀约定；
+> - 调试信息格式从 DWARF v4 升级到了 v5：go1.25 起默认生成 v5，但 darwin/ios、aix 例外，仍保持 v4；
+> - `-ldflags=-compressdwarf=false` 在各版本中均可用，只是控制的标记方式不同。
 >
-> 所以，还是要尽快完成，很有可能go后续会从DWARF v4升级到v5，到时候又会引入更多变化。
+> 各版本的工具链差异、出处以及验证命令，统一整理在附录 [12.6 Go调试信息版本矩阵](../12-appendix/6-go-dwarf-version-matrix.md) 中，这里不再展开。
 
 #### 4.2.1.2 存储在独立的文件中
 
 例如，Microsoft Visual C++ 2.0生成的调试信息存储在独立的**.PDB（Program Database）**文件中，macOS平台上构建的调试符号信息一般存储在独立的**.dSYM/Resources/DWARF/**目录中。
 
-> 这里给个示例，在macOS 10.15上，通过“**gcc -g**”构建一个包含调试符号的可执行程序，我们看下它生成的调试信息是如何存储的：
+> 这里给个示例，在 macOS 上用 Xcode Command Line Tools 提供的 clang 构建一个包含调试符号的可执行程序，看下调试信息的存储方式。注意 macOS 上的 gcc 其实就是 clang 的别名：
 >
 > **file: main.c**
 >
 > ```cpp
 > #include <stdio.h>
-> #include <stdlib.h>
 >
 > int main(int argc, char *argv[])
 > {
@@ -62,19 +59,54 @@
 > ```
 >
 > ```bash
-> $ gcc -g -o main main.c
-> $ ls
-> main main.c main.dSYM/
-> $ tree main.dSYM
-> main.dSYM/
-> └── Contents
-> ├── Info.plist
-> └── Resources
->      └── DWARF
->            └── main|
+> $ cc --version | head -1
+> Apple clang version 21.0.0 (clang-2100.0.123.102)
+> $ gcc --version | head -1
+> Apple clang version 21.0.0 (clang-2100.0.123.102)   # gcc 即 clang
+> $ cc -g -o main main.c
+> $ ls -d main main.dSYM
+> main main.dSYM/
+> $ find main.dSYM -type f
+> main.dSYM/Contents/Info.plist
+> main.dSYM/Contents/Resources/DWARF/main
+> main.dSYM/Contents/Resources/Relocations/aarch64/main.yml
 > ```
 
-可以看到，macOS 10.15上，gcc将调试信息也存储到了独立的main.dSYM/目录。可以借助 `dwarfdump or splitdwarf`工具进行分析，可以参考这篇文章：https://blog.golang.org/debug-opt。
+可以看到，链接器把 DWARF 调试信息从目标文件中提取出来，打包进了独立的main.dSYM/目录（Bundle），可执行程序main中只保留了一个指向目标文件的 "debug map" 符号表（N_OSO条目）。可以用下面的命令验证：
+
+```bash
+# 1) 查看 main 中保留的符号表，N_OSO 条目指向编译产生的 .o 文件：
+$ dsymutil -s main
+----------------------------------------------------------------------
+Symbol table for: 'main' (arm64)
+----------------------------------------------------------------------
+Index    n_strx   n_type             n_sect n_desc n_value
+======== -------- ------------------ ------ ------ ----------------
+[     0] 00000001 64 (N_SO         ) 01     0000   0000000000000000
+[     1] 0000001c 64 (N_SO         ) 00     0000   0000000000000000 '/tmp/dwarf-matrix/cexample/'
+[     2] 00000038 64 (N_SO         ) 00     0000   0000000000000000 'main.c'
+[     3] 0000003f 66 (N_OSO        ) 00     0001   000000006aa1a5ae '/var/folders/4m/2_pn1sln1fzcg2zg_4mh95z80000gn/T/main-0ce777.o'
+[     4] 00000001 2e (N_BNSYM      ) 01     0000   0000000100000328
+[     5] 00000016 24 (N_FUN        ) 01     0000   0000000100000328 '_main'
+...
+[    10] 00000016 0f (     SECT EXT) 01     0000   0000000100000328 '_main'
+
+# 2) 用 dwarfdump 查看 .dSYM 中的调试信息：
+$ xcrun dwarfdump --debug-info main.dSYM
+main.dSYM/Contents/Resources/DWARF/main: file format Mach-O arm64
+
+.debug_info contents:
+0x00000000: Compile Unit: length = 0x0000005a, format = DWARF32, version = 0x0005, unit_type = DW_UT_compile, abbr_offset = 0x0000, addr_size = 0x08 ...
+0x0000000c: DW_TAG_compile_unit
+              DW_AT_producer ("Apple clang version 21.0.0 (clang-2100.0.123.102)")
+              DW_AT_name ("main.c")
+              DW_AT_low_pc (0x0000000100000328)
+...
+```
+
+> 一个有趣的对比：同样是这台 macOS，Apple clang 默认生成的已经是 DWARF v5，而 Go 出于兼容旧版 Xcode dsymutil 的考虑，在 darwin 上默认仍生成 DWARF v4（参见附录 [12.6 Go调试信息版本矩阵](../12-appendix/6-go-dwarf-version-matrix.md)）。
+>
+> 补充说明：Go 编译器曾经提供过 `-splitdwarf` 编译选项来生成 split DWARF 信息（配合 dsymutil 使用），但该选项已从新版本工具链中移除（实测 go1.18.10 起已不存在）。Go 官方博客文章 "Debugging what you deploy in Go 1.12"（<https://go.dev/blog/debug-opt>）中提到过 macOS 上调试 Go 程序时，如果调试器不支持压缩的调试信息，可以通过 `-ldflags=-compressdwarf=false` 构建，或使用 x/tools 中的 splitdwarf 工具解压已有二进制，可以作为延伸阅读。
 
 #### 4.2.1.3 调试信息有什么用呢
 
@@ -197,7 +229,7 @@ GUI调试器能够同时呈现和访问更多的机器状态信息，使用GUI�
 
 X86平台上创建软件断点可以通过指令 `int 3`来生成**0xCC**这个一字节机器指令来创建，处理器执行完0xCC之后会暂停当前正在执行的进程。
 
-具体是如何执行的呢？int 3表示会触发3号中断，对应机器指令是0xCC，处理器执行完该指令后就会触发3号中断，对应的中断服务程序就在IDT[3]中（IDT，Interrupt Descriptor Table，中断描述表或中断向量表）。BIOS中提供的中断服务程序是16位的，了解过Linux如何构建32位、64位内存保护模式的话，就会明白Linux启动后，IDT[3]指向的其实是Linux内核提供的中断处理程序（Linux初始化会覆盖BIOS提供的16位中断服务程序的中断向量表），这里就是暂停执行当前tracee进程，并通知tracer进程tracee已暂停执行。
+具体是如何执行的呢？int3，也常称#BP异常/陷阱。int 3对应机器指令是0xCC，处理器执行完该指令后就会触发3号中断，对应的中断服务程序就在IDT[3]中（IDT，Interrupt Descriptor Table，中断描述表或中断向量表）。BIOS中提供的中断服务程序是16位的，了解过Linux如何构建32位、64位内存保护模式的话，就会明白Linux启动后，IDT[3]指向的其实是Linux内核提供的中断处理程序（Linux初始化会覆盖BIOS提供的16位中断服务程序的中断向量表），这里就是暂停执行当前tracee进程，并通知tracer进程tracee已暂停执行。
 
 > ps: 严格意义上来说，中断更倾向于表示外设产生的事件，而异常则指处理器执行指令时生成的一些事件，比如除零exception、缺页fault、陷阱trap等，详见：https://linux-kernel-labs.github.io/refs/heads/master/lectures/interrupts.html。我们文中将中断作为了一个更宽泛的术语来使用，希望读者能明确这一点。
 
@@ -243,7 +275,7 @@ X86平台上创建软件断点可以通过指令 `int 3`来生成**0xCC**这个�
 
 - 调试器定位到目标语句`statement`的首条机器指令，读取其首字节操作码；
 - 保存该操作码的第一个字节，并将其替换为 0xCC（即 int3 指令）；
-- 被调试进程（tracee）执行到该指令并运行 0xCC 后，会触发断点异常，程序暂停，此时调试器可以检测寄存器、变量等状态；
+- 被调试进程（tracee）执行到该指令并运行 0xCC 后，会触发断点异常 #BP，程序暂停，此时调试器可以检测寄存器、变量等状态；
 - 当调试器继续控制tracee执行时，会将 tracee 的 PC（程序计数器）减 1，并将 0xCC 处的字节还原为原先的操作码；
 - 最后，通知内核恢复 tracee 的运行，程序会继续执行直到下一个断点或其他调试事件发生；
 

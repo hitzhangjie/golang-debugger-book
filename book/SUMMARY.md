@@ -140,6 +140,7 @@
   * [12.3 git bisect](12-appendix/3-git-bisect.md)
   * [12.4 vscode extension bisect](12-appendix/4-vscode-extension-bisect.md)
   * [12.5 ptrace attach的竞态问题](12-appendix/5-ptrace-attach-race.md)
+  * [12.6 Go调试信息版本矩阵](12-appendix/6-go-dwarf-version-matrix.md)
   * [12.10 编译工具链/compile](12-appendix/80-go-tool-compile.md)
   * [12.11 编译工具链/asm](12-appendix/81-go-tool-asm.md)
   * [12.12 编译工具链/link](12-appendix/82-go-tool-link.md)
