@@ -12,6 +12,8 @@
 
 查看进程寄存器数据，需要通过 `ptrace(PTRACE_GETREGS,...)` 操作来读取被调试进程的寄存器数据。
 
+> ps: `PTRACE_GETREGS` 是x86架构特有的ptrace请求，它读取的是x86架构的 `struct user_regs_struct`。内核还提供了架构无关的新接口 `PTRACE_GETREGSET`（Linux 2.6.30+），通过指定regset类型（如通用寄存器对应的NT_PRSTATUS）来读取寄存器，各架构只需实现各自的regset即可，gdb等调试器就基于GETREGSET实现跨架构支持。Go标准库 `syscall.PtraceGetRegs` 仅在amd64/386等平台提供，底层即PTRACE_GETREGS；如需使用GETREGSET，可借助 `golang.org/x/sys/unix` 中的 `PTRACE_GETREGSET` 常量自行封装调用。
+
 **file: cmd/debug/pregs.go**
 
 ```go

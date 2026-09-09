@@ -14,6 +14,8 @@ ps: 当然从易用性角度来说，可以使用一个set命令来实现setmem�
 
 godbg中的实现也非常简单，接收用户输入的寄存器名args[0]、要设置的值args[1]，然后通过 `syscall.PtraceGetRegs(...)` 操作拿到所有寄存器的值regs，并通过反射找到代表对应寄存器名的字段(如regs.rax)，并修改字段值，最后将修改后的regs再通过 `syscall.PtraceSetRegs(...)` 设置回寄存器。
 
+> ps: 与读取寄存器类似，`PTRACE_SETREGS` 也是x86架构特有的ptrace请求，对应的架构无关新接口是 `PTRACE_SETREGSET`（Linux 2.6.30+）。Go标准库 `syscall.PtraceSetRegs` 底层即PTRACE_SETREGS，仅在amd64/386等平台提供。
+
 ```go
 package debug
 

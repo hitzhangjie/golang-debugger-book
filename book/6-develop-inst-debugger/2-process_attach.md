@@ -98,6 +98,22 @@ static int ptrace_check_attach(struct task_struct *child, bool ignore_state)
 
 如果后续ptrace请求来自非ptrace link建立时的tracer，那么ptrace_check_attach操作就会返回错误码 `-ESRCH`。
 
+#### ptrace attach 失败常见原因
+
+验证1中第二个调试器实例attach失败，报错 operation not permitted，是因为目标线程已经与第一个调试器实例建立了ptrace link，内核拒绝了重复attach。除此之外，还有几类常见的场景也会导致attach失败并返回 `EPERM (operation not permitted)`：
+
+1. **凭据检查（credential check）不通过**：内核在建立跟踪关系前，会通过 `ptrace_may_access()` 对tracer进行凭据检查，tracer进程的real uid、real gid必须与tracee进程的real/effective/saved uid、gid相匹配，或者tracer进程（在tracee所在user namespace中）具备 `CAP_SYS_PTRACE` capability。因此，普通用户无法attach其他用户的进程，也无法attach root用户进程；
+2. **tracee处于nondumpable状态**：如果tracee进程曾经通过exec执行过suid程序（提权之后又降权），或者主动调用过 `prctl(PR_SET_DUMPABLE, 0)`，该进程会变为nondumpable状态。此时即使凭据检查通过，也必须具备 `CAP_SYS_PTRACE` 才能attach；
+3. **LSM（Linux Security Module）安全检查不通过**：内核在完成上述检查后，还会调用LSM hook（如 `security_ptrace_access_check`）做进一步检查。最常见的是Ubuntu、Debian、Fedora等发行版默认启用的Yama LSM，它通过 `/proc/sys/kernel/yama/ptrace_scope` 来限制attach行为，取值及含义如下：
+   - 0：不额外限制，凭据检查通过即可attach（传统行为）；
+   - 1：限制模式（发行版默认值），只允许tracer是tracee的祖先进程（如父进程调试子进程），或者tracee通过 `prctl(PR_SET_PTRACER, ...)` 显式声明允许的tracer，或者tracer具备 `CAP_SYS_PTRACE`；
+   - 2：管理限制模式，只允许具备 `CAP_SYS_PTRACE` 的进程执行attach；
+   - 3：禁止模式，任何attach都会被拒绝（该值一经设置无法再修改）。
+
+因此，如果读者在练习 `godbg attach <pid>` 时遇到 operation not permitted 的报错，可以依次排查：目标线程是否已被其他调试器跟踪、当前用户是否具备目标进程的uid/gid权限、目标进程是否处于dumpable状态、Yama `ptrace_scope` 的取值是否限制了attach。
+
+> ps: 如果是Yama限制导致attach失败，可以临时放开限制：`echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope`，或者以root身份调试，或者由目标进程调用 `prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY)` 声明允许被任意进程调试。而 `godbg exec <prog>` 之所以不会遇到Yama限制，是因为它走的是 `PTRACE_TRACEME` 流程，tracee是tracer的子进程，天然满足 `ptrace_scope=1` 的祖先关系要求。
+
 #### ptrace limits
 
 我们的调试器示例是基于Linux平台编写的，调试能力依赖于Linux ptrace。
@@ -169,6 +185,8 @@ do_signal_stop
 > Restart the stopped tracee as for PTRACE_CONT, but first de‐
 > tach from it.  Under Linux, a tracee can be detached in this
 > way regardless of which method was used to initiate tracing.
+
+> ps: 除了 `PTRACE_ATTACH`，内核还提供了 `PTRACE_SEIZE`（Linux 3.4+）来建立跟踪关系：SEIZE attach之后不会向tracee发送SIGSTOP，tracee也不会立即停止，调试器需要时再通过 `PTRACE_INTERRUPT` 让其停下来，从而规避了ATTACH注入SIGSTOP引入的一些竞态问题（如信号合并丢失、stray EINTR、group-stop状态attach等），详见附录《PTRACE_ATTACH的竞态问题与PTRACE_SEIZE》。strace等工具优先使用PTRACE_SEIZE；dlv在attach时仍然使用PTRACE_ATTACH（see: pkg/proc/native/ptrace_linux.go），本书示例同样使用PTRACE_ATTACH，实现上更直观简单。
 
 完整的测试代码实现请参考：`golang-debugger-lessons/2_process_attach`。考虑到读者是刚刚接触调试器开发，建议优先学习 `golang-debugger-lessons` 中的简化示例代码，这部分示例代码每个目录对应本章一个小节。待掌握基本调试原理和概念后再学习 `hitzhangjie/godbg` 中的完整实现。
 

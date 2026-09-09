@@ -32,7 +32,6 @@
 > [19] .zdebug_loc       PROGBITS         00000000005dcfe2  001befe2
 > [20] .zdebug_ranges    PROGBITS         00000000005e982d  001cb82d
 > ```
->
 
 > ps: 作者开始写这本电子书的时候非常早，当时2018年还是用的1.13，现在这么多年过去，发生了很多变化。
 >
@@ -60,7 +59,6 @@
 > {
 >   return 0;
 > }
->
 > ```
 >
 > ```bash
@@ -102,9 +100,7 @@
 
 现在，绝大多数操作系统都实现了内存保护模式，内存保护模式是多用户、多任务操作系统的根基。如果没有保护模式，根本就不存在所谓的安全。关于内存保护模式如何实现的，可以参考X86系列处理器的发展史。
 
-与DOS相反，Windows、Linux以及BSD都实现了内存保护模式，这意味着如果你想在这些平台上开发一个调试器，就需要通过平台提供的系统调用来实现。
-
-以Linux系统调用为例，调试器进程（tracer）可以通过 `ptrace(PTRACE_ATTACH…)` attach到一个被调试进程（tracee），然后操作系统内核会给tracee进程发送一个信号SIGSTOP，tracee进程就会停下来，tracer进程就可以通过 `waitpid(pid)`来等待tracee停止事件。当tracer进程感知到tracee进程停止执行之后，tracer进程就可以进一步通过 `ptrace`系统调用、配合其他ptrace参数 `PTRACE_GETREGS、PTRACE_SETREGS、PTRACE_PEEKDATA、PTRACE_POKEDATA等`来读写寄存器、内存数据、设置断点，通过PTRACE_SINGLESTEP、PTRACE_CONT等控制代码的执行等。
+Windows、Linux以及BSD都实现了内存保护模式，这意味着如果你想在这些平台上开发一个调试器，就需要通过平台提供的系统调用来实现。以Linux系统调用为例，调试器进程（tracer）可以通过 `ptrace(PTRACE_ATTACH…)` attach到一个被调试进程（tracee），然后操作系统内核会给tracee进程发送一个信号SIGSTOP，tracee进程就会停下来，tracer进程就可以通过 `waitpid(pid)`来等待tracee停止事件。当tracer进程感知到tracee进程停止执行之后，tracer进程就可以进一步通过 `ptrace`系统调用、配合其他ptrace参数 `PTRACE_GETREGS、PTRACE_SETREGS、PTRACE_PEEKDATA、PTRACE_POKEDATA等`来读写寄存器、内存数据、设置断点，通过PTRACE_SINGLESTEP、PTRACE_CONT等控制代码的执行等。
 
 简单提下内存 "**保护模式**" 的实现，这样有助于理解为什么现在调试器一般通过操作系统 "**系统调用**" 来实现，比如Linux ptrace。
 
@@ -116,20 +112,22 @@
 
 **阻止执行任意位置指令：**
 
-实模式下的CS:IP直接可以计算后用来寻址，保护模式下不行，CS的含义已经变了，不再是代码段起始地址，它（CS部分位字段）变成了一个指向GDT、LDT中的索引，查GDT、LDT可以知道访问对应的内存区所需要的特权级信息。如果当前特权级（CS部分位字段）低于CS对应的GDT描表项中的特权级，则不能访问对应内存区。这样执行指令的时候，就不能够随意指定个地址去执行该位置的指令了。
+实模式下的CS:IP直接可以计算后用来寻址，保护模式下不行，CS的含义已经变了，不再是代码段起始地址，它（CS部分位字段）变成了一个指向GDT、LDT中的索引，查GDT、LDT可以知道访问对应的内存区所需要的特权级信息。如果当前特权级低于CS对应的GDT描述项中的特权级，则不能访问对应内存区。这样执行指令的时候，就不能够随意指定个CS:IP地址去执行该位置的指令了。
 
 **阻止读写任意位置数据：**
 
 对于如何阻止读写任意位置的数据，这个问题可以通过类似的方式来做到，就不进一步展开了，感兴趣读者可以自己查阅资料。
 
-关于80286实现内存保护模式的更多信息，可参考[protected mode basics by Robert Collins](http://www.rcollins.org/articles/pmbasics/tspec_a1_doc.html)，我是基于《Linux源码情景分析》中关于保护模式的内容回忆来补充这部分信息的，Robert Collins还额外描述了中断情况下如何保证保护模式。
+关于80286实现内存保护模式的更多信息，可参考[protected mode basics by Robert Collins](http://www.rcollins.org/articles/pmbasics/tspec_a1_doc.html)，您也可以参考《Linux内核源码情景分析》，这本书也对此进行了介绍。
 
-那保护模式下当我们希望执行tracee的指令、读写tracee的数据时，只能借助于操作系统提供的 "**系统调用**" 来完成这些任务。
+从 80286 开始，Intel 处理器就具备了保护模式的硬件基础，特权级、GDT/LDT 这些结构也一直沿用至今。80386 又在此之上引入了分页机制，段、页两种机制并存——由于处理器中段寄存器、表结构仍然存在，习惯上也把这种管理方式称为 "**段页式管理**"。需要说明的是，现代 x86-64 Linux 上，段寄存器虽然仍在，但用户态能否读、写、执行某块内存，真正逐页生效的检查是由分页机制完成的：页表项中的 U/S 位区分用户态/内核态，R/W 位控制写权限，NX 位控制执行权限。用户态完全可以执行自己地址空间内任何具备执行权限的页面（JIT 编译器正是这样工作的），但是如果你想指定其他进程的任意地址想去执行、读写，那是不允许的。
 
-> **扩展阅读**: 
-> - 对与进程、线程的表示，建议了解下操作系统进程控制块PCB的概念以及Linux下taskstruct、GDT、LDT相关的知识。
+那为什么调试器执行 tracee 的指令、读写 tracee 的数据，仍要借助系统调用呢？关键在于 tracee 的内存位于它自己的地址空间（页表）中，tracer 的页表里并没有这些页面的映射；只有内核才有权限修改页表、或者代表其他进程访问其地址空间。`ptrace` 以及 `/proc/pid/mem`、`process_vm_readv` 等，都是内核提供的这类访问通道。
+
+> **扩展阅读**:
+>
+> - 对于进程、线程的表示，建议了解下操作系统进程控制块PCB的概念以及Linux下 `task_struct`、GDT、LDT相关的知识。
 > - Linux平台对SIGSTOP信号的处理，可以参考：[How does SIGSTOP work in Linux kernel?](https://stackoverflow.com/questions/31946854/how-does-sigstop-work-in-linux-kernel)
-
 
 #### 4.2.2.3 解释器
 
@@ -137,9 +135,10 @@
 
 Andreas Zeller在《软件调试》书中提到，解释型语言的调试器通常比编译型语言的调试器简单，因为解释型语言的执行过程是透明的，而编译型语言的执行过程是隐藏的。
 
->"Building a debugger for an interpreted language is much easier than for a compiled language... Since the interpreter already has full control over the execution, it can easily provide debugging features."
+> "Building a debugger for an interpreted language is much easier than for a compiled language... Since the interpreter already has full control over the execution, it can easily provide debugging features."
 
 **核心论点如下：**
+
 - **解释型语言（Interpreted Languages）**： 解释器本身就是程序的运行环境。它在执行每一行代码时，都保留了完整的符号表、变量名和源代码映射。调试器只需要向解释器查询当前状态即可。因此，Zeller 认为编写解释型语言的调试器“相对简单”（Much easier），因为执行过程对解释器来说是透明的。
 - **编译型语言（Compiled Languages）**： 程序被翻译成了机器码，原本的变量名和结构在执行时已经消失了。调试器必须通过“调试信息”（如 DWARF 或 PDB 格式）这种复杂的辅助手段，强行将二进制状态映射回源代码。这种过程是“非自然的”，因为执行过程在硬件层面是隐藏的（Opaque）。
 
@@ -167,11 +166,11 @@ ps: Andreas Zeller 还维护了 https://debuggingbook.org/ 这个网站，提供
 - Crash/Kdump：用于生产环境异常时的内核崩溃分析（core dump分析）。
 - eBPF/Ftrace：用于性能剖析、动态追踪、线上排查复杂问题等动态观测场景。
 
->**扩展阅读：
+> **扩展阅读：
 >
->- [kernel space debuggers in Linux](https://sysplay.github.io/books/LinuxDrivers/book/Content/Part10.html)
->- [user mode debugging vs kernel mode debugging](https://stackoverflow.com/questions/32998218/is-there-ever-an-advantage-to-user-mode-debug-over-kernel-mode-debug#:~:text=in%20kernel%20mode.-,User%20mode%20debugging,you%20need%20to%20have%20really%20professional%20comprehension%20of%20all%20those%20topics.,-Conclusion)
->- [kernel debugger internals](https://www.kernel.org/doc/html/v4.18/dev-tools/kgdb.html#kernel-debugger-internals)
+> - [kernel space debuggers in Linux](https://sysplay.github.io/books/LinuxDrivers/book/Content/Part10.html)
+> - [user mode debugging vs kernel mode debugging](https://stackoverflow.com/questions/32998218/is-there-ever-an-advantage-to-user-mode-debug-over-kernel-mode-debug#:~:text=in%20kernel%20mode.-,User%20mode%20debugging,you%20need%20to%20have%20really%20professional%20comprehension%20of%20all%20those%20topics.,-Conclusion)
+> - [kernel debugger internals](https://www.kernel.org/doc/html/v4.18/dev-tools/kgdb.html#kernel-debugger-internals)
 
 #### 4.2.2.5 调试器界面
 
@@ -188,6 +187,7 @@ GUI调试器能够同时呈现和访问更多的机器状态信息，使用GUI�
 程序断点（breakpoint），指的是程序中的一个位置，当程序执行到该位置时能够停下来，以便调试人员观察程序状态。
 
 下面对程序断点进行分类说明：
+
 - 从实现手段而言，程序断点可以分为“**软件断点**”和“**硬件断点**”，前者是通过机器指令来实现，后者是借助处理器提供的调试寄存器来实现。
 - 从生成销毁方式、生命周期角度而言，程序断点又可以分为“**静态断点**”和“**动态断点**”，前者是在程序编译时就已经确定，后者是在程序运行时动态创建。
 
@@ -276,13 +276,13 @@ X86平台上创建软件断点可以通过指令 `int 3`来生成**0xCC**这个�
 
 ![img](assets/clip_image004.png)
 
->ps: 不一定是在函数体内第一条指令处设置断点，比如Go语言函数调用通常会涉及到栈分裂（stack splitting），会在函数体开头插入一些指令来处理栈空间。在栈分裂相关指令处设置断点就不太好，因为如果涉及到栈分裂这个断点会被命中两次，对于调试来说会有干扰。
+> ps: 不一定是在函数体内第一条指令处设置断点，比如Go语言函数调用通常会涉及到栈分裂（stack splitting），会在函数体开头插入一些指令来处理栈空间。在栈分裂相关指令处设置断点就不太好，因为如果涉及到栈分裂这个断点会被命中两次，对于调试来说会有干扰。
 
 ##### 4.2.3.2.2 单步执行跳出 (一个函数)
 
 当符号级调试器退出函数（或例程）时，它将在函数的活动记录（调用栈信息）中查找返回地址。 然后，它将返回地址处机器指令的操作码保存，并用断点替换。 当程序恢复执行时，该例程将执行完剩余语句，并跳转到其返回地址。 然后回到返回地址处的下一条指令后，将命中断点，程序控制权将交还给调试器。 这样做的结果是，您可以使调试器从被调函数返回到调用该函数的代码上。
 
->ps: ABI函数调用约定相关知识，简单提一下的话，就是函数调用时会创建栈帧，并将参数、返回地址、寄存器信息保存入栈，局部变量在栈帧中分配等等，函数返回前销毁栈帧，程序则继续跳转到返回地址对应指令处继续执行。您可以参考相关资料了解更多细节。
+> ps: ABI函数调用约定相关知识，简单提一下的话，就是函数调用时会创建栈帧，并将参数、返回地址、寄存器信息保存入栈，局部变量在栈帧中分配等等，函数返回前销毁栈帧，程序则继续跳转到返回地址对应指令处继续执行。您可以参考相关资料了解更多细节。
 
 ##### 4.2.3.2.3 单步执行跳过 (下一条语句)
 
@@ -290,7 +290,7 @@ X86平台上创建软件断点可以通过指令 `int 3`来生成**0xCC**这个�
 
 ![img](assets/clip_image005.png)
 
->ps: 在一个源代码行中，可能包含了一条语句，也可能是多条语句，甚至可能是一个for循环，那么在执行符号级调试器next时通常是希望跳转到下一行源码处，那就需要知道当前这行源码对应着多少机器指令，才好控制调试器应该在那个指令地址处添加断点。这个如何做到呢？需要依赖调试信息对源代码行对应的指令地址范围进行描述，后面介绍DWARF调试信息时会介绍。
+> ps: 在一个源代码行中，可能包含了一条语句，也可能是多条语句，甚至可能是一个for循环，那么在执行符号级调试器next时通常是希望跳转到下一行源码处，那就需要知道当前这行源码对应着多少机器指令，才好控制调试器应该在那个指令地址处添加断点。这个如何做到呢？需要依赖调试信息对源代码行对应的指令地址范围进行描述，后面介绍DWARF调试信息时会介绍。
 
 ### 4.2.4 本节小结
 
