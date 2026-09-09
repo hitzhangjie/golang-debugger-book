@@ -378,7 +378,7 @@ func (loc *AddrLocationSpec) Find(t *proc.Target, _ []string, scope *proc.EvalSc
 
 这里分两种情况：本身就是一个地址值，直接字符串转Int64后返回；另一种是一个表达式，`scope.EvalExpression(...)`，表达式结果可以是一个计算出的地址，也可能是一个函数，如果是后者，那么就需要取函数prologue后的第一条指令地址。
 
-ps: scope.EvalExpression的工作原理，我们在前一小节 [19-表达式计算](./19-how_evalexpr_works.md) 中进行了详细介绍。如果你忘记了它是如何工作的，可以翻回去看看。当然这一节并没有对所有类型的表达式进行计算，但是我们已经介绍了读者了解这些的所有必备知识、关键流程，读者可以自行了解。
+ps: scope.EvalExpression的工作原理，我们在前一小节 [18-表达式计算](./18-how_evalexpr_works.md) 中进行了详细介绍。如果你忘记了它是如何工作的，可以翻回去看看。当然这一节并没有对所有类型的表达式进行计算，但是我们已经介绍了读者了解这些的所有必备知识、关键流程，读者可以自行了解。
 
 ##### RegexLocationSpec
 

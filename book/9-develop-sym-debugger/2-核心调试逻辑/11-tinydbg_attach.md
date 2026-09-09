@@ -38,7 +38,7 @@ Global Flags:
 我们解释下上面的attach命令选项：
 
 1. tinydbg attach pid，这个没有什么疑问，挂住正在执行的进程id==pid的进程；
-2. --waitfor, --waitfor-duration, --waitfor-interval，等一个进程名前缀为xxx的进程起来、然后挂住，详见 [waitfor设计](./1-tinydbg_attach_waitfor.md)。
+2. --waitfor, --waitfor-duration, --waitfor-interval，等一个进程名前缀为xxx的进程起来、然后挂住，详见 [waitfor设计](./12-tinydbg_attach_waitfor.md)。
 3. --accept-multiclient，这个是为了允许同一个debugger backend可以服务于多个debugger client，可以同时调试，或者先后调试，详见 [multiclient设计](../3-高级功能扩展/108-howto_accept_multiclient.md)。
 4. --allow-non-terminal-interactive，如果您想在CI/CD或者自动化调试流程中执行上述非基于控制终端的调试；
 5. --headless，启动一个debugger backend并作为服务器模式运行；

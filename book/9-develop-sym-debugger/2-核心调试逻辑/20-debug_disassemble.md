@@ -289,7 +289,7 @@ OK，客户端调用的RPC我们介绍完了，接下来介绍下服务器侧是
 
 **FindLocation**:
 
-server端的FindLocation实现，其实就是前面咱们介绍过的locspec的内容，涉及到客户端输入的locspec的解析，解析成具体的LocationSpec实现之后，再用它来执行查找 `LocationSpec.Find(....)`，拿到找到的指令地址信息[]*api.Location。locspec小节我们也举了几个不同的LocationSpec实现是如何来查找对应的指令地址的。这部分内容我们将在 [20-locspec解析与地址转换](./20-how_locspec_works.md) 进行想介绍，感兴趣的话，你也可以先睹为快。
+server端的FindLocation实现，其实就是前面咱们介绍过的locspec的内容，涉及到客户端输入的locspec的解析，解析成具体的LocationSpec实现之后，再用它来执行查找 `LocationSpec.Find(....)`，拿到找到的指令地址信息[]*api.Location。locspec小节我们也举了几个不同的LocationSpec实现是如何来查找对应的指令地址的。这部分内容我们将在 [19-locspec解析与地址转换](./19-how_locspec_works.md) 进行想介绍，感兴趣的话，你也可以先睹为快。
 
 ```go
 // FindLocation returns concrete location information described by a location expression.

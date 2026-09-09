@@ -1,8 +1,8 @@
-## Core (Part2): 生成Core+调试Core
+## Core：生成Core+调试Core
 
-### 实现目标: `tinydbg core [corefile]`
+### 实现目标: `tinydbg core <executable> <corefile>`
 
-本节我们介绍根据core文件进行调试 `tinydbg core [corefile]`，通常情况下core文件是程序异常终止或崩溃时操作系统为其生成的一个内存快照文件。它包含了程序崩溃时的信息，调试器利用它可以重建程序崩溃时的执行现场，帮助开发者定位问题。
+本节我们介绍根据core文件进行调试 `tinydbg core <executable> <corefile>`，通常情况下core文件是程序异常终止或崩溃时操作系统为其生成的一个内存快照文件。它包含了程序崩溃时的信息，调试器利用它可以重建程序崩溃时的执行现场，帮助开发者定位问题。
 
 利用core文件进行问题定位的一个最常见操作，就是执行命令 `bt`，可以定位程序崩溃时的堆栈，对于SIGMENTATION FAULT很容易定位。现在主流编程语言在程序出现异常或者严重错误时，都提供了栈回溯的能力，方便开发者查看问题堆栈。
 
@@ -17,7 +17,7 @@ Core文件本质上是进程某个时刻的快照信息，也不一定是崩溃�
 
 #### core包含哪些信息
 
-part1部分对core文件进行了详细介绍，这里还是简单回顾下。core文件是进程的一个内存快照文件，它包含了程序崩溃时的内存内容和寄存器状态等信息，主要有如下几部分：
+关于ELF core文件格式的详细剖析，我们在附录 [12.16 扩展阅读：ELF核心转储文件剖析](../../12-appendix/93-anatomy-of-elf-core-file.md) 中进行了详细介绍，这里仅做简单介绍。如您想了解更多关于core文件信息，请阅读附录中上述内容。OK，core文件是进程的一个内存快照文件，它包含了程序崩溃时的内存内容和寄存器状态等信息，主要有如下几部分：
 
 1. ELF头信息：标识这是一个core文件，包含文件类型、机器架构等基本信息
 2. 程序头表：描述了core文件中各个段的位置和属性
@@ -38,9 +38,7 @@ part1部分对core文件进行了详细介绍，这里还是简单回顾下。co
 
 #### core文件如何生成
 
-### Linux下Core文件生成
-
-#### Linux内核来生成
+##### Linux内核来生成
 
 当程序收到某些特定信号(如SIGSEGV、SIGABRT等)时,如果系统开启了core dump功能,内核会帮助生成core文件。具体流程如下:
 
@@ -83,7 +81,7 @@ part1部分对core文件进行了详细介绍，这里还是简单回顾下。co
 
 所以生成core文件不需要调试器参与,这是由Linux内核提供的一个重要特性。调试器的作用是事后分析这个core文件,重建崩溃现场进行调试。
 
-#### 自定义工具来生成
+##### 自定义工具来生成
 
 除了上述提到的哪些给进程发送信号、利用内核的能力来自动生成core文件以外，我们的自定义调试工具也可以自己实现这里的core文件转储的能力。
 
@@ -105,7 +103,7 @@ OK，接下来我们就看看 tinydbg 中是如何生成core文件，并加载co
 
 ### 代码实现
 
-core文件生成其实是有调试会话的调试命令 `tinydbg> dump <corefile>` 来生成的，而加载core文件并启动调试是 `tinydbg core <exectable> <corefile>` 来实现的。按照我们的目录安排，这一小节我们要先介绍core命令，然后再调试会话的命令部分，再介绍dump命令。但是core文件中数据的生产、消费是紧密相关的，生产、消费在章节安排上隔的很远，跳跃性太大、不易于读者理解学习。
+core文件生成其实是有调试会话的调试命令 `tinydbg> dump <corefile>` 来生成的，而加载core文件并启动调试是 `tinydbg core <executable> <corefile>` 来实现的。按照我们的目录安排，这一小节我们要先介绍core命令，然后再调试会话的命令部分，再介绍dump命令。但是core文件中数据的生产、消费是紧密相关的，生产、消费在章节安排上隔的很远，跳跃性太大、不易于读者理解学习。
 
 所以我们先介绍dump命令如何实现core文件的生成，再介绍core文件的消费。
 
@@ -670,7 +668,7 @@ func buildMemory(core, exeELF *elf.File, exe io.ReaderAt, notes []*note) proc.Me
 1、先根据要读取的起始地址、数据量确定大约在哪些VMAs对应的readers中；
 2、然后从这些readers中读取；
 3、这里的每个reader要读取的数据的起始地址都已经记录好了，起始地址起始就是Core文件中每个PT_LOAD类型的VirtSize。
-   ps: part1部分我们提到过，在可执行程序中，VirtSize表示PT_LOAD类型在进程地址空间中的加载地址，但是在Core文件中，它表示在Core文件中的偏移量。
+   ps: 附录12.16中我们提到过，在可执行程序中，VirtSize表示PT_LOAD类型在进程地址空间中的加载地址，但是在Core文件中，它表示在Core文件中的偏移量。
 
 #### 后续读取寄存器操作
 
@@ -681,7 +679,7 @@ func buildMemory(core, exeELF *elf.File, exe io.ReaderAt, notes []*note) proc.Me
 唯一美中不足的是，有些FileSZ==0的非匿名mapped file对应的VMA，这部分数据可能内核没有写出，而这些mapped file在事后又被修改了。即使我们读取回来也和当时问题现场不一致。这个是个现实问题。
 
 tinydbg，没有处理这些mapped file的读取，而是直接选择性忽略了。因为即使它支持读取，其实也没法善后处理这些真实存在的问题。
-tinydbg做到现在这样，及很好了，see discussion here: https://github.com/go-delve/delve/discussions/4031。
+tinydbg做到现在这样，已经很好了，see discussion here: https://github.com/go-delve/delve/discussions/4031。
 
 #### 后续初始化及调试
 
@@ -695,3 +693,6 @@ tinydbg做到现在这样，及很好了，see discussion here: https://github.c
 
 ### 本节小结
 
+本节介绍了core文件的生成与加载。生成侧，`tinydbg> dump <corefile>` 会请求后端执行DumpStart，后端通过elfwriter将进程的内存映射以PT_LOAD段、将进程信息/线程信息/寄存器状态等以PT_NOTE段写入core文件；由于转储可能耗时较长，客户端会周期性通过CoreDumpWait查询转储进度，直到全部完成。加载侧，`tinydbg core <executable> <corefile>` 通过readNotes解析PT_NOTE中的各类note，通过buildMemory将core文件的PT_LOAD段与可执行文件自身一起建立成SplicedMemory以重建内存现场，再根据notes重建线程、寄存器状态。
+
+相比Linux内核生成的core文件（通过NT_FILE记录VMA与外部文件的映射关系，只读映射通常不转储数据），tinydbg选择不依赖外部文件、将映射内存全部以PT_LOAD转储，虽然core文件体积会大一些，但避免了事后外部文件被修改导致的现场失真问题。最后需要强调，core文件调试只是恢复了进程的一个静态快照，continue、next、step等执行类调试命令并不可用，通常使用bt观察堆栈、frame选择栈帧、配合locals、args查看崩溃现场的调用栈和变量信息。

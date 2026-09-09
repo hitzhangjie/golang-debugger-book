@@ -1,8 +1,8 @@
-## Core (Part1): ELF核心转储文件剖析
+## 扩展阅读：ELF核心转储文件剖析
 
 可执行与可链接格式(ELF) 🧝 用于编译输出(`.o`文件)、可执行文件、共享库和核心转储文件。前几种用途在[System V ABI规范](http://www.sco.com/developers/devspecs/gabi41.pdf)和[工具接口标准(TIS) ELF规范](http://refspecs.linuxbase.org/elf/elf.pdf)中都有详细说明，但关于ELF格式在核心转储中的使用似乎没有太多文档。
 
-我们接下来要介绍 `tinydbg core [executable] [corefile]` 对core文件进行调试，在这之前我们必须先了解下Core文件的事实上的规范，要记录些什么，按什么格式记录，如何兼容不同的调试器。理解了Core文件内容如何生成，也就理解了调试器读取Core文件时应该如何读取，才能重建问题现场。
+本文是 [9.2.15 tinydbg core](../9-develop-sym-debugger/2-核心调试逻辑/15-tinydbg_core.md) 一节的补充阅读材料。在该节中我们会介绍 `tinydbg core [executable] [corefile]` 对core文件进行调试，在此之前我们必须先了解下Core文件的事实上的规范，要记录些什么，按什么格式记录，如何兼容不同的调试器。理解了Core文件内容如何生成，也就理解了调试器读取Core文件时应该如何读取，才能重建问题现场。
 
 这篇文章 [Anatomy of an ELF core file](https://www.gabriel.urdhr.fr/2015/05/29/core-file/) 中对Core文件的事实上的规范进行了梳理、总结，以下是摘录在这篇文章中的一些关于Core文件的说明。
 
@@ -370,7 +370,7 @@ ELF核心转储文件通常不会包含节头表。Linux内核在生成核心转
 
 ### 本节小结
 
-本文介绍了Linux系统中core dump文件的大致信息构成，并对core dump生成实践也进行了介绍，比如Linux内核、gdb、lldb调试器的做法，在了解了这些之后，我们可以开始介绍我们的tinydbg的调试会话命令 `tinydbg> dump [output]` 以及对core文件调试命令 `tinydbg core [executable] [core]` 了，继续吧。
+本文介绍了Linux系统中core dump文件的大致信息构成，并对core dump的生成实践进行了介绍，比如Linux内核、gdb、lldb调试器的做法。在了解了这些之后，请回到 [9.2.15 tinydbg core](../9-develop-sym-debugger/2-核心调试逻辑/15-tinydbg_core.md) 一节，继续阅读tinydbg中调试会话命令 `tinydbg> dump [output]` 如何生成core文件，以及 `tinydbg core [executable] [core]` 如何加载core文件并重建问题现场。
 
 ### 参考文献
 * [Anatomy of an ELF core file](https://www.gabriel.urdhr.fr/2015/05/29/core-file/)

@@ -12,7 +12,7 @@
 - part2：breakpoint命令添加断点，以及执行到断点后的处理逻辑；
 - part3：`breakpoint ... if expr` or `condition <bpid> expr` 条件断点的创建，及断点命中后的处理逻辑；
 - part4：`breakpoints` `clear` `clearall` `toggle`，这几个查看、清理、关闭or激活断点的操作；
-- ~part5~：`trace` `watch` 这两种特殊类型的断点会在 [trace](./26-debug_trace.md) 和 [watch](./2-debug_watch.md) 中分别进行介绍。
+- ~part5~：`trace` `watch` 这两种特殊类型的断点会在 [trace](./25-debug_trace.md) 和 [watch](./26-debug_watch.md) 中分别进行介绍。
 
 ps: `on <bpid> command` 断点命中后执行指定的动作，这个会在介绍part2、part3过程中介绍。
 
@@ -394,7 +394,7 @@ type LogicalBreakpoint struct {
 
 当成功添加完断点之后，clientside就可以执行继续执行continue命令，serverside收到请求后会恢复TargetGroup的执行，TargetGroup包含了一个进程组中的多个进程，而每个进程又包括了多个线程，那这里的continue是恢复所有的进程、线程的执行吗？当某个进程的个别线程命中断点停止执行后，其他进程、其他线程又如何处理呢？前一节介绍断点精细化管理时提到了Stop Mode分为All-stop Mode和None-stop Mode，我们一起来看下tinydbg中实现时是如何实现的。
 
-All-stop Mode, 首先联想下 [tinydbg attach](./11-tinydbg-atach.md) 的实现，调试器attach目标进程时，会尝试跟踪跟目标进程下的所有线程。
+All-stop Mode, 首先联想下 [tinydbg attach](./11-tinydbg_attach.md) 的实现，调试器attach目标进程时，会尝试跟踪跟目标进程下的所有线程。
 
 ```
 func Attach(pid int, waitFor *proc.WaitFor) (*proc.TargetGroup, error) {
