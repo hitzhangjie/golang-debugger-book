@@ -40,7 +40,7 @@ This project is an excellent opportunity to deepen your understanding of compute
 
 ## Sample Code
 
-The project includes a companion repository "**[golang-debugger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons)**" containing sample code that corresponds to each chapter. The "**[0-godbg](https://github.com/hitzhangjie/godbg)**" directory provides a complete implementation of a insctruction-level debugger for Go."**[tinydbg](https://github.com/hitzhangjie/tinydbg/tree/tinydbg_minimal)**" repository is a [go-delve/delve](https://github.com/go-delve/delve) fork and simplified version for **Linux/Amd64** to help you quickly understand the core concepts and code.
+The project includes a companion repository "**[golang-debugger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons)**" containing sample code that corresponds to each chapter. The "**[godbg](https://github.com/hitzhangjie/godbg)**" provides a complete implementation of a instruction-level debugger for Go. "**[tinydbg](https://github.com/hitzhangjie/tinydbg/tree/tinydbg_minimal)**" repository is a [go-delve/delve](https://github.com/go-delve/delve) fork and simplified version for **Linux/Amd64** to help you quickly understand the core concepts and code.
 
 While established debuggers like GDB and Delve already exist for Go, building one from scratch is an excellent learning exercise. It not only demystifies how debuggers work but also connects knowledge across many domains:
 

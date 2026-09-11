@@ -68,11 +68,11 @@
 2. **[hitzhangjie/tinydbg](https://github.com/hitzhangjie/tinydbg)**，该项目提供了一个可用标准的 ”**符号级调试器**“ 实现，由 [dlv](https://github.com/go-delve/delve) 裁剪调整而来（剔除了与linux/amd64无关扩展，及高级功能）；
 3. **[hitzhangjie/golang-debugger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons)**，该项目按章节组织目录，每节实现目标在godbg、tinydbg落地前，会先在此项目中编写demo进行验证；
 
-ps: **[hitzhangjie/godbg-debugger-lessons/0-godbg](https://github.com/hitzhangjie/godbg)**，该submodule即hitzhangjie/godbg。
+ps: **[hitzhangjie/golang-debugger-lessons/0_godbg](https://github.com/hitzhangjie/godbg)**，该submodule即hitzhangjie/godbg。
 
 **关于示例代码对应测试环境的一些补充说明**：
 
-- godbg项目中提供了vscode的容器化开发配置 (详见./devcontainer/devcontainer.json)，指定的基础开发镜像是CentOS Stream9+go1.22.4。如果您更喜欢使用容器开发环境，您可以在vscode中安装插件 "Dev Conatiners"，在准备就绪后可以唤出Command Palette并选择 "Dev Containers: Reopen in Container"。
+- godbg项目中提供了vscode的容器化开发配置 (详见./devcontainer/devcontainer.json)，指定的基础开发镜像是CentOS Stream9+go1.22.4。如果您更喜欢使用容器开发环境，您可以在vscode中安装插件 "Dev Containers"，在准备就绪后可以唤出Command Palette并选择 "Dev Containers: Reopen in Container"。
 - 您也可以直接在Linux虚拟机或者Linux物理机中进行测试，请务必注意开发环境设置，Go版本必须>=go1.22并且<go1.25。
 - 所有示例代码都是在linux/amd64平台架构下进行的测试，请您使用相同的环境进行测试。
 
