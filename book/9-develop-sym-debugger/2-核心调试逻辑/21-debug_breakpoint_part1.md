@@ -91,11 +91,11 @@ stepin和stepout的实现也需要自动隐式创建断点：
 
 这样执行stepin、stepout时，在相应位置设置好断点位置，并continue执行到断点位置即可。
 
-#### Go定制化需要：StackSplit
+#### Go定制化需要：栈扩容 / stack growth
 
-go为了支持协程栈伸缩，编译器在函数序言部分安插了一些栈检查指令，go函数调用时首先进行栈大小检查，如果栈大小不够用了，就会创建一个更大的栈，并将当前栈上的数据copy过去，然后调整goroutine的一些硬件上下文信息，也包括将goroutine的栈指向这个新的栈。这个过程俗称 "**栈分裂 stacksplit**"。当完成上述过程后，需要通过跳转指令重新跳转回指令函数地址开头，然后重新开始执行。
+go为了支持协程栈伸缩，编译器在函数序言部分安插了一些栈检查指令；当函数调用发生时，runtime 会先检查当前栈空间是否足够。如果栈空间不够，就会分配一个更大的栈，并将当前栈上的数据拷贝到新栈中，然后调整 goroutine 的一些硬件上下文信息，包括将 goroutine 的栈指针更新到新的栈位置。这个过程通常称作 “栈扩容” 或 “stack growth / stack copy”。在 Go 1.13+ 的主线实现中，通常不再使用“分段栈 / split stack”这一说法，而是以连续栈和栈拷贝的方式处理扩容。
 
-stacksplit特殊在哪里？为什么需要调试器特别关注？不妨思考下stepin时应该在函数入口哪个指令地址处添加断点。函数开头的第一条指令？第二条指令？or others? 如果我们在第一条指令 or 第二条指令处添加断点，那么我们大概率会观察到一个函数被调用了两次，很诡异。实际上我们应该停在stacksplit、callee保存rbp并重新更新rbp之后的第一条指令位置处。类似地，Go调试器需要对此做特殊处理。
+栈扩容特殊在哪里？为什么需要调试器特别关注？不妨思考下 stepin 时应该在函数入口哪个指令地址处添加断点。函数开头的第一条指令？第二条指令？or others? 如果我们在第一条指令或第二条指令处添加断点，那么大概率会观察到一个函数被调用了两次，很诡异。实际上我们应该停在栈扩容相关代码完成、callee 保存 rbp 并重新更新 rbp 之后的第一条指令位置处。类似地，Go 调试器需要对此做特殊处理。
 
 以下面源码为例，我们来说明下特殊处理的必要性，然后执行 `go build -o main -gcflags 'all=-N -l' main.go` 完成构建：
 
@@ -116,7 +116,7 @@ stacksplit特殊在哪里？为什么需要调试器特别关注？不妨思考�
 14 }
 ```
 
-接下来我们使用 radare2 (r2) 来演示下go函数反汇编后指令执行、跳转流程，很明显可以看到main.main开头存在一个栈检查、栈分裂过程：
+接下来我们使用 radare2 (r2) 来演示下 go 函数反汇编后指令执行、跳转流程，很明显可以看到 main.main 开头存在一个栈检查、栈扩容过程：
 
 ```
 $ r2 ./main
@@ -126,10 +126,10 @@ $ r2 ./main
 ┌ 103: sym.main.main ();
 │ afv: vars(3:sp[0x10..0x20])
 │       ┌─> 0x00470ae0      493b6610       cmp rsp, qword [r14 + 0x10]               // main.main入口地址
-│      ┌──< 0x00470ae4      7659           jbe 0x470b3f                              // 如果栈空间不够，则跳转到0x004700b3f执行stacksplit
+│      ┌──< 0x00470ae4      7659           jbe 0x470b3f                              // 如果栈空间不够，则跳转到0x004700b3f执行栈扩容逻辑
 │      │╎   0x00470ae6      55             push rbp  
 │      │╎   0x00470ae7      4889e5         mov rbp, rsp
-│      │╎   0x00470aea      4883ec28       sub rsp, 0x28                             // <== 栈分裂+callee保存并设置帧基址后，这个地址更适合用做断点
+│      │╎   0x00470aea      4883ec28       sub rsp, 0x28                             // <== 栈扩容完成、callee保存并设置帧基址后，这个地址更适合用做断点
 │      │╎   0x00470aee      48c7442420..   mov qword [var_20h], 1
 │      │╎   0x00470af7      48c7442418..   mov qword [var_18h], 2
 │      │╎   0x00470b00      48c7442410..   mov qword [var_10h], 0
@@ -147,24 +147,24 @@ $ r2 ./main
 │      │╎   0x00470b3d      5d             pop rbp
 │      │╎   0x00470b3e      c3             ret
 │      └──> 0x00470b3f      90             nop
-│       ╎   0x00470b40      e89badffff     call sym.runtime.morestack_noctxt.abi0   // stacksplit
-└       └─< 0x00470b45      eb99           jmp sym.main.main                        // 当stacksplit准备ok后，重新跳转回main.main执行
+│       ╎   0x00470b40      e89badffff     call sym.runtime.morestack_noctxt.abi0   // 栈扩容入口：runtime.morestack_noctxt
+└       └─< 0x00470b45      eb99           jmp sym.main.main                        // 当栈扩容准备好后，重新跳转回main.main执行
 [0x00470ae0]>
 ```
 
-前面我们提过了，为了避免栈分裂导致的同一个函数被调用两次的假象，我们不应该在栈检查相关的几条指令位置添加断点，如 `0x00470ae0` `0x00470ae4` 这几条都是不合适的，但是偏偏go编译器生成行号表的时候，将 `0x00470ae0` 对应的lineEntry.IsStmt设置为了true，意味着调试器应该将此为止作为一个断点位置。
+前面我们提过了，为了避免栈扩容导致的同一个函数被调用两次的假象，我们不应该在栈检查相关的几条指令位置添加断点，如 `0x00470ae0` `0x00470ae4` 这几条都是不合适的；但是偏偏 go 编译器生成行号表的时候，将 `0x00470ae0` 对应的 lineEntry.IsStmt 设置为了 true，意味着调试器应该将此位置作为一个断点位置。
 
 你可以通过dwarfviewer来查看行号表，下面是截取的一部分main.main开头的指令对应的行号表lineEntries:
 
 ```
 Address	Line	File	Column	IsStmt	Basic Block
-0x00470ae0	3	/home/zhangjie/debugger101/test/go_func/main.go	0	true	false   // 这个位置不合适，栈分裂时会导致同一个函数被执行两次的假象
+0x00470ae0	3	/home/zhangjie/debugger101/test/go_func/main.go	0	true	false   // 这个位置不合适，栈扩容时会导致同一个函数被执行两次的假象
 0x00470aea	3	/home/zhangjie/debugger101/test/go_func/main.go	0	true	false   // 这个位置可以！
 0x00470aee	4	/home/zhangjie/debugger101/test/go_func/main.go	0	true	false
 0x00470af7	5	/home/zhangjie/debugger101/test/go_func/main.go	0	true	false
 ```
 
-其实将 `0x00470ae0` 作为候选断点位置不太合适，至少对普通开发者来说是不合适的。但是对于运行时调试人员，比如你想跟踪stacksplit，那么在 `0x00470ae0` 设置断点就是合适的。所以也可以理解成go编译器开发人员给了调试器设计人员一定的自由度，你可以通过一个选项来打开对stacksplit的跟踪（在0x00470ae0设置断点），默认不跟踪stacksplit（在0x00470aea设置断点）。
+其实将 `0x00470ae0` 作为候选断点位置不太合适，至少对普通开发者来说是不合适的。但是对于运行时调试人员，比如你想跟踪栈扩容逻辑，那么在 `0x00470ae0` 设置断点就是合适的。所以也可以理解成 go 编译器开发人员给了调试器设计人员一定的自由度，你可以通过一个选项来打开对栈扩容逻辑的跟踪（在0x00470ae0设置断点），默认不跟踪栈扩容逻辑（在0x00470aea设置断点）。
 
 > 关于如何使用dwarfviewer查看行号表？
 >
@@ -317,7 +317,7 @@ Ok，结合上面伪代码，现在我们可以简单总结下：
 
 #### 硬件断点
 
-以x86架构为例，提供了4个调试地址寄存器(DR0-DR3)和2个调试控制寄存器(DR6-DR7)来支持硬件断点。
+以x86架构为例，提供了4个断点地址寄存器(DR0-DR3)、1个状态寄存器(DR6)、1个控制寄存器(DR7)，来支持硬件断点。
 
 当设置一个硬件断点时，需要执行如下操作:
 

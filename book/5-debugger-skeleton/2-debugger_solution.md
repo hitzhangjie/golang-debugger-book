@@ -40,11 +40,11 @@
 
 ### 调试命令管理
 
-对于一个命令行调试器，涉及到多种启动调试的命令，在调试会话中也需要多种多样的调试命令，这些调试命令驱动着一个高效的调试过程，直到我们定位到问题源头。比如启动调试就可能多种方式，`godbg <exec|attach|core|trace> ...`，在调试会话中也涉及到大量调试命令，如 `break, condition, continue, next, step, stepin, stepout, finish, bt, args, loals` 等等，如何对这些调试命令进行有效地管理和扩展是一个挑战。
+对于一个命令行调试器，涉及到多种启动调试的命令，在调试会话中也需要多种多样的调试命令，这些调试命令驱动着一个高效的调试过程，直到我们定位到问题源头。比如启动调试就可能多种方式，`godbg <exec|attach|core|trace> ...`，在调试会话中也涉及到大量调试命令，如 `break, condition, continue, next, step, stepin, stepout, finish, bt, args, locals` 等等，如何对这些调试命令进行有效地管理和扩展是一个挑战。
 
 #### spf13/cobra
 
-go标准库支持flags，方便对命令行选项进行解析，但是和我们想要的能力比起来，还是差点意思。所以社区里也成长起一些非常优秀的命令行开发支持项目距，比如 [spf13/cobra](https://github.com/spf13/cobra)，它是一个基于golang的开源的命令行程序开发框架，它具有如下特点：
+go标准库支持flags，方便对命令行选项进行解析，但是和我们想要的能力比起来，还是差点意思。所以社区里也成长起一些非常优秀的命令行开发支持项目，比如 [spf13/cobra](https://github.com/spf13/cobra)，它是一个基于golang的开源的命令行程序开发框架，它具有如下特点：
 
 - 支持快速添加cmd；
 - 支持为指定cmd添加subcmd；

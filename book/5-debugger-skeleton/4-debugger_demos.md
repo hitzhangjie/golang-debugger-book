@@ -24,7 +24,7 @@ Usage:
 
 Available Commands:
   attach      调试运行中进程
-  core        调试内核转储
+  core        调试核心转储
   exec        调试可执行程序
   help        Help about any command
 
