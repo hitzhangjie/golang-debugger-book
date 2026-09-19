@@ -31,11 +31,13 @@ OK，那我们迅速总结下，实现符号级调试器，除了指令级调试
 - 描述字符串表；
 - 等等。
 
-编译工具链除了生成DWARF调试信息，也会考虑语言运行时本身的一些特性支持，这会添加一些语言独有的sections。还需要要考虑生成来兼容现有二进制工具的一些常见的sections。比如go语言编译器、链接器会生成DWARF调试信息（.[z]debug_* sections）供调试器使用，它还额外生成.gosymtab、.gopclntab用于go runtime来跟踪调用栈信息，生成.note.go.buildid来保留go buildid信息。另外，也会生成.symtab供readelf等通用的二进制分析工具使用。
+编译工具链除了生成DWARF调试信息，也会考虑语言运行时本身的一些特性支持，这会添加一些语言独有的sections。还需要要考虑生成来兼容现有二进制工具的一些常见的sections。比如go语言编译器、链接器会生成DWARF调试信息（.[z]debug_* sections）供调试器使用，它还额外生成.gosymtab、.gopclntab用于go runtime来跟踪调用栈信息（注：.gosymtab自go1.25起已被移除，运行时仅依赖.gopclntab），生成.note.go.buildid来保留go buildid信息。另外，也会生成.symtab供readelf等通用的二进制分析工具使用。
 
 符号级调试的实现，要依赖DWARF，但是不是完全依赖DWARF还是要看具体实现。这要看编译器、链接器有没有生成足够完备的调试信息，或者调试信息解析效率是否足够高。有些语言的编译工具链没有做到这个程度，或者使用的DWARF版本对数据格式设计解析起来没那么高效，有些调试器就会退而求其次，去读取一些其他的ELF sections来帮助实现调试功能，或者帮助改善调试效率、改善调试体验。
 
 所以说，实现符号级调试器，理论上来说可以借助DWARF来实现，但是工程上要考虑更多现实问题。实现一个高效可用的符号级调试器，需要认识到这个地方在以前可能是个挑战。现在应该不用担心了，go-delve/delve就是完全借助DWARF，而gdb还是用了部分符号表中的信息。
+
+符号到地址的解析有多种数据来源（`.symtab`、`.gosymtab`、`.gopclntab`、DWARF），在 DWARF sections 被 strip 而其他 sections 仍在的情况下，一些调试器会退而求其次地利用它们做符号解析的兜底。本书实现的调试器 godbgv2 假定二进制保留了 DWARF sections，符号解析统一走 DWARF，不依赖 `.gosymtab`/`.gopclntab`（其原理性介绍见本章 6.2 节）。
 
 ### 本章目标
 

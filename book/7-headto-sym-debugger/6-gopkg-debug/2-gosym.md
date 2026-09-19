@@ -14,6 +14,8 @@ package debug/gosym中的相关重要数据结构，如下图所示：
 
 ELF文件中符号表信息一般会存储在 `.symtab` section中，go程序有点特殊在go1.2及之前的版本有一个特殊的.gosymtab，其中存储了接近plan9风格的符号表结构信息，但是在go1.3之后，.gosymtab不再包含任何符号信息。
 
+> 注：go1.25 起链接器已经不再生成 `.gosymtab` 这个 section（go 运行时仅依赖 `.gopclntab`）。如果调试器的符号解析依赖 `.gosymtab`，将无法调试新版本工具链构建的程序。
+
 另外，ELF文件存储调试用的行号表、调用栈信息，如果是DWARF调试信息格式的话，一版是存储在.[z]debug_line、.[z]debug_frame中。go程序比较特殊，为了使程序在运行时可以可靠地跟踪调用栈，go编译工具链生成了一个名为 `.gopclntab`的section，其中保存了go程序的行号表信息。
 
 那么，go为什么不使用.[z]debug_line、.[z]debug_frame sections呢？为什么要独立添加一个.gosymtab、.gopclntab呢？这几个sections有什么区别呢？
@@ -322,6 +324,18 @@ Date:   Fri Sep 1 15:30:45 2017 +0200
 ```
 
 ok，这里大家应该明白实现原理了，我们将在下一章调试器开发过程中加以实践。
+
+### 符号解析方案对比与选择
+
+到这里，我们一共了解了多种"符号到地址"的解析数据来源，简单总结一下：
+
+- `.symtab`：ELF 通用的符号表，记录符号名与地址，各类二进制分析工具（readelf、nm）都用它，但信息较少（没有类型、变量、行号等调试信息）；
+- `.gosymtab`/`.gopclntab`：go 链接器为运行时栈跟踪生成的定制 section，只覆盖纯 go 代码（cgo 部分缺失）；且 `.gosymtab` 自 go1.25 起已被移除，仅剩 `.gopclntab`；
+- DWARF（`.debug_info`、`.debug_line`、`.debug_frame` 等）：信息最全，涵盖函数地址范围、变量、类型、行号表、栈帧规则（CFI），是符号级调试的基础，但体积较大，也可能在发布时被 strip。
+
+我们实现的调试器（godbgv2）选择统一走 DWARF：假定二进制保留了 DWARF sections，函数名→地址、地址→函数、地址→源码位置等转换全部基于 `.debug_info` 的 subprogram DIE 与 `.debug_line` 行号表完成，不再依赖 `.gosymtab`/`.gopclntab`。
+
+如果 DWARF 被 strip 而其他 sections（如 `.symtab`、`.gopclntab`）仍然存在，那么利用它们做符号解析的兜底也是一种可行的工程策略，实际上有些调试器就是这么做的——只是这种降级方案解析能力有限，本书实现不涉及。
 
 ### 本节小结
 
