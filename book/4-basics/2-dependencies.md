@@ -14,24 +14,26 @@
 
 #### 4.2.1.1 存储在目标文件自身
 
-例如，[ELF](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format) 文件格式包含了DWARF调试信息对应的section，一般以".debug”或”.zdebug”开头。.debug前缀开头的section表示数据未压缩，.zdebug前缀开头的section表示数据经过了压缩（注：这种 `.zdebug_` 前缀命名约定已被新版 Go 取代，各版本行为差异详见附录 [12.6 Go调试信息版本矩阵](../12-appendix/6-go-dwarf-version-matrix.md)）。
+例如，[ELF](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format) 文件格式包含了DWARF调试信息对应的section，一般以".debug”或”.zdebug”开头。.debug前缀开头的section表示数据未压缩，.zdebug前缀开头的section表示数据经过了压缩。
 
-> 这里给个实例，__debug_bin是一个由 `dlv debug`生成的可执行程序，包含了调试符号信息，`readelf`可以用来读取ELF文件中的section header，下面我们看一下ELF文件中包含的调试信息相关的 section。
->
-> go build可以通过指定链接器选项“**-ldflags=-compressdwarf=false**”来禁用压缩，提前了解这点，方便以后通过dwarfdump等工具分析理解dwarf调试信息如何组织非常有用。
->
-> ```bash
-> [root@centos ~]# readelf -a __debug_bin | grep debug
-> [12] .zdebug_abbrev    PROGBITS         0000000000599000  0017b000
-> [13] .zdebug_line      PROGBITS         0000000000599114  0017b114
-> [14] .zdebug_frame     PROGBITS         00000000005a9f37  0018bf37
-> [15] .zdebug_pubnames  PROGBITS         00000000005b11a8  001931a8
-> [16] .zdebug_pubtypes  PROGBITS         00000000005b2fa0  00194fa0
-> [17] .debug_gdb_script PROGBITS         00000000005b624b  0019824b
-> [18] .zdebug_info      PROGBITS         00000000005b6273  00198273
-> [19] .zdebug_loc       PROGBITS         00000000005dcfe2  001befe2
-> [20] .zdebug_ranges    PROGBITS         00000000005e982d  001cb82d
-> ```
+举个例子：Linux下执行 `dlv debug`会生成可执行程序__debug_bin，以该二进制文件为例，它包含了调试符号信息。`readelf`可以用来读取ELF文件中的section header，下面我们看一下ELF文件中包含的调试信息相关的 section。
+
+go build可以通过指定链接器选项“**-ldflags=-compressdwarf=false**”来禁用压缩，提前了解这点，后续要用到dwarfdump这类不支持解压缩DWARF sections数据的工具时会非常有用。
+
+```bash
+[root@centos ~]# readelf -a __debug_bin | grep debug
+[12] .zdebug_abbrev    PROGBITS         0000000000599000  0017b000
+[13] .zdebug_line      PROGBITS         0000000000599114  0017b114
+[14] .zdebug_frame     PROGBITS         00000000005a9f37  0018bf37
+[15] .zdebug_pubnames  PROGBITS         00000000005b11a8  001931a8
+[16] .zdebug_pubtypes  PROGBITS         00000000005b2fa0  00194fa0
+[17] .debug_gdb_script PROGBITS         00000000005b624b  0019824b
+[18] .zdebug_info      PROGBITS         00000000005b6273  00198273
+[19] .zdebug_loc       PROGBITS         00000000005dcfe2  001befe2
+[20] .zdebug_ranges    PROGBITS         00000000005e982d  001cb82d
+```
+
+注：`.zdebug_` 前缀命名约定已被新版 Go 取代，各版本行为差异详见附录 [12.6 Go调试信息版本矩阵](../12-appendix/6-go-dwarf-version-matrix.md)）
 
 > ps: 上面 `readelf` 的输出是本书早期基于 go1.13 环境采集的，`.zdebug_` 前缀的 sections 是那个时代的产物。多年过去，调试信息的组织方式已经发生过多次变化，例如：
 >
@@ -106,7 +108,7 @@ main.dSYM/Contents/Resources/DWARF/main: file format Mach-O arm64
 
 > 一个有趣的对比：同样是这台 macOS，Apple clang 默认生成的已经是 DWARF v5，而 Go 出于兼容旧版 Xcode dsymutil 的考虑，在 darwin 上默认仍生成 DWARF v4（参见附录 [12.6 Go调试信息版本矩阵](../12-appendix/6-go-dwarf-version-matrix.md)）。
 >
-> 补充说明：Go 编译器曾经提供过 `-splitdwarf` 编译选项来生成 split DWARF 信息（配合 dsymutil 使用），但该选项已从新版本工具链中移除（实测 go1.18.10 起已不存在）。Go 官方博客文章 "Debugging what you deploy in Go 1.12"（<https://go.dev/blog/debug-opt>）中提到过 macOS 上调试 Go 程序时，如果调试器不支持压缩的调试信息，可以通过 `-ldflags=-compressdwarf=false` 构建，或使用 x/tools 中的 splitdwarf 工具解压已有二进制，可以作为延伸阅读。
+> 补充说明：Go 编译器曾经提供过 `-splitdwarf` 编译选项来生成 split DWARF 信息（配合 dsymutil 使用），但该选项已从新版本工具链中移除（实测 go1.18.10 起已不存在）。Go 官方博客文章 "Debugging what you deploy in Go 1.12"（[https://go.dev/blog/debug-opt](https://go.dev/blog/debug-opt)）中提到过 macOS 上调试 Go 程序时，如果调试器不支持压缩的调试信息，可以通过 `-ldflags=-compressdwarf=false` 构建，或使用 x/tools 中的 splitdwarf 工具解压已有二进制，可以作为延伸阅读。
 
 #### 4.2.1.3 调试信息有什么用呢
 
@@ -124,37 +126,17 @@ main.dSYM/Contents/Resources/DWARF/main: file format Mach-O arm64
 
 #### 4.2.2.1 调试中断
 
-所有的商用操作系统都提供了调试相关的hook机制，这里的hook机制通常是通过内核系统调用的形式实现。为什么要通过系统调用实现呢？调试器调试应用程序的时候，需要读、写程序的数据、指令，就涉及到访问系统内存中一些受保护的特殊数据结构，普通用户进程是无权访问的，只能借助内核提供的系统调用来代表用户进程操作。
+调试器要能够随时打断程序的执行、接管控制权，这依赖处理器提供的陷阱（trap）、异常（exception）机制，我们不妨把它们统称为调试中断。以x86为例，处理器执行 `int 3` 指令（机器码0xCC）时，会触发3号陷阱（#BP）；内存访问命中调试寄存器（DR0~DR3）中设置的断点条件时，则会触发1号调试异常（#DB）。处理器会暂停当前的执行流，转去执行内核中断描述符表（IDT）中对应表项指向的处理程序，内核随后将这些事件通知给调试器进程（tracer），调试器由此获得对tracee的控制权。
 
-相比之下有个例外，DOS操作系统是实模式操作系统，由于没有对内存做保护，你可以直接做任何事情。
+软件断点、硬件断点分别基于上述哪一种机制实现，4.2.3.1 小节会展开介绍。需要提醒的是，处理器能够打断程序的执行，只是调试器获得控制权的第一步——调试器后续读写寄存器、内存、恢复执行等操作，仍然必须借助操作系统提供的系统调用来完成，这正是下一小节要讨论的内容。
 
 #### 4.2.2.2 系统调用
 
-现在，绝大多数操作系统都实现了内存保护模式，内存保护模式是多用户、多任务操作系统的根基。如果没有保护模式，根本就不存在所谓的安全。关于内存保护模式如何实现的，可以参考X86系列处理器的发展史。
+现在，绝大多数操作系统都实现了内存保护模式，内存保护模式是多用户、多任务操作系统的根基。如果没有保护模式，根本就不存在所谓的安全。
 
-Windows、Linux以及BSD都实现了内存保护模式，这意味着如果你想在这些平台上开发一个调试器，就需要通过平台提供的系统调用来实现。以Linux系统调用为例，调试器进程（tracer）可以通过 `ptrace(PTRACE_ATTACH…)` attach到一个被调试进程（tracee），然后操作系统内核会给tracee进程发送一个信号SIGSTOP，tracee进程就会停下来，tracer进程就可以通过 `waitpid(pid)`来等待tracee停止事件。当tracer进程感知到tracee进程停止执行之后，tracer进程就可以进一步通过 `ptrace`系统调用、配合其他ptrace参数 `PTRACE_GETREGS、PTRACE_SETREGS、PTRACE_PEEKDATA、PTRACE_POKEDATA等`来读写寄存器、内存数据、设置断点，通过PTRACE_SINGLESTEP、PTRACE_CONT等控制代码的执行等。
+Windows、Linux 以及 BSD 都实现了内存保护模式，这意味着如果你想在这些平台上开发一个调试器，就需要通过平台提供的系统调用来实现。以 Linux 系统调用为例，调试器进程（tracer）可以通过 `ptrace(PTRACE_ATTACH…)` attach 到一个被调试进程（tracee），然后操作系统内核会给 tracee 进程发送一个 SIGSTOP 信号，tracee 进程就会停下来，tracer 进程就可以通过 `waitpid(pid)` 等待 tracee 的停止事件。当 tracer 进程感知到 tracee 进程停止执行之后，就可以进一步通过 `ptrace` 系统调用，配合 `PTRACE_GETREGS、PTRACE_SETREGS、PTRACE_PEEKDATA、PTRACE_POKEDATA` 等其他参数来读写寄存器、内存数据、设置断点，通过 `PTRACE_SINGLESTEP`、`PTRACE_CONT` 等来控制代码的执行。
 
-简单提下内存 "**保护模式**" 的实现，这样有助于理解为什么现在调试器一般通过操作系统 "**系统调用**" 来实现，比如Linux ptrace。
-
-**实模式大致原理：**
-
-这里以x86处理器发展史来简单说明下，8086处理器是实模式寻址，意味着你可以写个程序通过CS:IP来跳到任意指令地址执行指令，或者DS:Offset读写任意内存地址数据，这样就很不安全。
-
-在Intel后续处理器上为了建立起内存保护模式，首先引入了特权级的概念，ring0~ring3（ring0权限最高），Linux中仅使用ring0、ring3这两个（区分内核态和用户态够用了）。然后又引入了GDT、LDT的概念，这个什么用呢，它们是个表结构，记录了一系列的内存区间以及访问这些内存位置所需要的特权级。在访问真正的内存区域之前，需要先查表检查特权级是否足够。
-
-**阻止执行任意位置指令：**
-
-实模式下的CS:IP直接可以计算后用来寻址，保护模式下不行，CS的含义已经变了，不再是代码段起始地址，它（CS部分位字段）变成了一个指向GDT、LDT中的索引，查GDT、LDT可以知道访问对应的内存区所需要的特权级信息。如果当前特权级低于CS对应的GDT描述项中的特权级，则不能访问对应内存区。这样执行指令的时候，就不能够随意指定个CS:IP地址去执行该位置的指令了。
-
-**阻止读写任意位置数据：**
-
-对于如何阻止读写任意位置的数据，这个问题可以通过类似的方式来做到，就不进一步展开了，感兴趣读者可以自己查阅资料。
-
-关于80286实现内存保护模式的更多信息，可参考[protected mode basics by Robert Collins](http://www.rcollins.org/articles/pmbasics/tspec_a1_doc.html)，您也可以参考《Linux内核源码情景分析》，这本书也对此进行了介绍。
-
-从 80286 开始，Intel 处理器就具备了保护模式的硬件基础，特权级、GDT/LDT 这些结构也一直沿用至今。80386 又在此之上引入了分页机制，段、页两种机制并存——由于处理器中段寄存器、表结构仍然存在，习惯上也把这种管理方式称为 "**段页式管理**"。需要说明的是，现代 x86-64 Linux 上，段寄存器虽然仍在，但用户态能否读、写、执行某块内存，真正逐页生效的检查是由分页机制完成的：页表项中的 U/S 位区分用户态/内核态，R/W 位控制写权限，NX 位控制执行权限。用户态完全可以执行自己地址空间内任何具备执行权限的页面（JIT 编译器正是这样工作的），但是如果你想指定其他进程的任意地址想去执行、读写，那是不允许的。
-
-那为什么调试器执行 tracee 的指令、读写 tracee 的数据，仍要借助系统调用呢？关键在于 tracee 的内存位于它自己的地址空间（页表）中，tracer 的页表里并没有这些页面的映射；只有内核才有权限修改页表、或者代表其他进程访问其地址空间。`ptrace` 以及 `/proc/pid/mem`、`process_vm_readv` 等，都是内核提供的这类访问通道。
+为什么调试器不能直接读写被调试进程的内存，而必须借助系统调用呢？这要从内存保护模式说起。简单来说，保护模式通过特权级（ring0~ring3）、段描述符（GDT/LDT）、分页机制（页表）检查每一次内存访问，把用户态进程限制在自己的地址空间内：既不能执行其他进程的指令，也不能读写其他进程的数据，只有内核才有权限跨越进程的地址空间。tracee 的内存位于它自己的地址空间（页表）中，tracer 的页表里并没有这些页面的映射，所以调试器执行 tracee 的指令、读写 tracee 的数据，只能通过系统调用由内核代劳——`ptrace` 以及 `/proc/pid/mem`、`process_vm_readv` 等，都是内核提供的这类访问通道。关于 x86 从实模式到保护模式的演进细节，可参考附录 [12.7 x86 实模式与内存保护模式](../12-appendix/7-x86-real-and-protected-mode.md)。
 
 > **扩展阅读**:
 >
@@ -163,58 +145,50 @@ Windows、Linux以及BSD都实现了内存保护模式，这意味着如果你�
 
 #### 4.2.2.3 解释器
 
-如果是调试一门解释型的语言，会简单的多，因为所有的调试基础设施都可以直接内建在解释器中。通过一个解释器，就可以无限制地访问执行引擎。所有的调试操作及其依赖的能力都是运行在用户空间而非内核空间，也就不需要借助系统调用了。没有什么东西是被隐藏的。所要做的就是增加扩展来处理断点、单步执行等操作。
+如果是调试一门解释型的语言，会简单得多，因为所有的调试基础设施都可以直接内建在解释器中。通过一个解释器，就可以无限制地访问执行引擎。所有的调试操作及其依赖的能力都是运行在用户空间而非内核空间，也就不需要借助系统调用了。没有什么东西是被隐藏的。所要做的就是增加扩展来处理断点、单步执行等操作。
 
-Andreas Zeller 在[《The Debugging Book》](https://www.debuggingbook.org/) 书中提到，解释型语言的调试器通常比编译型语言的调试器简单，因为解释型语言的执行过程是透明的，而编译型语言的执行过程是隐藏的。
+Andreas Zeller 在[《The Debugging Book》](https://www.debuggingbook.org/) 中也表达了同样的看法：
 
 > "Building a debugger for an interpreted language is much easier than for a compiled language... Since the interpreter already has full control over the execution, it can easily provide debugging features."
 
-**核心论点如下：**
+原因在于，解释器本身就是程序的运行环境，变量名、类型、源码映射等符号信息在执行期间仍然存在，调试器只需向解释器查询即可。编译型语言则不然：程序被翻译成机器码后这些信息已经消失，调试器必须借助 DWARF 等调试信息（见 4.2.1 节）才能将二进制状态映射回源代码。
 
-- **解释型语言（Interpreted Languages）**： 解释器本身就是程序的运行环境，运行时可以直接暴露的执行状态通常更多——符号级调试相关的信息（变量名、类型、源码映射等）往往直接可得，调试器只需要向解释器查询当前状态即可。因此，Zeller 认为编写解释型语言的调试器“相对简单”（Much easier），因为执行过程对解释器来说是透明的。
-- **编译型语言（Compiled Languages）**： 程序被翻译成了机器码，原本的变量名和结构在执行时已经消失了。调试器必须通过“调试信息”（如 DWARF 或 PDB 格式）这种复杂的辅助手段，强行将二进制状态映射回源代码。这种过程是“非自然的”，因为执行过程在硬件层面是隐藏的（Opaque）。
+需要说明的是，Zeller 的这一结论主要针对经典的树遍历解释器。现代运行时中解释与编译的界限已经模糊——CPython 先编译成字节码再解释执行，V8、LuaJIT、PyPy 等更是引入了 JIT 编译——此类运行时的调试器往往要借助反优化（deoptimization）或回退到基线解释器才能获得可靠的执行状态。
 
-Andreas Zeller 的结论主要针对经典的树遍历解释器。现代运行时中"解释 vs 编译"的界限已模糊：CPython 先编译成字节码再解释执行，V8、LuaJIT、PyPy 等运行时更是引入了 JIT 编译，JIT 优化（内联、死代码消除等）会破坏源码与执行状态之间的直接对应关系，调试器往往要借助反优化（deoptimization）或回退到基线解释器才能获得可靠的状态；协程、async/await 等异步机制也让跨越挂起点的单步执行变得复杂。并非所有解释器都会做到“每一行代码都保留完整符号表”。
-
-ps: Andreas Zeller 还维护了 [https://debuggingbook.org/](https://www.debuggingbook.org/) 这个网站，提供了jupyter notebook这种可以交互式阅读的电子书，但是是建立在解释型语言、解释器基础上的。对这部分内容感兴趣的读者可以参考，也会有所收获。
+> **扩展阅读**:
+>
+> - Zeller 维护的 [The Debugging Book](https://www.debuggingbook.org/) 提供了 Jupyter Notebook 形式的交互式电子书，其调试器正是构建在解释器之上的，感兴趣的读者可以参考。
 
 #### 4.2.2.4 内核调试器
 
-操作系统构建起严格的内存保护模式之后，要想调试内核本身，就得通过一种特殊类型的调试器。传统的用户模式下的调试器是不行的，因为内存保护模式（如段、页式管理的相关逻辑）阻止了用户态程序操作内核映像。
+操作系统构建起严格的内存保护模式之后，调试内核本身就成了一个问题：传统用户模式下的调试器无法胜任，因为内存保护模式（段、页式管理等）阻止了用户态程序操作内核映像。这个时候就需要一种特殊类型的调试器——内核调试器。
 
-你需要一个内核调试器！
+内核调试器运行在内核特权级，能够直接控制 CPU 的指令执行，通过单步执行、断点等操作调试、检查内核代码。这意味着内核调试器不受内存保护模式的限制，通常内核级调试器都是与操作系统内核镜像打包在一起的；有些厂商实现自己的内核级调试器时，也会考虑以设备驱动、可加载内核模块的形式来设计、开发。
 
-内核调试器，能够指挥、控制中央处理器（CPU），这样就可以通过单步执行、断点等操作对内核代码进行调试、检查。这意味着内核调试器必须能够避开内存保护模式机制，通常内核级调试器都是与操作系统内核镜像打包在一起的。有些厂商要实现自己的内核级调试器，也会考虑将调试器作为设备驱动、可加载的内核模块的方式来设计、开发。
+**内核调试和用户程序调试有着明显不同，我们以打印一个内存变量为例简单说明如下：**
 
-**内核调试和用户程序调试有着明显不同，我们以打印一个内存变量为例简单说明下：**
+- 假设打印这个变量时，该内存页面刚好被操作系统换出到了交换分区。如果是在用户级调试器中通过 `ptrace(PTRACE_PEEKDATA...)` 系统调用来读取，内核会自动把这个页面换回来，然后帮我们把数据读回来——这背后的缺页处理对调试器来说是完全透明的。
+- 而内核级调试则不同：调试器本身运行在内核中，缺页处理等机制都需要一步步地执行。此时直接打印变量地址很可能看不到值，反而只会触发一个缺页异常。
 
-- 当打印这个变量时，不巧这个内存页面被操作系统换出到交换区了，如果我们在用户级调试器里面通过系统调用的形式ptrace(PTRACE_PEEKDATA...)操作系统会自动把这个换出的页面加回来，然后帮把数据读回来，很简单，我们甚至都没有感觉到这背后一连串的缺页处理发生过。
-- 但是如果是内核级调试的话，内核级调试器需要调试内核的代码，一步步地，这样缺页处理这些问题也要一步步过，如果我们直接打印变量地址很可能是看不到值的，可能这只会触发一个缺页异常。
+内核级调试场景复杂，调试方式也多种多样：内核自带的 kgdb、kdb，虚拟机环境下的 gdb + QEMU，硬件级的 JTAG/OpenOCD，崩溃分析用的 Crash/Kdump，以及用于动态观测的 eBPF/Ftrace 等。
 
-**另外，内核级调试场景的复杂性，也决定了适用的调试器或者说调试方式的多样性：**
-
-- kgdb：内核自带的远程源码级调试工具，常用于源码级别定位和单步调试内核。
-- kdb：内核自带的交互式调试工具，可直接在内核环境下进行简单调试操作。
-- gdb + QEMU：结合QEMU虚拟机使用gdb，可用于内核源码的功能开发与学习。
-- JTAG/OpenOCD：硬件级的底层调试工具，适合芯片带板、Bootloader、裸机环境等调试场景。
-- Crash/Kdump：用于生产环境异常时的内核崩溃分析（core dump分析）。
-- eBPF/Ftrace：用于性能剖析、动态追踪、线上排查复杂问题等动态观测场景。
-
-> **扩展阅读：
+> **扩展阅读**:
 >
 > - [kernel space debuggers in Linux](https://sysplay.github.io/books/LinuxDrivers/book/Content/Part10.html)
-> - [user mode debugging vs kernel mode debugging](https://stackoverflow.com/questions/32998218/is-there-ever-an-advantage-to-user-mode-debug-over-kernel-mode-debug#:~:text=in%20kernel%20mode.-,User%20mode%20debugging,you%20need%20to%20have%20really%20professional%20comprehension%20of%20all%20those%20topics.,-Conclusion)
+> - [user mode debugging vs kernel mode debugging](<https://stackoverflow.com/questions/32998218/is-there-ever-an-advantage-to-user-mode-debug-over-kernel-mode-debug#:~:text=in%20kernel%20mode.-,User%20mode%20debugging,you%20need%20to%20have%20really%20professional%20comprehension%20of%20all%20those%20topics.,-Conclusion>)
 > - [kernel debugger internals](https://www.kernel.org/doc/html/v4.18/dev-tools/kgdb.html#kernel-debugger-internals)
 
 #### 4.2.2.5 调试器界面
 
 调试关心的是程序的状态，不同的调试器为用户提供了不同的方式来查看程序的运行状态。某些调试器（如gdb）提供简单但一致的命令行界面，其他调试器可能会与GUI环境集成。
 
-GUI调试器能够同时呈现和访问更多的机器状态信息，使用GUI调试器，您可以轻松地同时监视数十个程序元素。
+GUI调试器能够同时呈现和访问更多的机器状态信息，使用GUI调试器，您可以轻松地同时监视数十个程序元素。另一方面，如果你可能很难找到在所有平台上都能运行的GUI调试器，这个时候跨平台的命令行调试器相比GUI调试器来说就有优势了。
 
-另一方面，如果你正在开发跨平台的应用程序，则可能很难找到在所有平台上都能运行的GUI IDE，这个时候跨平台的命令行调试器相比GUI调试器来说就有优势了。命令行调试器可能没有精美的GUI接口，但在任何平台上其命令行操作和行为都是一样的。命令行调试器相比GUI调试器拥有更陡峭的学习曲线，但一旦掌握了，你就可以在不同平台以一致的方式调试你的应用程序。
+命令行调试器可能没有精美的GUI接口，但在任何平台上其命令行操作和行为都是一样的。命令行调试器相比GUI调试器拥有更陡峭的学习曲线，但一旦掌握了，你就可以在不同平台以一致的方式调试你的应用程序。
 
-### 4.2.3 符号调试器
+### 4.2.3 断点与执行控制
+
+断点和单步执行，是调试器控制程序执行的两个核心机制：断点让程序在指定位置停下来，单步执行则让程序逐条语句地推进。本节就来介绍它们背后的工作原理。
 
 #### 4.2.3.1 程序断点
 
@@ -297,13 +271,13 @@ X86平台上创建软件断点可以通过指令 `int 3`来生成**0xCC**这个�
 
 #### 4.2.3.2 单步执行
 
-对指令级调试器（也称机器级调试器）而言，单步执行很简单：处理器只需执行下一条机器指令，然后将程序控制权返回给调试器。 对于符号调试器，此过程并不那么简单，因为高级编程语言中的单个语句通常会转换为多个机器级指令，而且不同源代码语句对应的机器指令数量也不同。
+对指令级调试器（也称机器级调试器）而言，单步执行很简单：处理器只需执行下一条机器指令，然后将程序控制权返回给调试器。 对于符号级调试器，此过程并不那么简单，因为高级编程语言中的单个语句通常会转换为多个机器级指令，而且不同源代码语句对应的机器指令数量也不同。
 
-符号调试器如何插入动态断点呢？这将取决于单步执行的动作的类型，可分三种类型。
+符号级调试器如何插入动态断点呢？这将取决于单步执行动作的类型，可以分为三种类型。
 
 ##### 4.2.3.2.1 单步执行进入 (下一条语句)
 
-当符号调试器单步执行函数调用时，如 `function(value)` ，调试器需要检查接下来的机器指令，确认是否是函数调用（CALL指令）：
+当符号级调试器单步执行函数调用时，如 `function(value)` ，调试器需要检查接下来的机器指令，确认是否是函数调用（CALL指令）：
 
 - 如果不是，下一条指令操作码不是函数调用，则当普通断点处理即可，保存该操作码并将其替换为断点。
 - 如果是，需要确定CALL指令实际要执行的函数体在内存中的地址，并在函数体开头指令处设置断点。
