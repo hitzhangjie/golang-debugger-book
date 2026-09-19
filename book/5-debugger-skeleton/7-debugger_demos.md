@@ -4,8 +4,6 @@
 
 先看下godbg的执行效果，然后大致介绍下源码的组织方式，方便读者了解讲解的功能点对应代码的哪一部分，后续新增章节的内容、源码就很容易对应上了。
 
-ps: 最开始作者也是想在此godbg基础上演化成符号级调试器，前几节也提过了，最终的符号级调试器demo是裁剪的go-delve/delve，就不再赘述了，ok!
-
 ### 运行效果
 
 #### 调试器帮助信息
@@ -196,7 +194,7 @@ var execCmd = &cobra.Command{
  Run: func(cmd *cobra.Command, args []string) {
         // TODO start process and attach
   fmt.Printf("exec %s\n", strings.Join(args, ""))
-      
+    
   debug.NewDebugShell().Run()
  },
 }
