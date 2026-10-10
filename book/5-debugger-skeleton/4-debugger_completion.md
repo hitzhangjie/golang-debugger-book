@@ -28,7 +28,20 @@ source ~/.bash_godbg
 
 - [go-prompt](https://github.com/c-bata/go-prompt)是一个不错的自动补全的库，它能够在程序运行期间根据用户输入自动给出自动补全的候选列表，并且支持多种选项设置，如候选列表的颜色、选中列表项的颜色等等。可以说，go-prompt是一个非常不错的选择。但是它的命令管理不如spf13/cobra方便，实际上它也可以和cobra结合使用。
 - [cobra-prompt](https://github.com/stromland/cobra-prompt) 就是来解决这个问题的，它将go-prompt和spf13/cobra进行了一个比较好的集成，既能利用cobra的命令管理，也能发挥go-prompt的自动补全优势。cobra-prompt的实现原理很简单，将go-prompt获得的用户输入适当处理后，转给cobra debugRootCmd进行处理就可以。
-- [liner](https://github.com/peterh/liner) 本书第6章提供的指令级调试器实现，最初采用了cobra-prompt进行开发，但是最终使用了liner进行代替，因为cobra-prompt的自动补全功能会经常干扰调试会话信息的连贯性，不一定真的有实质性的帮助，所以最后我们替换为了liner代替。最后，使用liner读取用户键入的调试命令，并通过cobra的命令管理来执行调试动作。简言之，我们仍然具备自动补全能力，只是放弃了go-prompt似的自动补全方式。
+
+  调试会话早期试过这一版。启动之后会先弹出一次命令列表，提示符是 `godbg>`，之后在没有输入时不再反复弹出，免得把会话刷屏。
+
+  ![godbg prompt showAtStart](assets/godbg_prompt1.png)
+
+  输入过程中，候选命令会跟着当前输入过滤。以清除断点为例，`clear` 清除单个断点，`clearall` 清除全部断点。输入 `cl` 时可以匹配到这两个命令，用 Tab 或方向键在列表里移动，回车选中。
+
+  ![godbg prompt commands](assets/godbg_prompt2.png)
+
+  命令参数也可以补全。以 `list` 查看源码为例，候选项可以是进程涉及到的源文件，比如下面的 `main.go`、`helloworld.go`。
+
+  ![godbg prompt suggestions](assets/godbg_prompt3.png)
+
+- [liner](https://github.com/peterh/liner) 上面这种弹出列表看起来直接，调试一会儿就会发现它把已经打出来的信息隔开了，阅读不连贯。第6章的指令级调试器，以及配套工程 godbgv2 从骨架（tag `ch5.4`）起，都改用 liner 读取调试命令，再交给 cobra 执行。补全还在：按下 Tab 时，先补公共前缀，再按一次就把候选项打印在提示符下方，习惯和 bash 接近。
 
 ps: 这里我们只对调试会话内的命令进行了输入自动补全，对于命令选项，则没有进行支持。调试器使用者可以通过 `help <command>` 查看相应选项及帮助信息。
 
@@ -44,6 +57,6 @@ ps：这部分内容权当一种“愿景”了，我们不一定真的实现，
 
 ### 本节小结
 
-本节梳理了调试器输入自动补全的三个层面：借助spf13/cobra生成的shell补全脚本，解决启动调试命令及选项的补全；借助go-prompt、cobra-prompt、liner等库，解决调试会话内调试命令的补全；更进一步，还可以为每个调试命令设置专用的completer，实现命令参数值（如函数名、文件名）的自动补全。
+本节梳理了调试器输入自动补全的三个层面：借助spf13/cobra生成的shell补全脚本，解决启动调试命令及选项的补全；借助cobra-prompt的弹出列表（本节配了运行截图）以及后续采用的liner，解决调试会话内调试命令的补全；更进一步，还可以为每个调试命令设置专用的completer，实现命令参数值（如函数名、文件名）的自动补全。
 
 良好的输入自动补全能力，可以让调试人员不必因遗忘命令而中断调试活动，显著降低命令行调试器的使用门槛。除了命令管理和输入补全，调试器还需要考虑更多维度的可扩展性设计，下一节我们将对此进行介绍。

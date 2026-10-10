@@ -2,304 +2,291 @@
 
 结合前面的思考，我们初步实现了一个调试器的雏形 `godbg`，它大致包含了我们需要的交互能力。后面我们将在此基础上一步步实现指令级调试器、符号级调试器。
 
-先看下godbg的执行效果，然后大致介绍下源码的组织方式，方便读者了解讲解的功能点对应代码的哪一部分，后续新增章节的内容、源码就很容易对应上了。
+先看下godbg的执行效果，然后大致介绍下源码的组织方式，方便读者了解讲解的功能点对应代码的哪一部分，后续新增章节的内容、源码就很容易对应上了。这一版骨架对应配套工程 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch5.4`，`git checkout ch5.4` 即可得到本节的代码。
 
 ### 运行效果
 
 #### 调试器帮助信息
 
-`godbg help`用于展示启动调试器时的使用帮助信息。我们可以看到它有几个子命令，attach、core、exec分别对应不同的启动调试器的方式，help用于查看godbg及上述几个调试命令的使用帮助信息。
+`godbg help`用于展示启动调试器时的使用帮助信息。可以看到它有几个子命令：`exec`、`attach`、`debug`、`core` 分别对应不同的启动方式，`version` 用来区分 godbgv2 和旧的同名二进制，`help` 用来查看 godbg 及上述命令的使用帮助。
 
 ```bash
 $ godbg help
-
-godbg是一个go程序符号级调试器，它是以学习为目的驱动开发的调试器，
-希望我们的工作可以为更多人打开一个认识计算机世界的大门，不谢！
+godbg 是一个以学习为目的、从零编写的 go 调试器，
+它随《Go 调试器开发指北》(golang-debugger-book) 的章节逐步演进：
+- 第6章: 指令级调试 (exec/attach/debug)
+- 第9章: 符号级调试 (headless/connect)
 
 Usage:
-  godbg [flags]
   godbg [command]
 
 Available Commands:
-  attach      调试运行中进程
-  core        调试核心转储
+  attach      跟踪正在运行的进程
+  completion  Generate the autocompletion script for the specified shell
+  core        调试 core 转储文件
+  debug       构建并调试 go 程序
   exec        调试可执行程序
   help        Help about any command
+  version     打印版本信息
 
 Flags:
-      --config string   config file (default is $HOME/.godbg.yaml)
-  -h, --help            help for godbg
+  -h, --help      help for godbg
+  -v, --verbose   show verbose info
 
 Use "godbg [command] --help" for more information about a command.
 ```
 
 #### 调试器调试会话界面
 
-当启动godbg之后，默认会以弹出提示列表的方式来列出调试器支持的命令信息，这个只会在godbg启动时展示一次，期间为了保证调试会话不被污染，在没有用户输入时是不会显示任何提示信息的。
+`exec`、`attach`、`debug`、`core` 在各自的准备工作做完之后，都会进入同一个交互式调试会话。提示符是“**godbg>**”，调试命令都在这里输入。
 
-调试器启动成功后，会通过“**godbg>**”来表示当前创建好的调试会话，我们在此调试会话中输入调试命令来完成对应的调试动作。
+会话启动后，终端上只有这个提示符。输入补全使用 [liner](https://github.com/peterh/liner)，按键习惯和 bash 接近：按下 Tab，先把已输入的内容补到各个候选项的公共前缀；再按一次 Tab，候选项打印在提示符下方。输入 `cl` 时，第一次 Tab 会补成 `clear`，再按一次就能看到 `clear` 和 `clearall`。什么都不输入、只敲回车，会把上一条命令再执行一遍。
 
-![godbg prompt showAtStart](assets/godbg_prompt1.png)
-
-以清除断点操作为例，clear是清除单个断点，clearall是清除所有的断点，当我们输入 `cl`时，可以匹配到 `clear`、`clearall`两个命令，开发人员可以通过 `tab`按键或者 `arrow-down`来在候选列表中移动，`enter`选中列表项。
-
-![godbg prompt commands](assets/godbg_prompt2.png)
-
-再看一个命令参数层面自动补全的例子，以list查看源码命令为例，此时会返回进程中涉及到的源码信息，如此处有main.go helloworld.go，方便用户选择，调试时就更简单了。
-
-![godbg prompt suggestions](assets/godbg_prompt3.png)
-
-这是关于调试会话界面的运行效果展示。
-
-> NOTE: 有必要提及的是，当前小节在撰写时是基于cobra-prompt实现的调试器版本进行描述的，在后续开发中，我们移除了cobra-prompt的自动补全方式，转而采用对用户干扰更小的自动补全方式，文档中的描述暂未来得及更新。
->
-> 读者也不用过于担心，这点不一致还不至于给上手学习带来负担。后续，我们会基于最新版实现更新这里的交互界面。
+cobra-prompt 那种弹出候选列表的效果，5.4 节已经配了截图。本节骨架（tag `ch5.4`）采用的是 liner，这里不再重复那几张图。
 
 #### 会话中显示帮助信息
 
 调试器调试会话中支持多个调试命令，各调试命令的功能是什么，又如何使用呢？
 
-在调试器内部运行帮助命令“**godbg> help**”，就可以列出调试器已经支持的所有命令及其功能说明，并且对这些命令按照功能进行了归类，如断点相关的命令break、clear、clearall全部放置在了分组“**[breakpoint]**”下面，代码相关的有list、disass全部放置在了“**[code]**”分组下面，控制流相关的有next、step、finish全部放在了“**[ctrlflow]**”下面，还有其他一些调试命令。
+在调试器内部运行帮助命令“**godbg> help**”，就可以列出调试器已经支持的所有命令及其功能说明，并且对这些命令按照功能进行了归类。断点相关的 break、breakpoints、clear、clearall 放在“**[breaks]**”下面，源码相关的 list、disass 放在“**[source]**”下面，执行控制相关的 continue、next、step、finish 放在“**[execute]**”下面，查看信息的 bt、frame、pmem、pregs、ptypes 放在“**[info]**”下面，其余命令放在“**[other]**”。
 
 ```bash
 godbg> help
-interactive debugging commands
+godbg interactive debugging commands
 
-[breakpoint]
-break <locspec> : 在源码中添加断点
-clear <n>       : 清除指定编号的断点
-clearall <n>    : 清除所有的断点
+help [command]
+  -h, --help   help for help
 
-[code]
-disass <locspec>: 反汇编机器指令
-list <linespec> : 查看源码信息
+- [breaks]
+  break           :添加断点
+  breakpoints     :列出断点
+  clear           :移除断点
+  clearall        :清空全部断点
 
-[ctrlflow]
-finish          : 退出当前函数
-next            : 执行一条语句
-step            : 执行一条指令
+- [source]
+  disass          :反汇编指定地址的机器指令
+  list            :列出源码
 
-[information]
-bt              : 打印调用栈信息
-display <var|reg>: 始终显示变量或寄存器值
-frame           : 选择调用栈中栈帧
-print <var|reg> : 打印变量或寄存器值
-ptypes <variable>: 打印变量类型信息
-set <var|reg>=<value>: 设置变量或寄存器值
+- [execute]
+  continue        :运行到下一个断点处
+  finish          :执行直到当前函数返回
+  next            :单步执行（跳过函数调用）
+  step            :单指令步进执行
 
-[other]
-exit            : 结束调试会话
-help [command]  : Help about any command
+- [info]
+  bt              :查看调用栈
+  frame           :切换当前栈帧
+  pmem            :查看内存数据
+  pregs           :查看寄存器数据
+  ptypes          :查看变量类型
+
+- [other]
+  display         :每停一次打印一次表达式
+  exit            :结束调试会话
+  set             :修改变量值
+  completion      :Generate the autocompletion script for the specified shell
+  help            :Help about any command
 ```
 
-如果想详细了解某一个调试命令如何使用，可以运行“**godbg> help `cmd`**”，如想查看break命令的使用运行“**godbg> help break**”。
+`other` 组末尾的 `completion`、`help` 是 cobra 挂到会话根命令上的内置命令。如果想详细了解某一个调试命令如何使用，可以运行“**godbg> help `cmd`**”，如查看 break 命令：
+
+```bash
+godbg> help break
+添加断点
+
+break <locspec>
+  -h, --help   help for break
+```
 
 #### 会话中执行调试命令
 
-这里以显示源码信息为例，来演示如何在调试会话中执行调试动作。调试会话中执行调试命令“**godbg> list main.go**”来显示main.go中的源码信息。
+这里以显示源码信息为例，来演示如何在调试会话中执行调试动作。调试会话中执行“**godbg> list main.go**”：
 
 ```bash
 godbg> list main.go
-list codes in file
+TODO(ch9.2.35): list 尚未实现
 ```
 
-我们试运行命令 `list main.go`发现输出了一行语句，并没有实际打印源代码出来。
-
-别急，这就是我们提到过的，目前这还只是一个调试器的雏形，我们确实已经把该搭的架子搭起来了，接下来的章节，我们将一步步实现这里的各个命令，实现指令级调试器，再实现符号级调试器。
+输出的是一行占位说明，源码本身还不会打印出来。别急，目前这还只是一个调试器的雏形，架子已经搭好了。接下来的章节，我们将一步步实现这里的各个命令，先做指令级调试器，再做符号级调试器。`list` 真正按行号表展示源码，要到第 9 章。
 
 ### 代码实现
 
-该调试器代码，详见：[golang-debugger-lessons/0_godbg](https://github.com/debugger101/golang-debugger-lessons/tree/master/0_godbg)，现在大致看下实现。
+该调试器骨架的代码在 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch5.4`，现在大致看下实现。
 
 #### 目录结构
 
-godbg的源码目录结构如下所示，为了节省篇幅省略了部分文件条目：
+godbgv2 在这一版的源码目录如下，为了节省篇幅省略了部分命令文件：
 
 ```bash
-tree godbg
-godbg                         : 项目根目录
-├── LICENSE                   ：版权信息
-├── cmd                       ：调试器启动调试的命令
-│   ├── root.go               : rootCmd绑定了子命令core、exec、attach
-│   ├── attach.go
-│   ├── core.go
+godbgv2                       : 项目根目录
+├── main.go                   ：程序入口 main.main
+├── cmd                       ：进程级启动命令
+│   ├── root.go               : rootCmd，挂上 exec、attach、debug、core、version
 │   ├── exec.go
-│   ├── debug                 ：调试会话中可使用的调试命令
-│   │   ├── root_debug.go   : debugRootCmd绑定了众多调试会话调试命令
-│   │   ├── backtrace.go
-│   │   ├── break.go
-│   │   ├── clear.go
-│   │   ├── clearall.go
-│   │   ├── disass.go
-│   │   ├── display.go
-│   │   ├── exit.go
-....
+│   ├── attach.go
+│   ├── debug.go
+│   ├── core.go
+│   └── debug                 ：调试会话中可使用的调试命令
+│       ├── shell.go          : 调试会话，以及按分组展示的 help
+│       ├── break.go
+│       ├── breakpoints.go
+│       ├── clear.go
+│       ├── clearall.go
+│       ├── list.go
+│       ├── disass.go
+│       └── ...
 ├── go.mod
-├── go.sum
-├── main.go                  ：程序入口main.main
-├── syms                     ：符号层，用于实现指令地址和源码的映射、符号查询等等
-└── target                   ：target层，用于实现低级操作，如指令patch设置断点等等
-    ├── backtrace.go
-    ├── breakpoint.go
-    ├── call.go
-    ├── continue.go
-    ├── disassemble.go
-    ....
-
+└── go.sum
 ```
 
-可见我们已经将大部分调试需要的命令给纳入进来了，只不过还没有实现，后续我们将一步步实现各个调试命令。命令实现的功能逻辑，可能会涉及到对应的 `${命令}.go`文件，以及符号层syms package、target层target package下的相关代码。
-
-介绍完代码组织，后面讲解一个调试命令或者功能的实现时，读者应该可以方便快速地找到对应的实现代码。
+这一版还只有命令层。各个调试命令都注册好了，函数体里是带章节号的 TODO。符号层、目标层要到后面的章节才加进来。后面讲解某个调试命令时，先到 `cmd/debug/` 下找同名文件即可。
 
 #### 源码解析：命令管理逻辑
 
-熟悉cobra编程的看完main.go就会知道该调试器是基于cobra进行命令管理的。
+熟悉 cobra 的话，看完 `main.go` 就知道命令是交给 cobra 管的。
 
 ```go
 package main
 
-import "godbg/cmd"
+import "github.com/hitzhangjie/godbgv2/cmd"
 
 func main() {
- cmd.Execute()
+	cmd.Execute()
 }
 ```
 
-godbg下各个子命令exec、debug、core分别对应cmd/exec.go、cmd/debug.go、cmd/core.go，它们都是cmd/root.go中定义的rootCmd的子命令。
+直接运行 `godbg` 时，cobra 打印前面看到的帮助信息。进入调试会话要走子命令。`exec`、`attach`、`debug`、`core` 分别对应 `cmd/exec.go`、`cmd/attach.go`、`cmd/debug.go`、`cmd/core.go`，它们都挂在 `cmd/root.go` 的 `rootCmd` 上。
 
 ```go
 var rootCmd = &cobra.Command{
- Use:   "godbg",
- Short: "godbg是一个面向go语言的符号级调试器",
- Long: `
-godbg是一个go程序符号级调试器，它是以学习为目的驱动开发的调试器，
-希望我们的工作可以为更多人打开一个认识计算机世界的大门，不谢！`,
- // Uncomment the following line if your bare application
- // has an action associated with it:
- Run: func(cmd *cobra.Command, args []string) {
-  // TODO comment out this, this should be enabled only in debugging phase
-  debug.NewDebugShell().Run()
- },
+	Use:   "godbg",
+	Short: "godbg 是一个面向 go 语言的调试器",
+	Long: `godbg 是一个以学习为目的、从零编写的 go 调试器，
+它随《Go 调试器开发指北》(golang-debugger-book) 的章节逐步演进：
+- 第6章: 指令级调试 (exec/attach/debug)
+- 第9章: 符号级调试 (headless/connect)`,
 }
 ```
 
-当我们执行godbg的时候，执行的 `rootCmd.Run()`逻辑，当我们执行 `godbg exec`的时候执行的则是 `execCmd.Run()`逻辑，这个很好理解，也很容易上手。
+`godbg exec <prog>` 走 `execCmd`。`Run` 里处理“启动并跟踪进程”，这一节还是 TODO；`PostRun` 里创建调试会话并 `Start()`。`attach`、`debug`、`core` 也是同样的收尾。
 
 ```go
 var execCmd = &cobra.Command{
- Use:   "exec <prog>",
- Short: "调试可执行程序",
- Long:  `调试可执行程序`,
- Run: func(cmd *cobra.Command, args []string) {
-        // TODO start process and attach
-  fmt.Printf("exec %s\n", strings.Join(args, ""))
-    
-  debug.NewDebugShell().Run()
- },
+	Use:   "exec <prog>",
+	Short: "调试可执行程序",
+	Long:  `调试可执行程序`,
+	Run: func(cmd *cobra.Command, args []string) {
+		// TODO(ch6.1): 启动并跟踪被调试进程 (ptrace TRACEME)
+		fmt.Println("TODO(ch6.1): 启动并跟踪被调试进程")
+	},
+	PostRun: func(cmd *cobra.Command, args []string) {
+		debug.CurrentSession = debug.NewDebugSession()
+		debug.CurrentSession.Start()
+	},
 }
 
 func init() {
- rootCmd.AddCommand(execCmd)
+	rootCmd.AddCommand(execCmd)
 }
 ```
 
-以上是 `godbg exec <prog>`时要执行的exec命令，它首先启动进程并attach到进程，准备就绪后，再启动一个调试会话，我们在调试会话中继续输入调试命令来进行调试。
+进程侧的准备工作做完，就进入调试会话，后面的调试命令都在会话里输入。
 
 #### 源码解析：调试会话调试命令管理
 
-godbg/cmd/debug/root_debug.go中是使用cobra-prompt构建的一个命令管理器，它结合了cobra命令管理以及go-prompt的自动提示补全能力，非常适合管理命令多、命令选项多、命令候选参数多、命令使用频繁的场景，比如调试器会话中。
-
-只需要执行 `debug.NewDebugShell().Run()`即可快速模拟一个调试会话的用户输入、执行处理、完成调试信息展示的逻辑。
+调试会话在 `cmd/debug/shell.go`。读入用 liner，命令分发仍交给 cobra：liner 拿到一行输入，`SetArgs` 之后调用 `debugRootCmd.Execute()`。
 
 ```go
-// NewDebugShell 创建一个debug专用的交互管理器
-func NewDebugShell() *cobraprompt.CobraPrompt {
+const prefix = "godbg> "
 
- fn := func() func(cmd *cobra.Command) error {
-  return func(cmd *cobra.Command) error {
-   usage := groupDebugCommands(cmd)
-   fmt.Println(usage)
-   return nil
-  }
- }
- debugRootCmd.SetUsageFunc(fn())
+func NewDebugSession() *DebugSession {
+	// 此处省略：把 HelpFunc 设成按分组打印命令
+	return &DebugSession{
+		done:   make(chan bool),
+		prefix: prefix,
+		root:   debugRootCmd,
+		liner:  liner.NewLiner(),
+	}
+}
 
- return &cobraprompt.CobraPrompt{
-  RootCmd:                debugRootCmd,
-  DynamicSuggestionsFunc: dynamicSuggestions,
-  ResetFlagsFlag:         true,
-  GoPromptOptions: []prompt.Option{
-   prompt.OptionTitle(description),
-   prompt.OptionPrefix(prefix),
-   prompt.OptionSuggestionBGColor(prompt.DarkBlue),
-   prompt.OptionDescriptionBGColor(prompt.DarkBlue),
-   prompt.OptionSelectedSuggestionBGColor(prompt.Red),
-   prompt.OptionSelectedDescriptionBGColor(prompt.Red),
-   // here, hide prompt dropdown list
-   // TODO do we have a better way to show/hide the prompt dropdown list?
-   prompt.OptionMaxSuggestion(10),
-   prompt.OptionShowCompletionAtStart(),
-  },
-  EnableSilentPrompt: true,
-  EnableShowAtStart:  true,
- }
+func (s *DebugSession) Start() {
+	s.liner.SetCompleter(completer)
+	s.liner.SetTabCompletionStyle(liner.TabPrints)
+
+	for {
+		select {
+		case <-s.done:
+			s.liner.Close()
+			return
+		default:
+		}
+
+		txt, err := s.liner.Prompt(s.prefix)
+		if err != nil {
+			panic(err)
+		}
+
+		txt = strings.TrimSpace(txt)
+		if len(txt) != 0 {
+			s.last = txt
+			s.liner.AppendHistory(txt)
+		} else {
+			txt = s.last
+		}
+
+		s.root.SetArgs(strings.Split(txt, " "))
+		s.root.Execute()
+	}
 }
 ```
 
-关于自定义自动提示信息的实现，可以参考函数实现 `dynamicSuggestions(string, prompt.Document)`。
+`TabPrints` 就是 bash 那种补全：候选项打印在提示符下方。空行会改去执行 `s.last`，所以只敲回车等于重复上一条命令。`completer` 只补命令名和别名。
 
 ```go
-func dynamicSuggestions(annotation string, _ prompt.Document) []prompt.Suggest {
-   switch annotation {
-   case suggestionListSourceFiles:
-      return GetSourceFiles()
-   default:
-      return []prompt.Suggest{}
-   }
-}
-
-// list 输入list时返回候选源文件名作为提示补全信息
-func GetSourceFiles() []prompt.Suggest {
- return []prompt.Suggest{
-  {Text: "main.go", Description: "main.go"},
-  {Text: "helloworld.go", Description: "helloworld.go"},
- }
+func completer(line string) []string {
+	cmds := []string{}
+	for _, c := range debugRootCmd.Commands() {
+		if strings.HasPrefix(c.Use, line) {
+			cmds = append(cmds, strings.Split(c.Use, " ")[0])
+		}
+		for _, alias := range c.Aliases {
+			if strings.HasPrefix(alias, line) {
+				cmds = append(cmds, alias)
+			}
+		}
+	}
+	return cmds
 }
 ```
 
-需要注意的是cobra-prompt规定了cobra command只有添加了 `<cobraprompt.CALLBACK_ANNOTATION,"value">`的annotation项之后才会激发命令参数的自动补全逻辑。以list命令将源文件列表作为补全信息为例，list命令在Annotations这个map字段中添加了CALLBACK_ANNOTATION的kvpair。
+命令通过 annotation 归到分组，`help` 时按组打印。`list` 在 source 组，别名是 `ls` 和 `l`。这一版的 completer 只处理命令名和别名；按源文件名补全参数，是 5.4 节里 cobra-prompt 演示过的能力，当前骨架里暂时没有采用。
 
 ```go
 var listCmd = &cobra.Command{
-   Use:     "list <linespec>",
-   Short:   "查看源码信息",
-   Aliases: []string{"l"},
-   Annotations: map[string]string{
-      cmdGroupKey:                     cmdGroupSource,
-      cobraprompt.CALLBACK_ANNOTATION: suggestionListSourceFiles,
-   },
-   Run: func(cmd *cobra.Command, args []string) {
-      fmt.Println("list codes in file")
-   },
+	Use:     "list [locspec]",
+	Short:   "列出源码",
+	Aliases: []string{"ls", "l"},
+	Annotations: map[string]string{
+		cmdGroupAnnotation: cmdGroupSource,
+	},
+	Run: func(cmd *cobra.Command, args []string) {
+		// TODO(ch9.2.35): 基于行号表展示源码
+		fmt.Println("TODO(ch9.2.35): list 尚未实现")
+	},
 }
 ```
 
-调试会话中运行 `list main.go`
+调试会话中运行 `list main.go`：
 
 ```bash
 godbg> list main.go
-list codes in file
+TODO(ch9.2.35): list 尚未实现
 ```
 
-我们试运行命令 `list main.go`发现输出了一行语句，代表命令已经顺利执行了，我们后面会实现真实的展示源代码的功能。
+命令已经能执行，只是还停在占位输出上。后面的章节会把这些 TODO 换成真正的调试动作。
 
-现在，我们大致介绍了godbg的一个相对完整的骨架，相信读者朋友们已经跃跃欲试想进入下一步的开发了 :) 。
-
-> Note：在该调试器demo的完整版实现中，详见 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 中，我们已经彻底移除了cobraprompt，动态提示对调试会话干扰性有点大，在其他的非高频输入的命令行程序中使用更合适。
+现在，我们大致介绍了 godbg 的一个相对完整的骨架，相信读者朋友们已经跃跃欲试想进入下一步的开发了 :) 。
 
 ### 本节小结
 
-本节我们通过具体的演示和代码片段，展示了调试器雏形 godbg 的基本交互能力，包括命令行帮助信息、调试会话界面、命令及参数的自动补全、分组帮助等功能。我们详细介绍了如何利用 cobra-prompt 实现命令参数的动态补全，并结合实际代码说明了命令注册、补全回调的实现方式。通过这些内容，读者可以直观感受到调试器的基本使用体验和交互流程，为后续深入实现各个调试功能模块（如断点管理、单步执行、源码查看等）打下了坚实的基础。
-
-接下来，我们将以此骨架为基础，逐步实现调试器的核心功能模块，深入剖析调试器各层的设计与实现细节，帮助大家系统掌握调试器开发的关键技术点。
+本节主要探讨了调试器雏形 godbg 的运行效果和骨架代码，核心内容包括：`godbg help` 展示的启动命令；以 `godbg>` 为提示符、用 liner 做命令补全的调试会话；按分组展示的 `help`，以及尚未实现的调试命令桩。配套代码在 godbgv2 的 tag `ch5.4`。本节内容为读者学习后续的指令级调试、符号级调试打下了骨架上的基础。
