@@ -294,9 +294,9 @@ ch6.4 的冒烟脚本内容很简单：回放 help、断言输出、回放 exit�
 # ch6.4 smoke: 验证调试会话可脚本化回放（--init 批量模式），退出时善后
 help
 =godbg interactive debugging commands
-=- \[breaks\]
-=- \[execute\]
-=- \[info\]
+=\[breaks\]
+=\[execute\]
+=\[info\]
 exit
 # 会话退出（含批量回放结束）时按 Kind 善后：exec 启动的 tracee 被 kill
 =tracee is run by tracer, kill it
@@ -316,7 +316,7 @@ godbg interactive debugging commands
 help [command]
   -h, --help   help for help
 
-- [breaks]
+[breaks]
   ...（分组展示，与 5.7 节一致）
 godbg> exit
 tracee is run by tracer, kill it

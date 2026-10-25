@@ -61,35 +61,35 @@ godbg interactive debugging commands
 help [command]
   -h, --help   help for help
 
-- [breaks]
-  break           :添加断点
-  breakpoints     :列出断点
-  clear           :移除断点
-  clearall        :清空全部断点
+[breaks]
+break, b         :添加断点
+breakpoints, bp  :列出断点
+clear            :移除断点
+clearall         :清空全部断点
 
-- [source]
-  disass          :反汇编指定地址的机器指令
-  list            :列出源码
+[source]
+disass, dis      :反汇编指定地址的机器指令
+list, ls, l      :列出源码
 
-- [execute]
-  continue        :运行到下一个断点处
-  finish          :执行直到当前函数返回
-  next            :单步执行（跳过函数调用）
-  step            :单指令步进执行
+[execute]
+continue, c      :运行到下一个断点处
+finish           :执行直到当前函数返回
+next, n          :单步执行（跳过函数调用）
+step, s          :单指令步进执行
 
-- [info]
-  bt              :查看调用栈
-  frame           :切换当前栈帧
-  pmem            :查看内存数据
-  pregs           :查看寄存器数据
-  ptypes          :查看变量类型
+[info]
+bt, stack        :查看调用栈
+frame            :切换当前栈帧
+pmem             :查看内存数据
+pregs            :查看寄存器数据
+ptypes           :查看变量类型
 
-- [other]
-  display         :每停一次打印一次表达式
-  exit            :结束调试会话
-  set             :修改变量值
-  completion      :Generate the autocompletion script for the specified shell
-  help            :Help about any command
+[other]
+display          :每停一次打印一次表达式
+exit             :结束调试会话
+set              :修改变量值
+completion       :Generate the autocompletion script for the specified shell
+help             :Help about any command
 ```
 
 如果想详细了解某一个调试命令如何使用，可以运行“**godbg> help `cmd`**”，如查看 break 命令：
