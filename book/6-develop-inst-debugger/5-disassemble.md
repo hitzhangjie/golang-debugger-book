@@ -467,6 +467,10 @@ godbg> disass 0x478120 -n 3 -s intel
 0x478120:	e9 bb c8 ff ff	jmp 0xffffffffffffc8c4
 0x478125:	cc	int3
 0x478126:	cc	int3
+godbg> disass
+0x478120:	e9 bb c8 ff ff	jmpq 0xffffffffffffc8c4
+0x478125:	cc	int3
+...（共 10 条，语法回到默认的 gnu）
 godbg> help disass
 反汇编机器指令（缺省从当前停止位置开始）
 
@@ -481,6 +485,7 @@ disass [address]
 - `_fixtures/loop` 的 ELF 入口地址是 `0x478120`（`readelf -h _fixtures/loop` 里的 Entry point address），exec 启动后初始停止位置就是入口，所以无参 `disass` 和 `disass 0x478120` 的起点一致；入口处是一条 jmp，后面跟着一串 int3 填充；
 - `disass` 默认反汇编 10 条，这里就是 1 条 jmp 加 9 条 int3；`disass -n 5` 只输出 5 条；`disass 0x478120 -n 3` 从指定地址开始、输出 3 条。每行三列分别是地址、机器码、汇编文本，用 tab 分隔；
 - `-s intel` 切换语法之后，同一条 jmp 从 `jmpq` 变成 `jmp`（gnu/AT&T 风格带操作码后缀）。指令和地址都没有变，变的只是文本呈现；
+- `-s intel` 之后再执行一次不带选项的 `disass`，输出回到默认的 10 条、gnu 语法，没有沿用上一条的 `-n 3 -s intel`：6.4 节的 `DebugSession.execute` 会在每条命令执行后复位 flag，选项不会跨命令残留；
 - `help disass` 的第一行就是命令的 `Short`；usage 里 `[address]` 的方括号表示地址可选；`-n`、`-s` 的默认值也在这里列出来。
 
 > ps: 细心的读者会注意到 `jmpq` 的目标 `0xffffffffffffc8c4` 不像一个正常地址。这是因为 `x86asm.GNUSyntax(inst, pc, nil)` 要拿到指令自身的地址，才能把 PC 相对跳转的偏移换算成绝对目标；`instSyntax` 里传进去的是 `inst.PCRel`，而 `Inst.PCRel` 表示 PC 相对字段的**长度**（rel32 时是 4），不是偏移量，于是算出来的目标值没有实际意义。这不影响我们查看指令本身和指令地址；真要展示绝对跳转目标，把指令地址传给 `GNUSyntax` 即可。

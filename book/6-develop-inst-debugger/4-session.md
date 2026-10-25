@@ -157,7 +157,7 @@ func Cleanup(client api.Client) {
 
 #### 会话回放引擎：cmd/debug/shell.go
 
-`cmd/debug/shell.go` 的改动有四处：
+`cmd/debug/shell.go` 的改动有五处：
 
 1. `DebugSession` 增加两个字段：`initFile`（启动脚本路径）、`stopped`（会话是否已请求结束）：
 
@@ -205,7 +205,7 @@ func (s *DebugSession) Start() {
         return
     }
 
-    // ...（原有的交互式主循环不变）
+    // ...（读输入的主循环不变，执行命令统一走 s.execute(txt)）
 }
 ```
 
@@ -234,8 +234,7 @@ func (s *DebugSession) replay(file string) error {
 
         fmt.Printf("godbg> %s\n", line)
 
-        s.root.SetArgs(strings.Split(line, " "))
-        if err := s.root.Execute(); err != nil {
+        if err := s.execute(line); err != nil {
             return err
         }
         if s.stopped {
@@ -246,34 +245,46 @@ func (s *DebugSession) replay(file string) error {
 }
 ```
 
-要点：
-
-- 空行、`#` 注释行跳过；
-- `!` 与 `=` 是冒烟测试脚本的宿主指令，由 scripts/smoke.sh 解析执行（`!` 是 shell 命令，`=` 是输出断言），godbg 回放时跳过；
-- 其余行按空格切成命令与参数，交给 `s.root.Execute()` 执行，执行路径和交互模式完全一致；每行回显成 `godbg> ...`，方便对照输出；
-- `exit` 等命令执行后会把 `s.stopped` 置位（`Stop` 里置位），回放提前结束。
-
-#### 单元测试
-
-`cmd/debug/shell_test.go` 补了两个测试：`TestHelpMessageByGroups` 验证帮助信息按分组展示、组内按命令名排序（这是 5.7 节演示过的 help 输出）；`TestReplayInitFile` 写一个含注释、help、exit 的临时脚本，验证会话能逐条回放，并在回放 exit 后停止：
+5. 抽出 `execute` 统一执行命令，并在执行后复位 flag 状态：
 
 ```go
-func TestReplayInitFile(t *testing.T) {
-    file := filepath.Join(t.TempDir(), "init.txt")
-    if err := os.WriteFile(file, []byte("# comment\nhelp\nexit\n"), 0644); err != nil {
-        t.Fatalf("write init file error: %v", err)
+// execute 执行一行调试命令，并在执行后复位命令的 flag 状态。
+//
+// REPL 始终复用同一棵 cobra 命令树，pflag 在多次 Parse 之间不会把上一次
+// 设置过的 flag 恢复为默认值：本次命令行里没出现的 flag 会保留上一行的
+// 值。统一在 execute 里复位，交互模式和 --init 回放才能保证每条命令都从
+// 默认 flag 状态开始执行。
+func (s *DebugSession) execute(line string) error {
+    s.root.SetArgs(strings.Split(line, " "))
+    cmd, err := s.root.ExecuteC()
+    if cmd != nil {
+        resetFlags(cmd)
     }
+    return err
+}
 
-    s := NewDebugSession().SetInitFile(file)
-    // exit 命令经由全局 CurrentSession 结束会话，测试中需要先装配
-    CurrentSession = s
-    s.Start()
-
-    if !s.stopped {
-        t.Errorf("session should be stopped after replaying 'exit'")
-    }
+// resetFlags 把本次执行改过的 flag 恢复为默认值。
+// ExecuteC 内部的 ParseFlags 已经合并继承的 persistent flag，因此 VisitAll
+// 能同时覆盖本地 flag 和父命令继承下来的 flag。
+func resetFlags(cmd *cobra.Command) {
+    cmd.Flags().VisitAll(func(f *pflag.Flag) {
+        if !f.Changed {
+            return
+        }
+        _ = f.Value.Set(f.DefValue)
+        f.Changed = false
+    })
 }
 ```
+
+`Start` 和 `replay` 原本各自重复 `SetArgs + Execute`，这里收敛成 `execute`，并在每条命令执行后把它改过的 flag 复位。核心目的只有一个：同一个调试会话里，上一条命令解析出的命令的选项值不会残留到下一次命令执行。复位只作用于 REPL 内部的 `debugRootCmd` 命令树。
+
+要点：
+
+- 回放脚本里的空行、`#` 注释行跳过；
+- `!` 与 `=` 是冒烟测试脚本的宿主指令，由 scripts/smoke.sh 解析执行（`!` 是 shell 命令，`=` 是输出断言），godbg 回放时跳过；
+- 其余行按空格切成命令与参数，交给 `s.execute` 执行；每行回显成 `godbg> ...`，方便对照输出；
+- `exit` 等命令执行后会把 `s.stopped` 置位（`Stop` 里置位），回放提前结束。
 
 ### 运行效果
 
@@ -330,6 +341,7 @@ smoke: all passed
 - 新增 `--init <file>` 持久选项，exec/attach/debug/core 都支持，指定后会话进入批量模式：逐行回放脚本后自动退出；
 - 把四个启动命令 PostRun 里重复的会话装配统一收进 `cmd/session.go` 的 startDebugSession；
 - 会话回放引擎与交互模式共用同一条命令执行路径，`#` 注释、`!`/`=` 宿主指令由脚本与 smoke.sh 协作处理；
+- 命令统一经 `DebugSession.execute` 执行，每次执行后复位本次改过的 flag，避免上一行的 `-n` 等选项残留到下一行；
 - 回放模式支撑了 godbgv2 的冒烟测试机制（docs/SMOKE-HARNESS.md），书中的示例命令自此可以固化、自动验证；
 - 会话退出善后：`startDebugSession` 通过 `AtExit` 注册 `Cleanup`，按调试发起方式决定 kill（exec/debug）还是 detach（attach）；`api.Client` 增加 `State`/`Kill`，目标层增加 `Kill`。交互模式 `exit` 与 `--init` 批量回放结束都会触发同一套清理，冒烟脚本里可以直接断言这段输出。
 
