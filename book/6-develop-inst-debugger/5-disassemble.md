@@ -56,34 +56,13 @@ godbgv2 选择 x86asm：纯 Go 实现，不用引入 CGO 和额外的动态库�
 
 **做法一：从可执行文件里读。** 先根据 pid 找到可执行程序。Linux 下虚拟文件系统路径 `/proc/<pid>/exe` 是一个符号链接，指向进程 `<pid>` 对应的可执行程序的绝对路径，Go 程序读取该链接就能拿到路径。Linux 下的可执行文件是 ELF（Executable and Linkable Format）格式，接下来要按 ELF 格式解析这个文件，从 `.text` 里读出机器指令，再逐条 decode。
 
-> 直接读进程内存不就行了吗，为什么还要绕到可执行文件？因为进程的指令数据是按需加载的，只有真正访问到的页才会映射进进程地址空间；如果按 ELF 里的地址直接去读进程内存，会发现指令数据并不全。想要拿到"整个程序的指令"，从文件里读 .text 更直接。
-
 ELF 文件的大致结构如下所示。要读取、解析 ELF 文件数据，可以借助标准库 `debug/elf`。
 
 ![elf](assets/elf_layout.png)
 
-我们看到一个 ELF 文件包含了 ELF Header、Program Header Table、Section Header Table 以及一系列的 Sections，Program Header Table、Section Header Table 中引用 Sections 中定义的 Section。
+一个 ELF 文件由 ELF Header、段头表（Program Header Table）、节头表（Section Header Table）以及一系列的 Section 组成。段头表描述的是加载器眼中的"执行时视图"，节头表描述的是链接器眼中的"链接时视图"，这两种视图的设计细节在 7.2 节《理解ELF文件》中有专门介绍，这里不展开。对反汇编来说，只需要关心一件事：机器指令集中在 `.text` section 里，按 ELF 格式找到它、把数据读出来即可。
 
-Program Header Table 和 Section Header Table，是为构建两种不同视图特意设计的：
-
-- Program Header Table 构造了 segments 视图，它描述了程序加载时 loader 如何通过 mmap 将引用的 sections 映射到内存空间；
-- Section Header Table 构造了 sections 视图，描述了二进制程序中 sections 的顺序位置，以及指导 linker 如何进行链接；
-
-这两种视图互不干扰，分别用于指导 loader、linker 的设计实现。
-
-> **What You Need To Know About ELF for CS452**
->
-> **Two views of the world**
->
-> There are two views of an ELF file. 1) The *section view* sees the file as a bunch of sections, which are to be linked or loaded in some manner. 2) The *program view* sees the file as a bunch of *ELF segments* (not to be confused with Intel segments) which are to be loaded into memory in order to execute the program.
->
-> This split is designed to allow someone writing a linker to easily get the information they need (using the section view) and someone writing a loader (that's you) easily get the information they need without worrying about a lot of the complications of linking (using the program view).
->
-> Because you are writing a loader, not a linker, **you can completely ignore the section view**. You only care about the program view. This throws away around 80% of the ELF spec. Doesn't that make you feel good?
->
-> see: https://student.cs.uwaterloo.ca/~cs452/W18/elf/elf.html
-
-按 ELF 格式解析、从 `.text` 读出全部指令再逐条 decode 的完整小程序，放在配套的独立示例 `golang-debugger-lessons/5_disassemble` 里，运行 `path-to/5_disassemble <pid>` 可以反汇编目标程序里包含的全部指令；它也处理了可能遇到的错误，包括不认识的指令、越界问题。
+这种做法适合离线全量分析，`objdump -d` 这类工具走的就是这条路径；本节要实现的调试器则采用下面的做法二。
 
 **做法二：用 ptrace 直接读目标进程内存。** 这是 godbgv2 采用的做法。tracee 处于停止状态时，调试器可以通过 `ptrace(PTRACE_PEEKTEXT, pid, addr, ...)` 读取目标地址处的数据。Linux 不区分 text 和 data 地址空间，PEEKTEXT 和 PEEKDATA 效果相同，都是读 tracee 的内存。
 
@@ -537,7 +516,7 @@ smoke: all passed
 
 > 换语法只影响"文本怎么写"，不影响指令本身和指令地址，所以 `-n`、`-s` 可以任意组合。
 
-除了调试会话内的即时反汇编，还有一种常见需求是把磁盘上的二进制整体反汇编出来做离线分析。本书配套的独立示例 `golang-debugger-lessons/5_disassemble` 就是做这件事的：它接收 pid，通过 `/proc/<pid>/exe` 找到程序、按 ELF 读出 `.text` 的全部指令再逐条 decode，并且对不认识的指令做了跳过处理。它和 godbgv2 的 `disass` 分别代表了前面"指令数据从哪里来"的两种做法——一个面向离线全量分析，一个面向调试会话里即时查看当前指令。
+除了调试会话内的即时反汇编，还有一种常见需求是把磁盘上的二进制整体反汇编出来做离线分析：通过 `/proc/<pid>/exe` 找到程序、按 ELF 读出 `.text` 的全部指令再逐条 decode，并且对不认识的指令做跳过处理。它和 godbgv2 的 `disass` 分别代表了前面"指令数据从哪里来"的两种做法——一个面向离线全量分析，一个面向调试会话里即时查看当前指令。godbgv2 只保留后者，离线全量反汇编这里不再展开实现。
 
 完整的实现可以在 godbgv2 仓库的 tag `ch6.5` 下查看，涉及 `cmd/debug/disass.go`、`cmd/debug/address.go`、`pkg/service/api/client.go`、`pkg/service/api/types.go`、`pkg/service/debugger/debugger.go`、`pkg/target/pc.go`、`pkg/target/disassemble.go`。
 
@@ -546,7 +525,7 @@ smoke: all passed
 本节实现了指令级调试的第一个调试命令 `disass`：
 
 - 支持 `disass [address]`：address 可选，不带地址时从当前停止位置（PC）开始，带地址时从指定地址开始；两种来源都经 `disassStartAddress` 解析成同一个起始地址，再走同一条 `Client.Disassemble(addr, max, syntax)` 处理路径；
-- 为此前移了最小基础能力 `CurrentPC`：`api.Client` 增加接口，`debugger` 门面转发，`pkg/target` 通过 `PTRACE_GETREGS` 读 RIP；完整的寄存器读取留到 6.14 节 `pregs`；
+- 支持了读取PC寄存器的最小基础能力 `CurrentPC`：`api.Client` 增加接口，`debugger` 门面转发，`pkg/target` 通过 `PTRACE_GETREGS` 读 RIP；完整的寄存器读取留到 6.14 节 `pregs`；
 - 反汇编选用 x86asm：变长指令逐条 decode，`Inst.Len` 用来推进偏移量；支持 `-n/--max`（默认 10 条）和 `-s/--syntax`（go/gnu/intel，默认 gnu），输出为 `0xADDR:\tBYTES\tTEXT` 三列；
 - 指令数据用 ptrace PEEKTEXT 直接从目标进程内存读（1024 字节窗口），看到的是运行时真实的指令；从 ELF 的 `.text` 全量反汇编则是独立反汇编工具的做法，本节作为背景对照介绍；
 - 讲清了断点位置反汇编的原理：0xCC patch 只覆盖指令第一字节，命中断点时 PC 已经指向下一条指令，所以无参 disass 要关注 PC-1、并恢复缓冲区里的原始字节；本节代码还没有断点，这部分留到 6.6 节实现断点之后再补齐（godbg 的完整实现用 `--clearall` 和 `DisassembleWithBreakpointCleared` 兑现该能力）。
