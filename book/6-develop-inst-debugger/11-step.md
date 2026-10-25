@@ -15,7 +15,7 @@
 1. 一条经过指令patch后的多字节指令，首字节处修改为了0xCC，当前寄存器PC值实际上是该多字节指令的第二个字节的地址，而非首字节的地址。如果对PC值不做修改，处理器执行的时候从第二字节开始解码会解码失败，无法执行指令；
 2. 一条单字节指令，如果我们直接decode下一个地址处的指令，还会漏掉断点处原来的一字节指令；
 
-为了保证step正常执行，在 `ptrace(PTRACE_SINGLESTEP,...) ` 之前，需要首先通过 `ptrace(PTRACE_PEEKTEXT,...)` 去读取 `PC-1` 地址处的数据，如果是0xCC，则表明此处为一个断点，需要将添加断点前的原始数据还原、PC=PC-1，然后再继续执行。
+为了保证step正常执行，在 `ptrace(PTRACE_SINGLESTEP,...)` 之前，先检查 `PC-1` 处是否为我们添加的断点：不是断点就直接单步；是断点则先还原该处的原始指令，再把 PC 回退到 `PC-1`，单步执行完原指令后重新把断点加回去。
 
 **file：cmd/debug/step.go**
 
@@ -24,70 +24,61 @@ package debug
 
 import (
 	"fmt"
-	"syscall"
 
+	"github.com/hitzhangjie/godbgv2/pkg/service/api"
 	"github.com/spf13/cobra"
 )
 
 var stepCmd = &cobra.Command{
-	Use:   "step",
-	Short: "执行一条指令",
+	Use:     "step",
+	Short:   "执行一条指令",
+	Aliases: []string{"s"},
 	Annotations: map[string]string{
-		cmdGroupKey: cmdGroupCtrlFlow,
+		cmdGroupAnnotation: cmdGroupCtrlFlow,
 	},
-	RunE: func(cmd *cobra.Command, args []string) error {
-		dbp := target.DBPProcess
+	RunE: func(cmd *cobra.Command, args []string) (err error) {
 
 		defer func() {
 			if err != nil {
 				return
 			}
-			// display current pc
-			regs, err := dbp.ReadRegister(dbp.Process.Pid)
+			// 展示步进后的当前 PC
+			regs, err := Client.ReadRegs()
 			if err != nil {
-				fmt.Printf("get regs error: %v", err)
+				fmt.Printf("get regs error: %v\n", err)
 				return
 			}
 			fmt.Printf("single step ok, current PC: %#x\n", regs.PC())
 		}()
 
-		// 读取PC值
-		regs, err := dbp.ReadRegister(dbp.Process.Pid)
+		// 读取当前 PC
+		regs, err := Client.ReadRegs()
 		if err != nil {
 			return fmt.Errorf("get regs error: %v", err)
 		}
 
-		// isn't a breakpoint
-		_, ok := dbp.Breakpoint(uintptr(regs.PC() - 1))
-		if !ok {
-			if _, err = dbp.SingleStep(dbp.Process.Pid); err != nil {
-				return fmt.Errorf("single step err: %v", err)
+		// PC-1 处不是断点：直接单步执行
+		addr := regs.PC() - 1
+		if err := Client.RestoreInstruction(addr); err != nil {
+			if err == api.ErrBreakpointNotExisted {
+				if err := Client.Step(); err != nil {
+					return fmt.Errorf("single step error: %v", err)
+				}
+				return nil
 			}
-			return nil
-		}
-
-		// is a breakpoint
-		brk, err := dbp.RestoreInstruction(uintptr(regs.PC() - 1))
-		if err == target.ErrBreakpointNotExisted {
-			// this 0xcc isn't patched by debugger, and this 0xcc is already executed,
-			// just single step
-			_, err = dbp.SingleStep(dbp.Process.Pid)
-			return err
-		}
-		if err != nil {
-			// debugger inner error
+			// 调试器内部错误
 			return fmt.Errorf("clear breakpoint err: %v", err)
 		}
-		defer dbp.AddBreakpoint(brk.Addr)
 
-		// rewind pc by 1
-		regs.SetPC(regs.PC() - 1)
-		if err = dbp.WriteRegister(dbp.Process.Pid, regs); err != nil {
-			return err
+		// PC-1 处是断点：还原断点指令 → 回退 PC → 单步 → 重新添加断点
+		defer Client.AddBreakpoint(addr)
+
+		regs.SetPC(addr)
+		if err = Client.WriteRegs(regs); err != nil {
+			return fmt.Errorf("write regs error: %v", err)
 		}
 
-		// single step
-		if _, err = dbp.SingleStep(dbp.Process.Pid); err != nil {
+		if err := Client.Step(); err != nil {
 			return fmt.Errorf("single step error: %v", err)
 		}
 		return nil
@@ -97,10 +88,46 @@ var stepCmd = &cobra.Command{
 func init() {
 	debugRootCmd.AddCommand(stepCmd)
 }
-
 ```
 
-以上就是step命令的实现代码，但这并不是一个十分友好的实现：
+命令层统一经 `api.Client` 调用底层能力：`RestoreInstruction(addr)` 在 `addr` 处没有断点时返回 `api.ErrBreakpointNotExisted`，命令层据此区分“PC-1 不是断点”和“调试器内部错误”；`ReadRegs`、`WriteRegs` 负责读写寄存器，`api.Registers` 提供 `PC()`、`SetPC()` 读写指令指针。`Client.Step()` 由 `debugger` 门面转发到 `pkg/target` 的 `SingleStep`，由它发起 `ptrace(PTRACE_SINGLESTEP,...)` 并等待 tracee 状态变化：
+
+**file：pkg/target/step.go**
+
+```go
+package target
+
+import (
+	"fmt"
+	"syscall"
+)
+
+// SingleStep 让指定线程执行一条机器指令。
+//
+// MUST: 当发起了某些对 tracee 执行控制的 ptrace request 之后，要调用
+// syscall.Wait 等待并获取 tracee 状态变化。
+func (p *DebuggedProcess) SingleStep(pid int) (*syscall.WaitStatus, error) {
+	err := p.ExecPtrace(func() error {
+		return syscall.PtraceSingleStep(pid)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		wstatus syscall.WaitStatus
+		rusage  syscall.Rusage
+	)
+	_, err = syscall.Wait4(pid, &wstatus, syscall.WALL, &rusage)
+	if err != nil {
+		return nil, fmt.Errorf("wait error: %v", err)
+	}
+
+	return &wstatus, nil
+}
+```
+
+以上就是step命令及相关底层实现的代码，但这并不是一个十分友好的实现：
 
 - 它确实实现了逐指令执行，完成了本节目标；
 - 每逐指令执行之后，它还能打印当前寄存器PC值，方便我们确定下条待执行指令地址；
@@ -118,44 +145,53 @@ godbg> step
 
 这里会影响到调试体验，我们将在后续过程中予以完善。
 
-> ps：上述代码是 [hitzhangjie/godbg](https://github.com/hitzhangjie/godbg) 中的实现，我们重点介绍了step的实现。另外在 [hitzhangjie/golang-debuger-lessons](https://github.com/hitzhangjie/golang-debugger-lessons) /11_step 下，我们也提供了一个step执行的示例，只有一个源文件，与其他demo互不影响，您也可以按照你的想法修改测试下，不用担心改坏整个 godbg的问题。
->
-> FIXME(demo) 这里的代码实际上也是godbg中的早期实现版本了，后续为了增强维护性，早就进行了大范围的重构。
+> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.11`。为了让正文聚焦在 step 的流程上，这里只展开了命令层和单步执行的底层实现；寄存器读写、`api.Client` 接口和 `debugger` 门面的改动属于配套的支撑代码。
 
 ### 代码测试
 
-启动一个程序，获取其进程pid，然后执行 `godbg attach <pid>`对进程进行调试，等调试会话就绪之后，我们输入 `disass` 反汇编看下当前指令地址之后的汇编指令有哪些。
+测试对象是 godbgv2 自带的 `_fixtures/loop`，它每秒打印一次 pid 和循环计数，程序入口固定为 `0x478120`（Makefile 固定了构建所用的 Go 工具链版本）。切到本节代码并构建：
 
 ```bash
-godbg> disass
-0x40ab47 movb $0x0,0x115(%rdx)
-0x40ab4e mov 0x18(%rsp),%rcx
-0x40ab53 mov 0x38(%rsp),%rdx
-0x40ab58 mov (%rdx),%ebx
-0x40ab5a test %ebx,%ebx
-0x40ab5c jne 0x4c
-0x40ab5e mov 0x30(%rax),%rbx
-0x40ab62 movb $0x1,0x115(%rbx)
-0x40ab69 mov %rdx,(%rsp)
-0x40ab6d movl $0x0,0x8(%rsp)
+$ git checkout ch6.11
+$ make build
+$ make fixtures
 ```
 
-然后尝试执行 `step` 命令，观察输出情况。
+先用 `exec` 启动 target，停在入口时连续执行 `step`：
 
 ```bash
+$ ./godbg exec _fixtures/loop
+process 2249900 launched, stopped by SIGTRAP
 godbg> step
-step
-single step ok, current PC: 0x40ab4e
+single step ok, current PC: 0x4749e0
 godbg> step
-step
-single step ok, current PC: 0x40ab53
+single step ok, current PC: 0x4749e4
 godbg> step
-step
-single step ok, current PC: 0x40ab58
-godbg> 
+single step ok, current PC: 0x4749e9
+godbg> exit
+tracee is run by tracer, kill it
 ```
 
-我们执行了step指令3次，step每次执行一条指令之后，会输出执行指令后的PC值，依次是0x40ab4e、0x40ab53、0x40ab58，依次是下条指令的首地址。
+启动后 PC 停在程序入口 `0x478120`，入口第一条指令是一条跳转指令，执行后 PC 变成 `0x4749e0`（`_rt0_amd64`）；之后每执行一条指令，PC 依次推进到 `0x4749e4`、`0x4749e9`。这条路径上 `PC-1` 都不是断点，`step` 直接调用 `PTRACE_SINGLESTEP` 单步执行。
+
+再看 `PC-1` 恰好是断点的情况。重新启动 target，在入口地址下断点，然后连续 `step`：
+
+```bash
+$ ./godbg exec _fixtures/loop
+process 2249926 launched, stopped by SIGTRAP
+godbg> break 0x478120
+breakpoint 1 added at 0x478120
+godbg> step
+single step ok, current PC: 0x478121
+godbg> step
+single step ok, current PC: 0x4749e0
+godbg> step
+single step ok, current PC: 0x4749e4
+```
+
+第一次 `step` 时 PC 还是 `0x478120`，`PC-1` 不是断点，于是直接单步；但入口首字节已经被断点改写成 `0xCC`，所以实际执行的是 `int3`，PC 前进到 `0x478121`。
+
+第二次 `step` 时 `PC-1=0x478120` 命中断点，`step` 先还原原始指令、把 PC 回退到 `0x478120`，再单步执行原来的跳转指令，PC 落到 `0x4749e0`，最后重新把断点加回去。第三次 `step` 与前面的普通步进相同，PC 推进到 `0x4749e4`。
 
 不禁要问，执行系统调用 `ptrace(PTRACE_SINGLESTEP,...)` 时，内核是如何实现逐指令执行的？只执行一条机器指令后立即停下来，有点奇妙！
 
