@@ -4,7 +4,7 @@
 
 本节我们就来把这个 TODO 填上。配套代码在 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.1`，`git checkout ch6.1` 就是这一节完成时的代码，`git diff ch5.4 ch6.1` 能看到相对骨架多了什么。后面的示例都在这一个工程里，顺着骨架往下看就行。
 
-### 实现目标：`godbg exec <prog>` 启动并跟踪新进程
+### 实现目标：`godbg exec <prog> [args...]` 启动并跟踪新进程
 
 调试器要开始调试，首先得确定调试谁。目标可能是一个正在运行的进程，也可能是一个 core 文件。core 文件是进程结束前留下来的内存和硬件上下文，调试器可以借它看崩溃前的调用栈，但是进程已经结束了，没法再控制它往下执行。对运行中的进程能做的操作，其实覆盖了对 core 文件能做的操作，比如还可以控制程序怎么往下走。所以本章先看运行中的进程。core 文件怎么构成、怎么生成、怎么调试，我们放到符号级调试部分再讲。
 
@@ -14,7 +14,7 @@
 - 目标程序已经在跑，pid 也知道了：直接按 pid 跟踪，如 `dlv attach <pid>`、`gdb <pid>`。
 - 目标程序还没构建，要先编译再运行：编译时得带上调试需要的选项，关掉内联和优化。`dlv debug`、`dlv test` 会自动加上 `-gcflags="all=-N -l"`；
 
-OK，我们先做第一种。`godbg exec <prog>` 要做的事情其实是两件：先把已经构建好的程序启动起来，再立即跟踪它，让它在开始执行用户代码之前停住，然后进入第 5 章已经搭好的调试会话。`<prog>` 可以是可执行文件的路径，也可以是 `$PATH` 里能搜到的程序名。第2种是 6.2 节的 `godbg attach <pid>`，第3种情况对应 6.3 节的 `godbg debug`。
+OK，我们先做第一种。`godbg exec <prog> [args...]` 要做的事情其实是两件：先把已经构建好的程序启动起来，再立即跟踪它，让它在开始执行用户代码之前停住，然后进入第 5 章已经搭好的调试会话。`<prog>` 可以是可执行文件的路径，也可以是 `$PATH` 里能搜到的程序名。第2种是 6.2 节的 `godbg attach <pid>`，第3种情况对应 6.3 节的 `godbg debug`。
 
 为什么"启动"还要配上"跟踪"呢？如果只是把进程跑起来，进程一下子就执行完了，我们来不及做任何调试动作。调试器希望进程停在起点等我们，这就需要跟踪（trace）能力：调试器进程（tracer）与被调试进程（tracee）之间先建立跟踪关系，tracee 在启动的那一刻被内核强制停住并通知 tracer，tracer 才能抓住时机介入。本节先介绍怎么用 `os/exec` 启动进程，再介绍跟踪是怎么建立的，最后在 godbgv2 中实现。
 
@@ -659,8 +659,8 @@ func forkAndExecInChild1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, att
 
 极简 demo 里写在一起的那几步，在这里拆开了：
 
-- 参数检查交给 cobra。`exec <prog>` 在骨架里已经注册好，我们把对应的 `execCmd` 的 `Run` 方法换成 `RunE`，`RunE` 更适合对参数进行检查，参数不对就返回错误；
-- 参数检查OK后再进入 `Run` 方法执行真正的启动程序的逻辑，并实现跟踪逻辑；
+- 参数检查交给 cobra。`exec <prog> [args...]` 在骨架里已经注册好，我们把对应的 `execCmd` 的 `Run` 方法换成 `RunE`，`RunE` 更适合对参数进行检查，参数不对就返回错误；
+- 参数检查OK后再进入 `Run` 方法执行真正的启动程序的逻辑，并实现跟踪逻辑。`--` 之后的参数要原样传给被调试程序，具体在后面的"向被调试程序传递参数"一小节展开；
   - `cmd` 也不直接去调 `os/exec`。它通过 `api.Client.Launch` 把请求交给服务层，服务层再转到目标层。至于这个接口背后到底是谁，由 `main` 在启动时装上。在我们这里，是由 `Debugger` 实现 `api.Client` 接口方法 `api.Client.Launch`。
   - `exec.Command(...)` 挪到目标层的 `Debugger.Launch(...)->DebuggedProcess.launchCommand(...)`。这里改用 `Start`，启动前设置 `SysProcAttr.Ptrace`，启动后再等到 `SIGTRAP`，这样进程启动后会立即停下来——这就是前面"内核：PTRACE_TRACEME 如何在 exec 时把进程停住"一节讲的机制在 Go 里的落点；
   - 命令层不再把程序输出收进缓冲区，只打印被调试进程的 pid。程序自己的打印仍然出现在当前终端；
@@ -669,8 +669,8 @@ func forkAndExecInChild1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, att
 所以相对 tag `ch5.4`，这一节新增的主要就是下面这条调用链。
 
 ```text
-godbg exec <prog>
-    cmd/exec.go                         RunE：校验参数，调用 Client.Launch
+godbg exec <prog> [args...]
+    cmd/exec.go                         RunE：校验参数，调用 Client.Launch（args[1:] 透传）
     pkg/service/api                     Client 接口，cmd 只认这个接口
     pkg/service/debugger                门面，把请求转给目标层
     pkg/target                          exec.Command + PTRACE_TRACEME，等待 SIGTRAP
@@ -703,30 +703,60 @@ godbgv2
 
 #### 命令层
 
-`cmd/exec.go` 里，骨架原来的 `Run` 换成了 `RunE`。参数校验有误时返回错误，cobra 会把错误打到 stderr，进程以非零状态退出。参数没问题，就把程序路径交给 `Client.Launch`。这个调用返回时，进程已经因为 exec 产生的 `SIGTRAP` 停住了，我们把 pid 打印出来。
+`cmd/exec.go` 里，骨架原来的 `Run` 换成了 `RunE`。参数校验有误时返回错误，cobra 会把错误打到 stderr，进程以非零状态退出。参数没问题，就把程序路径和其余参数交给 `Client.Launch`（`args[1:]` 原样透传）。这个调用返回时，进程已经因为 exec 产生的 `SIGTRAP` 停住了，我们把 pid 打印出来。
 
 ```go
-RunE: func(cmd *cobra.Command, args []string) error {
-    if len(args) != 1 {
-        return errors.New("参数错误")
-    }
+// execCmd 调试可执行程序
+var execCmd = &cobra.Command{
+    Use:   "exec <prog> [args...]",
+    Short: "调试可执行程序",
+    Long: `调试可执行程序
 
-    // 启动并跟踪被调试进程，等待其因 exec 产生的 SIGTRAP 而停止
-    pid, err := Client.Launch(api.KindExec, args[0])
-    if err != nil {
-        return err
-    }
-    fmt.Printf("process %d launched, stopped by SIGTRAP\n", pid)
-    return nil
-},
-PostRun: func(cmd *cobra.Command, args []string) {
-    // TODO(ch6.10): 退出会话时清理被调试进程
-    debug.CurrentSession = debug.NewDebugSession()
-    debug.CurrentSession.Start()
-},
+godbg 自身的选项要写在 -- 之前，-- 之后的参数会原样传递给被调试程序：
+
+  godbg exec ./prog -- -name value
+
+若被调试程序不需要以破折号开头的参数，也可以省略 --：
+
+  godbg exec ./prog arg1 arg2`,
+    RunE: func(cmd *cobra.Command, args []string) error {
+        if len(args) < 1 {
+            return errors.New("参数错误")
+        }
+
+        // 启动并跟踪被调试进程（剩余参数原样传递给被调试程序），
+        // 等待其因 exec 产生的 SIGTRAP 而停止
+        pid, err := Client.Launch(api.KindExec, args[0], args[1:]...)
+        if err != nil {
+            return err
+        }
+        fmt.Printf("process %d launched, stopped by SIGTRAP\n", pid)
+        return nil
+    },
+    PostRun: func(cmd *cobra.Command, args []string) {
+        // TODO(ch6.4): 退出会话时清理被调试进程
+        debug.CurrentSession = debug.NewDebugSession()
+        debug.CurrentSession.Start()
+    },
+}
 ```
 
 `Client` 定义在 `cmd/client.go`，类型是 `api.Client`。命令层之后都通过它和后端打交道。
+
+#### 向被调试程序传递参数
+
+`godbg exec` 支持把参数传给被调试程序。`api.Client.Launch` 从 ch6.1 起就是变参（`args ...string`），命令层把 `args[1:]` 交给它，再经由 debugger 门面、目标层一路传到 `exec.Command`，实现上并没有额外的工作。
+
+真正的坑在命令行解析：cobra/pflag 默认会把 `-` 开头的参数当成 godbg 自己的选项。比如 `godbg exec ./prog -v` 只会打开 godbg 的 verbose，tracee 收不到 `-v`；碰到不认识的选项则直接报错。因此 godbg 约定与 dlv 一致：**godbg 自身的选项写在 `--` 之前，`--` 之后的参数原样传给被调试程序**。例如：
+
+```bash
+$ ./godbg exec /bin/echo -- hello godbg
+process 208202 launched, stopped by SIGTRAP
+godbg> exit
+hello godbg
+```
+
+这一版会话退出时还不会清理 tracee，所以 `exit` 之后内核解除跟踪关系，echo 才恢复执行、把参数打印出来——这个"退出后 tracee 继续跑"的现象，正好对应 6.4 节要补的退出善后。
 
 #### 装配
 
@@ -741,7 +771,7 @@ func main() {
 }
 ```
 
-`processSignals` 放在单独的 goroutine 里处理信号。Go 运行时用 `SIGURG` 做异步抢占，这个信号我们暂时直接忽略。`SIGTERM`、`SIGINT`、`SIGQUIT` 目前先让进程退出。退出前还原断点、detach，或者结束被调试进程，留到 6.10 节再做。
+`processSignals` 放在单独的 goroutine 里处理信号。Go 运行时用 `SIGURG` 做异步抢占，这个信号我们暂时直接忽略。`SIGTERM`、`SIGINT`、`SIGQUIT` 目前先让进程退出。被调试进程与断点的退出善后从 6.4 节开始统一处理（信号退出场景的清理在 6.10 节补齐）。
 
 `api.Client` 在这一节只有一个方法。后面几节会陆续补上 attach、读写内存这些操作，会陆续有点改动。到第 9 章时，这里的完整接口才能定下来。
 
@@ -876,8 +906,6 @@ func (p *DebuggedProcess) ExecPtrace(fn func() error) error {
 }
 ```
 
-配套的单元测试 `pkg/target/process_test.go` 里，`TestLaunch` 用 `/bin/true` 验证了 TRACEME 启动路径：进程应该在 exec 时因 SIGTRAP 而停止；释放被调试进程时，也必须经由 `ExecPtrace` 在同一 tracer 线程上 detach。
-
 ### 运行效果
 
 在 godbgv2 仓库里切到这一节，把调试器和目标程序都构建出来：
@@ -898,7 +926,7 @@ godbg>
 
 pid 每次运行都不一样。看到这行输出时，loop 还没开始打印，它停在 exec 之后。提示符 `godbg>` 就是骨架里那个调试会话。断点、单步这些命令这一节还没做，在会话里执行的话，看到的仍是带章节号的 TODO。
 
-输入 `exit` 可以结束会话。这一版退出时还不会清理被调试进程。调试器自己退出之后，内核会把跟踪关系解开，loop 就从停下的地方继续跑，终端上会开始出现 `pid: ...`。试完记得把这个 pid 停掉。退出前的清理，我们放到 6.10 节。
+输入 `exit` 可以结束会话。这一版退出时还不会清理被调试进程。调试器自己退出之后，内核会把跟踪关系解开，loop 就从停下的地方继续跑，终端上会开始出现 `pid: ...`。试完记得把这个 pid 停掉。退出前的清理，6.4 节会统一补上。
 
 > ps: loop 是单 goroutine 程序，启动后停在 exec 处时还没有别的线程。Go 程序运行起来之后，运行时还会创建 sysmon、GC 等线程，如何自动跟踪这些新建线程，见 6.20 节"调试多线程程序"。
 
@@ -909,6 +937,7 @@ pid 每次运行都不一样。看到这行输出时，loop 还没开始打印�
 - 用一段极简代码看清 `os/exec` 要做的事，也就是解析 `exec <prog>`、启动程序并取回输出；
 - 介绍了跟踪的核心概念：tracee 是被调试的线程，tracer 是发送调试命令的调试器线程，ptrace link 一旦建立，后续所有 ptrace 请求都必须来自同一个 tracer 线程，Go 里要靠 `runtime.LockOSThread` 来满足；
 - 从内核代码出发，理清了 PTRACE_TRACEME 和 exec 的配合：子进程标记 PT_PTRACED 后，exec 成功那一刻内核给它发送同步信号 SIGTRAP，tracee 进入 TASK_TRACED 停止态，再通过 SIGCHLD/__wake_up_parent 唤醒阻塞在 wait4 上的 tracer；
-- 把这套逻辑搬进 tag `ch5.4` 的调试器骨架：命令层只调用 `api.Client.Launch`，由 `main` 装配实现，再转到 `pkg/target` 完成 `SysProcAttr.Ptrace=true` 的启动和等待 SIGTRAP。
+- 把这套逻辑搬进 tag `ch5.4` 的调试器骨架：命令层只调用 `api.Client.Launch`，由 `main` 装配实现，再转到 `pkg/target` 完成 `SysProcAttr.Ptrace=true` 的启动和等待 SIGTRAP；
+- 支持 `godbg exec <prog> [args...]`：`--` 之后参数原样透传给被调试程序，`--` 之前仍由 godbg 解析；
 
 本节内容为读者学习 6.2 节的 attach，以及后面在这个已经停住的进程上做断点、单步和查看寄存器打下了基础。

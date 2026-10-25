@@ -10,7 +10,7 @@ tracee、tracer、ptrace link、wait 这些核心概念，6.1 节已经介绍过
 
 如果进程已经在运行了，要对其进行调试需要先通过 attach 操作跟踪进程，待其停止执行后，再执行查看修改数据、控制程序执行的操作。常见的调试器如 dlv、gdb 等都支持传递 pid 参数来对运行中的进程进行跟踪调试。
 
-本节我们将实现程序 `godbg attach <pid>` 子命令：attach 到目标进程，此时目标进程会暂停执行，等它停稳后进入 5.7 节搭好的调试会话。会话结束后调试器退出，内核会解除跟踪关系，目标进程恢复执行。调试器退出前显式 detach、还原断点、结束被调试进程这些清理动作，6.10 节再统一处理。
+本节我们将实现程序 `godbg attach <pid>` 子命令：attach 到目标进程，此时目标进程会暂停执行，等它停稳后进入 5.7 节搭好的调试会话。会话结束后调试器退出，内核会解除跟踪关系，目标进程恢复执行。本节还会在 attach 成功后把目标进程的启动命令和参数从 `/proc` 里读回来存好，为后续 restart 调试做准备；调试器退出前显式 detach、还原断点、结束被调试进程这些清理动作，从 6.4 节开始统一处理（信号退出场景在 6.10 节补齐）。
 
 ### 基础知识
 
@@ -122,7 +122,7 @@ RunE: func(cmd *cobra.Command, args []string) error {
     return nil
 },
 PostRun: func(cmd *cobra.Command, args []string) {
-    // TODO(ch6.10): 退出会话时清理被调试进程
+    // TODO(ch6.4): 退出会话时清理被调试进程
     debug.CurrentSession = debug.NewDebugSession()
     debug.CurrentSession.Start()
 },
@@ -191,7 +191,11 @@ func AttachTargetProcess(pid int) (p *DebuggedProcess, err error) {
         return nil, err
     }
 
-    // TODO(ch6.3): initialize 读取 /proc/pid/comm、/proc/pid/cmdline
+    // 读取 /proc/pid/comm、/proc/pid/cmdline，便于后续支持重启调试
+    if err := p.initialize(); err != nil {
+        return nil, err
+    }
+
     // TODO(ch6.20.1): attach 到该进程的其他线程
     return p, nil
 }
@@ -248,7 +252,86 @@ func (p *DebuggedProcess) Detach() error {
 }
 ```
 
-> ps: tracer 退出时，即使没有显式 detach，内核也会解除跟踪关系，让 tracee 恢复执行。所以本节调试会话退出后目标进程还能继续跑，显式的 detach 与断点清理留到 6.10 节。
+> ps: tracer 退出时，即使没有显式 detach，内核也会解除跟踪关系，让 tracee 恢复执行。所以本节调试会话退出后目标进程还能继续跑；显式的 detach、断点还原和进程善后从 6.4 节开始统一实现。
+
+#### 目标层：读取启动命令与参数（initialize）
+
+attach 是"半路接手"一个进程：调试器看到它时它已经跑起来了，不知道它是怎么启动的。不知道启动命令和参数，后续想支持 restart（重新发起调试）时就没法把进程再拉起来。exec/debug 启动的进程，命令和参数是启动调试器时指定的，天然就知道；attach 的进程只能从内核的 `/proc` 接口里读回来。
+
+所以 `AttachTargetProcess` 在 attach 成功后调用 `p.initialize()`，读取 `/proc/pid/comm`、`/proc/pid/cmdline` 填充 `DebuggedProcess.Command/Args`：
+
+```go
+// initialize 初始化被调试进程的启动命令与参数
+func (p *DebuggedProcess) initialize() error {
+    var err error
+
+    // initialize the command and arguments, after then, we could support
+    // restart command.
+    if p.Command, err = readProcComm(p.Process.Pid); err != nil {
+        return err
+    }
+    if p.Args, err = readProcCommArgs(p.Process.Pid); err != nil {
+        return err
+    }
+    return nil
+}
+```
+
+`readProcComm`、`readProcCommArgs` 的实现放在 `pkg/target/procfs.go`（6.1 节的 status 函数也在这里）：
+
+```go
+// readProcComm 读取 /proc/pid/comm 获取进程的启动命令
+func readProcComm(pid int) (string, error) {
+    comm, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+    if err == nil {
+        // removes newline character
+        comm = bytes.TrimSuffix(comm, []byte("\n"))
+    }
+
+    if comm == nil || len(comm) <= 0 {
+        // /proc/pid/comm 读取失败时，从 /proc/pid/stat 中解析
+        stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+        if err != nil {
+            return "", fmt.Errorf("could not read proc stat: %v", err)
+        }
+        expr := fmt.Sprintf("%d\\s*\\((.*)\\)", pid)
+        rexp, err := regexp.Compile(expr)
+        if err != nil {
+            return "", fmt.Errorf("regexp compile error: %v", err)
+        }
+        match := rexp.FindSubmatch(stat)
+        if match == nil {
+            return "", fmt.Errorf("no match found using regexp '%s' in /proc/%d/stat", expr, pid)
+        }
+        comm = match[1]
+    }
+
+    cmdStr := strings.ReplaceAll(string(comm), "%", "%%")
+    return cmdStr, nil
+}
+
+// readProcCommArgs 读取 /proc/pid/cmdline 获取进程的启动参数
+func readProcCommArgs(pid int) ([]string, error) {
+    dat, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+    if err != nil {
+        return nil, err
+    }
+    args := strings.Split(string(dat), string([]byte{0}))[1:]
+    return args, nil
+}
+```
+
+几个细节：
+
+- `/proc/pid/comm` 是内核侧 task_struct.comm 的投影，最多 15 字节加一个 `\0`，读出来要 trim 掉换行；读不到时从 `/proc/pid/stat` 里按 `pid (comm)` 的格式解析兜底；
+- `/proc/pid/cmdline` 是 NUL 分隔的完整命令行，第 0 项是程序路径（argv[0]），后面的才是参数，所以 Args 取 `[1:]`；
+- `comm` 里的 `%` 被替换成 `%%`，避免这个字符串之后被当格式串使用时出问题。
+
+配套的 `pkg/target/procfs_test.go` 用 pid 1（init/systemd）验证了这两个函数：comm 非空、args 返回合法 slice。
+
+> ps: 这段能力原计划放 ch6.3，后来按"每节只做本节的事"重新归位：attach 的启动信息记录属于 attach 本身，放在本节讲；exec/debug 启动的进程本来就知道启动命令与参数，不需要从 `/proc` 读。Command/Args 目前还只是记录下来，restart 调试命令留待后续章节实现。
+
+
 
 ### 代码测试
 
@@ -433,6 +516,7 @@ attach 操作是调试器调试运行中进程的第一步。本节在 6.1 节�
 - 对比了两种建立跟踪关系的方式：exec 走 PTRACE_TRACEME（tracee 因 SIGTRAP 停在 exec 处），attach 走 PTRACE_ATTACH（内核注入 SIGSTOP，tracee 因 SIGSTOP 停住），tracer 侧等待停稳的方式都是 wait4 + WSTOPPED；
 - 分析了 attach 失败的常见原因：目标线程已被其他调试器跟踪、凭据检查不通过、tracee 处于 nondumpable 状态、Yama LSM 的 ptrace_scope 限制；
 - 在 godbgv2 中实现了命令层、服务层、目标层的完整调用链，并补充了对应的单元测试；
+- attach 成功后用 initialize 读取 `/proc/pid/comm`、`/proc/pid/cmdline`，把目标进程的启动命令与参数记录到 `DebuggedProcess.Command/Args`，为后续 restart 调试做准备（exec/debug 的场景天然已知，不需要读 /proc）；
 - 结合 Go 的协程编程模型，解释了 attach 多线程程序后"停不下来"的现象：attach 只跟踪了主线程，执行 main.main 的 main goroutine 并不绑定在主线程上，其他线程仍在运行；要解决这个问题需要 All-stop Mode，枚举 `/proc/<pid>/task` 逐个 attach，这部分在 6.20.1 节实现。
 
 通过这些内容，我们梳理并解答了 attach 实现过程中一些基础但至关重要的问题，为后续深入理解调试器的实现原理打下了坚实的基础。
