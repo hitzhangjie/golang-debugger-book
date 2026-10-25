@@ -1,4 +1,4 @@
-## 调试会话：--init 脚本回放与会话善后
+## 调试会话：脚本回放与清理善后
 
 6.1~6.3 节，我们已经学会了三种发起调试的方式：exec 启动并跟踪现成的二进制，attach 跟踪运行中的进程，debug 现编译现调试。它们做完准备工作后，都会进入同一个交互式调试会话——这个会话在 5.7 节搭骨架时已经介绍过（liner 读输入、cobra 分发命令、按分组展示 help），这里不再重复。
 
@@ -74,7 +74,6 @@ func startDebugSession(cmd *cobra.Command) {
 ```
 
 以 exec 为例，PostRun 从原来的两行缩成一行 `startDebugSession(cmd)`；debug 的 PostRun 保留删除构建产物的 defer，会话启动也换成同一个函数。
-
 
 #### 会话退出善后：按 Kind 杀进程或 detach
 

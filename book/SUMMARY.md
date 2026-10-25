@@ -19,7 +19,7 @@
   * [6.1 启动并跟踪进程](6-develop-inst-debugger/1-exec.md)
   * [6.2 跟踪运行中进程](6-develop-inst-debugger/2-attach.md)
   * [6.3 构建并启动调试](6-develop-inst-debugger/3-debug.md)
-  * [6.4 调试脚本回放与会话善后](6-develop-inst-debugger/4-replay.md)
+  * [6.4 脚本回放与清理善后](6-develop-inst-debugger/4-session.md)
   * [6.5 反汇编](6-develop-inst-debugger/5-disassemble.md)
   * [6.6 添加断点](6-develop-inst-debugger/6-breakpoint.md)
   * [6.7 列出断点](6-develop-inst-debugger/7-breakpoints.md)
