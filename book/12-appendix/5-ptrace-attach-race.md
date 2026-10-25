@@ -2,7 +2,7 @@
 
 ### 背景
 
-本书第6.2节"跟踪进程"中，我们使用 `ptrace(PTRACE_ATTACH, pid, ...)` 来attach目标线程：内核向tracee注入一个SIGSTOP信号，tracee停下来之后，tracer再通过waitpid感知停止事件。这个"隐式注入SIGSTOP"的设计引入了一些竞态问题，man ptrace手册甚至将其中一个场景明确称为设计缺陷（design bug）：
+本书第6.2节"跟踪运行中进程"中，我们使用 `ptrace(PTRACE_ATTACH, pid, ...)` 来attach目标线程：内核向tracee注入一个SIGSTOP信号，tracee停下来之后，tracer再通过waitpid感知停止事件。这个"隐式注入SIGSTOP"的设计引入了一些竞态问题，man ptrace手册甚至将其中一个场景明确称为设计缺陷（design bug）：
 
 > "a ptrace attach and a concurrently delivered SIGSTOP may race and the concurrent SIGSTOP may be lost"
 
