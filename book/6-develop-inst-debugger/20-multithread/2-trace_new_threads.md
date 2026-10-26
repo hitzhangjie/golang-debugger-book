@@ -435,31 +435,8 @@ dlv实际上是提供了 `threads` 和 `thread` 调试命令，来允许调试�
 
 ### 思考：需要自动切换到新线程吗
 
-在调试多进程程序时，当执行 `fork` 创建子进程后，调试人员希望能选择跟踪父进程还是子进程。
-
-举个例子，比如我们要跟踪 `protoc` 编译器的插件实现 `protoc-gen-go`，protocolbuffers编译器protoc及其非内置支持语言的工具支持是通过插件机制来完成的，protoc编译器负责读取并解析 `*.proto` 文件，并生成一个代码生成请求发送给插件，方式就是在 `$PATH` 中搜索 `protoc-gen-go` 并启动它，然后通过stdin, stdout来传递请求并获取结果。如果你对此感兴趣，可以阅读 [Protoc及其插件工作原理](https://www.hitzhangjie.pro/blog/2017-05-23-protoc%E5%8F%8A%E6%8F%92%E4%BB%B6%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90%E7%B2%BE%E5%8D%8E%E7%89%88/)。
-
-如果我们用gdb对protoc进行调试（protoc编译器是用C++写的)，并且希望对插件实现protoc-gen-go进行调试，就可以通过gdb中的 `set follow-fork-mode child` 来选择跟踪子进程。这个功能是非常方便的，你不需要担心子进程执行过快越过想调试的代码部分。如果你不知道这个调试特性，可能会在子进程初始化逻辑中设置一个forloop然后attach后再跳出forloop才能对感兴趣的代码进行调试。
-
-OK，那对于多线程程序而言，我们跟踪到一个新线程时，是否需要允许用户选择，你需要切换到某个线程上下文去吗？意义应该不大。首先Go主要是面向goroutine级别的并发控制操作，调试时切换线程作用不大。即使前面提到确实有些场景需要线程切换支持，我们也可以手动执行命令 `thread <n>` 来切换，所以没有必要支持自动跟踪并切换到新线程的特性。
-
-### 思考：dlv是否支持多进程调试
-
-前面提到gdb支持对子进程进行自动跟踪，其实dlv也支持类似的调试模式：`target follow-exec [-on [regex]] | [-off]`
-
-```bash
-(dlv) help target
-Manages child process debugging.
-
-    target follow-exec [-on [regex]] [-off]
-
-Enables or disables follow exec mode. When follow exec mode Delve will automatically attach to new child processes executed by the target process. An optional regular expression can be passed to 'target follow-exec', only child processes with a command line matching the regular expression will be followed.
-    ...
-
-```
-
-当通过exec.Command启动一个子进程时，如果您希望跟踪子进程，则可以通过上述 `target follow-exec` 操作来实现，并且还允许你通过正则的形式来对子进程名进行匹配检查，匹配则自动跟踪子进程。
+那么，对于多线程程序而言，我们跟踪到一个新线程时，是否需要允许用户选择，你需要切换到某个线程上下文去吗？意义应该不大。首先Go主要是面向goroutine级别的并发控制操作，调试时切换线程作用不大。即使前面提到确实有些场景需要线程切换支持，我们也可以手动执行命令 `thread <n>` 来切换，所以没有必要支持自动跟踪并切换到新线程的特性。
 
 ### 本节小结
 
-本节主要探讨了调试器如何感知和跟踪新创建线程的技术实现，核心内容包括：通过 `PTRACE_O_TRACECLONE` 选项让内核自动跟踪clone系统调用；利用 `waitAny()` 等待任意被跟踪线程停止，并通过 `PTRACE_EVENT_CLONE` 事件机制感知新线程创建；通过 `PtraceGetEventMsg()` 获取新线程的LWP ID，再以 `addThread(newTid, false)` 将其纳入调试器管理。本节还深入分析了Linux内核中线程与进程的本质区别，以及Go语言GMP调度模型对线程调试的特殊影响，为读者理解多线程、多进程调试的底层机制提供了重要基础。
+本节主要探讨了调试器如何感知和跟踪新创建线程的技术实现，核心内容包括：通过 `PTRACE_O_TRACECLONE` 选项让内核自动跟踪clone系统调用；利用 `waitAny()` 等待任意被跟踪线程停止，并通过 `PTRACE_EVENT_CLONE` 事件机制感知新线程创建；通过 `PtraceGetEventMsg()` 获取新线程的LWP ID，再以 `addThread(newTid, false)` 将其纳入调试器管理。本节还分析了Linux内核中线程与进程的本质区别，以及Go语言GMP调度模型对线程调试的特殊影响。至于fork/exec出来的新进程该如何跟踪，以及gdb、lldb、dlv各自的多进程调试策略，将在 6.21 节继续介绍。

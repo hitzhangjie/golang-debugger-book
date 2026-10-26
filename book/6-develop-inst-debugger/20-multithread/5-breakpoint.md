@@ -286,4 +286,4 @@ Rip         0x478120
 
 本节讨论了多线程环境下移除断点时的 PC 回退问题。软件断点命中后 PC 指向断点地址的下一条指令；如果移除断点时不回退 PC，线程恢复执行就会跳过断点处的原始指令。godbgv2 在 ch6.20.5 中把这一逻辑放进 target 层：`ClearBreakpoint` 先调用 `rewindThreadsAtBreakpoint` 回退停在目标断点上的线程 PC，再 `RestoreInstruction`；`ClearAll` 则先收集所有停在断点处的线程，再还原全部断点，最后统一回退 PC。
 
-这里最关键的是顺序：回退 PC 依赖断点索引来识别线程，而还原指令会删除索引，所以必须“先回退/先收集，后还原”。再结合前一节的 `ThreadStoppedAtBreakpoint` 和 all-stop continue，调试器在多线程下就能一致地处理断点的命中、恢复和移除。本节内容为后续多进程调试以及更复杂的断点管理功能打下了基础。
+这里最关键的是顺序：回退 PC 依赖断点索引来识别线程，而还原指令会删除索引，所以必须“先回退/先收集，后还原”。再结合前一节的 `ThreadStoppedAtBreakpoint` 和 all-stop continue，调试器在多线程下就能一致地处理断点的命中、恢复和移除，也为后续更复杂的断点管理功能打下了基础。

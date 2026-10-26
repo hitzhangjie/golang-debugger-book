@@ -12,9 +12,7 @@
 
 #### 调试器的挂起策略
 
-在多线程或多进程的程序调试中，当程序执行遇到断点(breakpoint)、观察点(watchpoint)、捕获到信号(signal)或被用户手动中断时(如ctrl+c)，调试器需要暂停（Suspend）程序的执行。**挂起策略（Suspend Policy）** 定义了当程序中的某个线程被暂停时，其他线程或进程应该如何处理的行为规则。是只暂停当前发生事件的线程，还是暂停整个进程中的所有线程。而当恢复执行(continue)、步进(step, next等)时，是只恢复当前选中的线程，还是进程内的所有线程。这是两个维度，一个是暂停的维度，一个是恢复的维度。
-
-前面提的是单进程多线程调试的范畴，我们还可以延伸到多进程程序调试的范畴，比如调试器在调试进程P1时，发现进程P1创建了子进程P2，后续命中断点、观察点、捕获到信号、收到用户中断操作时，我们希望有能力按需地对单个进程或者所有进程暂停执行的能力，以及在后续收到continue、step、next等恢复执行的命令时也能按需地控制恢复单个进程内的线程或者所有进程内的线程的执行能力。
+在多线程程序调试中，当程序执行遇到断点(breakpoint)、观察点(watchpoint)、捕获到信号(signal)或被用户手动中断时(如ctrl+c)，调试器需要暂停（Suspend）程序的执行。**挂起策略（Suspend Policy）** 定义了当程序中的某个线程被暂停时，其他线程应该如何处理的行为规则。是只暂停当前发生事件的线程，还是暂停整个进程中的所有线程。而当恢复执行(continue)、步进(step, next等)时，是只恢复当前选中的线程，还是进程内的所有线程。这是两个维度，一个是暂停的维度，一个是恢复的维度。
 
 这个策略至关重要，因为它直接影响了调试过程中的程序状态可见性、可预测性和用户调试体验。
 
@@ -42,12 +40,12 @@ OK，这里不妨展开介绍下GDB中与挂起策略相关的几个选项设置
 - off：也就是all-stop mode，如果有断点、watchpoint、收到信号、用户中断等操作，暂停进程内所有线程。当执行continue,next,step等操作时恢复所有线程执行。
 - on：此时就是non-stop mode，命中断点、watchpoint、收到信号、用户中断操作，仅暂停发生事件的线程。当执行continue,next,step操作时仅恢复当前选中线程。
 
-**设置2：set schedule-multiple on/off (默认值off)**：如果是多进程程序，是否恢复所有进程内的线程的执行。
+**设置2：set schedule-multiple on/off (默认值off)**：如果考虑多进程的情况，还有一个设置项，用来控制是否恢复所有进程内的线程执行。
 
 - off: 当执行continue,next,step操作时只恢复当前进程内的线程执行；
 - on: 当执行continue,next,step操作时恢复所有进程内的线程执行；
 
-这里可以被恢复的线程集合，进一步可以由`scheduler-locking`选项来控制。
+多进程调试中如何跟踪子进程、如何在多个进程之间暂停和恢复，6.21 节还会展开介绍。这里可以被恢复的线程集合，进一步可以由`scheduler-locking`选项来控制。
 
 **设置3：set scheduler-locking on/off/step/replay (默认值off)**：决定在程序运行、单步或继续时，GDB 是否会把其他线程“锁定”（即暂停），只让当前选中的线程执行。这对定位线程间交互、排查竞争、实现确定性重放都非常重要。
 
@@ -375,7 +373,7 @@ tracee is an attached process, leave it running
 
 ### 本节小结
 
-本节主要探讨了调试器在多线程程序中的挂起策略（Suspend Policy），核心内容包括：**全系统挂起**和**单线程挂起**两种主流策略。我们还介绍了主流调试器GDB、LLDB、Delve中的做法。GDB通过默认全系统挂起，但提供了`non-stop`、`schedule-multiple`、`scheduler-locking`等选项提供细粒度控制；LLDB默认采用全系统挂起但支持更细粒度的线程管理；Delve也是默认全系统挂起，但通过其对Go语言GMP调度模型的深度理解和支持，适配了面向goroutine级别并发的调试，我们可以自由在不同goroutine上下文之间进行切换、查看状态、恢复goroutine执行，方便Go开发者进行调试。
+本节主要探讨了调试器在多线程程序中的挂起策略（Suspend Policy），核心内容包括：**全系统挂起**和**单线程挂起**两种主流策略。我们还介绍了主流调试器GDB、LLDB、Delve中的做法。GDB通过默认全系统挂起，但提供了`non-stop`、`scheduler-locking`、`schedule-multiple`等选项提供细粒度控制；LLDB默认采用全系统挂起但支持更细粒度的线程管理；Delve也是默认全系统挂起，但通过其对Go语言GMP调度模型的深度理解和支持，适配了面向goroutine级别并发的调试，我们可以自由在不同goroutine上下文之间进行切换、查看状态、恢复goroutine执行，方便Go开发者进行调试。
 
 在 godbgv2 的 ch6.20.3 中，all-stop 策略落在了 `Continue` 和 `suspendOtherThreads` 上：`Continue` 恢复全部被跟踪线程，等待任意线程停止；克隆事件作为内部事件被消费；真正的停止事件到来后，向其余线程投递 SIGSTOP 并等待它们停下来，同时用 `currentThread`、`stopReason` 记录本次停止的线程和原因。
 
