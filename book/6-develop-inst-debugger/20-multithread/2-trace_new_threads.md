@@ -53,11 +53,11 @@ func newosproc(mp *m) {
 func clone(flags int32, stk, mp, gp, fn unsafe.Pointer) int32
 ```
 
-进程下的线程共享进程打开的某些资源，通过上述cloneFlags也可以看出一点端倪。操作系统设计上，进程是资源分配单位，线程则是最小的调度单位。以Linux为例，不管是进程还是线程，它们都由对应的task_struct结构来描述，并作为sched_entity在内核任务调度器中进行调度。ps: 关于Linux下的任务调度，感兴趣您可以阅读我的博客 [Linux内核](https://www.hitzhangjie.pro/categories/linux%E5%86%85%E6%A0%B8/) 任务调度相关内容。
+进程下的线程，共享进程打开的某些资源，通过上述cloneFlags也可以看出一点端倪。操作系统设计上，进程是资源分配单位，线程则是最小的调度单位。以Linux为例，不管是进程还是线程，它们都由对应的task_struct结构来描述，并作为sched_entity在内核任务调度器中进行调度。ps: 关于Linux下的任务调度，感兴趣您可以阅读我的博客 [Linux内核](https://www.hitzhangjie.pro/categories/linux%E5%86%85%E6%A0%B8/) 任务调度相关内容。
 
-上述clone函数在amd64架构下的实现，详见 see go/src/runtime/sys_linux_amd64.s:
+上述clone函数在amd64架构下的实现，详见 go/src/runtime/sys_linux_amd64.s:
 
-```go
+```asm
  // int32 clone(int32 flags, void *stk, M *mp, G *gp, void (*fn)(void));
 TEXT runtime·clone(SB),NOSPLIT,$0
     MOVL    flags+0(FP), DI     // 准备系统调用参数
@@ -224,253 +224,200 @@ tracer如果确定了是clone导致的以后，可以进一步通过 `newpid, _ 
 
 有时候文中会混用pid、tid概念，请读者朋友根据语境区分我们指的是线程所属进程的pid，还是线程自身的pid。
 
-### 设计实现
+### 代码实现
 
-#### 准备多线程测试程序
+godbgv2 在 ch6.20.2 中把“跟踪新线程”拆成三个动作：注册 `PTRACE_O_TRACECLONE`、等待任意线程停止、从克隆事件中取出新线程 tid 并加入线程列表。
 
-首先为了后面测试方便，我们先用C语言来实现一个多线程程序，程序逻辑很简单，就是每隔一段时间就创建个新线程，线程函数就是打印当前线程的pid，以及线程LWP的pid。
+#### 注册 PTRACE_O_TRACECLONE
 
-```c
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/syscall.h>
-#include <pthread.h>
+exec 启动路径在 `launchCommand` 之后立即设置选项：
 
-pid_t gettid(void);
-
-void *threadfunc(void *arg) {
-    printf("process: %d, thread: %u\n", getpid(), syscall(SYS_gettid));
-    sleep(1);
-}
-
-int main() {
-    printf("process: %d, thread: %u\n", getpid(), syscall(SYS_gettid));
-
-    pthread_t tid;
-    for (int i = 0; i < 100; i++)
-    {
-        if (i % 10 == 0) {
-            int ret = pthread_create(&tid, NULL, threadfunc, NULL);
-            if (ret != 0) {
-                printf("pthread_create error: %d\n", ret);
-                exit(-1);
-            }
-        }
-        sleep(1);
-    }
-    sleep(15);
-}
-
-```
-
-这个程序可以这样编译 `gcc -o fork fork.c -lpthread`，然后运行 `./fork` 进行测试，可以看看没有被调试跟踪的时候是个什么运行效果。
-
-#### 调试器跟踪新线程创建
-
-然后我们再来看调试器部分的代码逻辑，这里主要是为了演示tracer（debugger）如何对多线程程序中新创建的线程进行感知，并能自动追踪。
-
-这部分实现代码，详见 [hitzhangjie/golang-debugger-lessons/20_trace_new_threads](https://github.com/hitzhangjie/golang-debugger-lessons/tree/master/20_trace_new_threads)。
+**file：pkg/target/process.go**（片段）
 
 ```go
-package main
+	err = dbp.ExecPtrace(func() error {
+		// start and trace
+		dbp.Process, err = dbp.launchCommand(cmd, args...)
+		if err != nil {
+			return err
+		}
 
-import (
-    "fmt"
-    "os"
-    "os/exec"
-    "runtime"
-    "strconv"
-    "syscall"
-    "time"
-)
-
-var usage = `Usage:
-    go run main.go <pid>
-
-    args:
-    - pid: specify the pid of process to attach
-`
-
-func main() {
-    runtime.LockOSThread()
-
-    if len(os.Args) != 2 {
-        fmt.Println(usage)
-        os.Exit(1)
-    }
-
-    // pid
-    pid, err := strconv.Atoi(os.Args[1])
-    if err != nil {
-        panic(err)
-    }
-
-    if !checkPid(int(pid)) {
-        fmt.Fprintf(os.Stderr, "process %d not existed\n\n", pid)
-        os.Exit(1)
-    }
-
-    // step1: supposing running dlv attach here
-    fmt.Fprintf(os.Stdout, "===step1===: supposing running `dlv attach pid` here\n")
-
-    // attach
-    err = syscall.PtraceAttach(int(pid))
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "process %d attach error: %v\n\n", pid, err)
-        os.Exit(1)
-    }
-    fmt.Fprintf(os.Stdout, "process %d attach succ\n\n", pid)
-
-    // check target process stopped or not
-    var status syscall.WaitStatus
-    var rusage syscall.Rusage
-    _, err = syscall.Wait4(int(pid), &status, 0, &rusage)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "process %d wait error: %v\n\n", pid, err)
-        os.Exit(1)
-    }
-    if !status.Stopped() {
-        fmt.Fprintf(os.Stderr, "process %d not stopped\n\n", pid)
-        os.Exit(1)
-    }
-    fmt.Fprintf(os.Stdout, "process %d stopped\n\n", pid)
-
-    regs := syscall.PtraceRegs{}
-    if err := syscall.PtraceGetRegs(int(pid), &regs); err != nil {
-        fmt.Fprintf(os.Stderr, "get regs fail: %v\n", err)
-        os.Exit(1)
-    }
-    fmt.Fprintf(os.Stdout, "tracee stopped at %0x\n", regs.PC())
-
-    // step2: setup to trace all new threads creation events
-    time.Sleep(time.Second * 2)
-
-    //opts := syscall.PTRACE_O_TRACEFORK | syscall.PTRACE_O_TRACEVFORK | syscall.PTRACE_O_TRACECLONE
-    opts := syscall.PTRACE_O_TRACECLONE
-    if err := syscall.PtraceSetOptions(int(pid), opts); err != nil {
-        fmt.Fprintf(os.Stderr, "set options fail: %v\n", err)
-        os.Exit(1)
-    }
-
-    for {
-        // 放行主线程，因为每次主线程都会因为命中clone就停下来
-        if err := syscall.PtraceCont(int(pid), 0); err != nil {
-            fmt.Fprintf(os.Stderr, "cont fail: %v\n", err)
-            os.Exit(1)
-        }
-
-        // 检查主线程状态，检查如果status是clone事件，则继续获取clone出的线程的lwp pid
-        var status syscall.WaitStatus
-        rusage := syscall.Rusage{}
-        _, err := syscall.Wait4(pid, &status, syscall.WSTOPPED|syscall.WCLONE, &rusage)
-        if err != nil {
-            fmt.Fprintf(os.Stderr, "wait4 fail: %v\n", err)
-            break
-        }
-        // 检查下状态信息是否是clone事件 (see `man 2 ptrace` 关于选项PTRACE_O_TRACECLONE的说明部分)
-        isclone := status>>8 == (syscall.WaitStatus(syscall.SIGTRAP) | syscall.WaitStatus(syscall.PTRACE_EVENT_CLONE<<8))
-        fmt.Fprintf(os.Stdout, "tracee stopped, tracee pid:%d, status: %s, trapcause is clone: %v\n",
-            pid,
-            status.StopSignal().String(),
-            isclone)
-
-        // 获取子线程对应的LWP的pid
-        msg, err := syscall.PtraceGetEventMsg(int(pid))
-        if err != nil {
-            fmt.Fprintf(os.Stderr, "get event msg fail: %v\n", err)
-            break
-        }
-        fmt.Fprintf(os.Stdout, "eventmsg: new thread lwp pid: %d\n", msg)
-
-        // 放行子线程继续执行
-        _ = syscall.PtraceDetach(int(msg))
-
-        time.Sleep(time.Second * 2)
-    }
-
-}
-
-// checkPid check whether pid is valid process's id
-//
-// On Unix systems, os.FindProcess always succeeds and returns a Process for
-// the given pid, regardless of whether the process exists.
-func checkPid(pid int) bool {
-    out, err := exec.Command("kill", "-s", "0", strconv.Itoa(pid)).CombinedOutput()
-    if err != nil {
-        panic(err)
-    }
-
-    // output error message, means pid is invalid
-    if string(out) != "" {
-        return false
-    }
-
-    return true
-}
-
+		// 自动跟踪新创建的线程（ch6.20.2）
+		return syscall.PtraceSetOptions(dbp.Process.Pid, syscall.PTRACE_O_TRACECLONE)
+	})
 ```
+
+attach 路径则在 `addThread` 里为每个已跟踪线程设置同样的选项：
+
+**file：pkg/target/thread.go**（片段）
+
+```go
+func (p *DebuggedProcess) addThread(tid int, attach bool) (*Thread, error) {
+    ...
+	// 自动跟踪该线程后续 clone 出的新线程（ch6.20.2）：
+	// 设置 PTRACE_O_TRACECLONE 后，内核会在 clone 时停止克隆者
+	// 并自动跟踪新线程（新线程以 SIGSTOP 开始）。
+	err := p.ExecPtrace(func() error {
+		return syscall.PtraceSetOptions(tid, syscall.PTRACE_O_TRACECLONE)
+	})
+	if err == syscall.ESRCH {
+		// 线程可能恰在此时退出，等待其停止事件后重试一次
+		if _, _, err := p.waitFast(tid); err != nil {
+			return nil, fmt.Errorf("error while waiting after adding thread: %d %s", tid, err)
+		}
+		err := p.ExecPtrace(func() error {
+			return syscall.PtraceSetOptions(tid, syscall.PTRACE_O_TRACECLONE)
+		})
+		if err == syscall.ESRCH {
+			return nil, err
+		}
+		if err != nil {
+			return nil, fmt.Errorf("could not set options for new traced thread %d %s", tid, err)
+		}
+	}
+    ...
+}
+```
+
+`PTRACE_O_TRACECLONE` 是“一次设置、持续生效”的选项：设置之后，该线程每次执行 clone 创建新线程时，内核都会在 clone 返回处让克隆者停下，并自动把新线程纳入跟踪。因此 exec 路径只需要在启动时对主线程设置一次，attach 路径则要对枚举出来的每个线程分别设置。
+
+新线程被内核自动跟踪后，会以一个初始 SIGSTOP 开始。调试器不能假设只等待主线程就够，否则这个 SIGSTOP 会一直挂在等待队列里，后续 `wait` 会先把它取出来。
+
+#### 等待任意线程停止
+
+**file：pkg/target/ptrace_linux.go**（片段）
+
+```go
+// waitAny 等待任意被跟踪线程进入停止状态。
+//
+// 线程组 leader 已退出但留下僵尸子线程时，直接 wait4 会永远阻塞，
+// 因此以 WNOHANG 轮询，直到 wait4 成功或发现 leader 已成僵尸。
+func (p *DebuggedProcess) waitAny(options int) (int, *syscall.WaitStatus, error) {
+	var s syscall.WaitStatus
+	for {
+		wpid, err := syscall.Wait4(-1, &s, syscall.WNOHANG|syscall.WALL|options, nil)
+		if err != nil {
+			return 0, nil, err
+		}
+		if wpid != 0 {
+			return wpid, &s, nil
+		}
+		if status(p.Process.Pid, p.Command) == statusZombie {
+			return p.Process.Pid, nil, nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+```
+
+`waitAny` 的第一个参数是 `-1`，表示等待任意被跟踪线程，而不是像以前那样只等待主线程 pid。它用 `WNOHANG` 轮询而不是阻塞式 `wait4`，是因为线程组 leader 退出后可能留下僵尸子线程，直接阻塞会永远等不到。
+
+#### 从克隆事件中取出新线程
+
+**file：pkg/target/continue.go**（片段）
+
+```go
+// Continue 恢复被调试进程执行，等待其停止，返回停止原因。
+//
+// ch6.20.2 起：若停止事件是线程克隆事件（PTRACE_EVENT_CLONE），
+// 读取新线程 tid 并自动跟踪之，然后报告该事件。
+// （all-stop 挂起策略将在 ch6.20.3 中实现）
+func (p *DebuggedProcess) Continue() (*api.StopInfo, error) {
+	pid := p.Process.Pid
+
+	err := p.ExecPtrace(func() error {
+		err := syscall.PtraceCont(pid, 0)
+		if err == syscall.ESRCH {
+			return nil
+		}
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ptrace cont thread %d err: %v", pid, err)
+	}
+
+	// 等待任意被跟踪线程停止
+	wpid, status, err := p.waitAny(syscall.WSTOPPED)
+	if err != nil {
+		return nil, fmt.Errorf("wait error: %v", err)
+	}
+	if status == nil {
+		// 目标进程已退出（zombie）
+		return &api.StopInfo{PID: wpid, Reason: "exited"}, nil
+	}
+
+	// 克隆事件：新线程已被内核自动跟踪，读取其 tid 并加入线程列表
+	if status.Stopped() && status.TrapCause() == syscall.PTRACE_EVENT_CLONE {
+		newTid, err := p.getEventMessage(wpid)
+		if err != nil {
+			return nil, fmt.Errorf("get event msg error: %v", err)
+		}
+		if _, err := p.addThread(newTid, false); err != nil {
+			return nil, fmt.Errorf("add thread error: %v", err)
+		}
+		return &api.StopInfo{
+			PID:    wpid,
+			Reason: fmt.Sprintf("PTRACE_EVENT_CLONE: new thread %d", newTid),
+		}, nil
+	}
+
+	return &api.StopInfo{PID: wpid, Reason: descStatus(status)}, nil
+}
+
+// getEventMessage 读取线程tid最近一次 ptrace 事件附带的消息
+func (p *DebuggedProcess) getEventMessage(tid int) (int, error) {
+	var msg uint
+	err := p.ExecPtrace(func() error {
+		var err error
+		msg, err = syscall.PtraceGetEventMsg(tid)
+		return err
+	})
+	return int(msg), err
+}
+```
+
+`waitAny` 返回后，`Continue` 先用 `status.TrapCause()` 判断这是否是 `PTRACE_EVENT_CLONE`。如果是，就立刻用 `PtraceGetEventMsg` 读取事件附带的消息——也就是新线程的 tid——并调用 `addThread(newTid, false)` 把它加入线程列表。这里传 `false`，是因为内核已经自动跟踪了新线程，不需要再次 `PTRACE_ATTACH`。
+
+注意，此时返回给上层的 `StopInfo` 理由是 `PTRACE_EVENT_CLONE: new thread <tid>`，而不是普通的 `stopped: ...`。ch6.20.2 只做到“感知并跟踪新线程”，还没有实现 all-stop 挂起策略，所以这时新线程自身的初始 SIGSTOP 仍可能在下一次 `waitAny` 时被当作普通停止事件报告出来；ch6.20.3 会把克隆事件当作内部事件消费掉，继续等待真正的停止事件。
+
+> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.20.2`。本节新增的是 `PTRACE_O_TRACECLONE` 的注册、`waitAny` 和克隆事件处理；命令层的 `continue`、`addThread` 的线程列表管理沿用 ch6.20.1 已有实现，`getEventMessage` 是对 `PTRACE_GETEVENTMSG` 的简单封装。
 
 ### 代码测试
 
-1、先看看testdata/fork.c，这个程序每隔一段时间就创建一个pthread线程出来
+测试目标仍是 godbgv2 自带的 `_fixtures/loop2`。它的主协程和子协程会持续运行，Go 运行时在启动过程中会创建新的 OS 线程，正好可以用来观察克隆事件。
 
-主线程、其他线程创建出来后都会打印该线程对应的pid、tid（这里的tid就是对应的lwp的pid）
+切换到本节代码并构建：
 
 ```bash
-zhangjie🦀 testdata(master) $ ./fork 
-process: 35573, thread: 35573
-process: 35573, thread: 35574
-process: 35573, thread: 35716
-process: 35573, thread: 35853
-process: 35573, thread: 35944
-process: 35573, thread: 36086
-process: 35573, thread: 36192
-process: 35573, thread: 36295
-process: 35573, thread: 36398
+$ git checkout ch6.20.2
+$ make build
+$ make fixtures
+```
+
+用 `godbg exec` 启动调试会话，然后执行一次 `continue`：
+
+```bash
+$ ./godbg exec _fixtures/loop2
+process 2369083 launched, stopped by SIGTRAP
+godbg> continue
+thread 2369083 status: PTRACE_EVENT_CLONE: new thread 2369086
+godbg> pregs
+Register    Value
+Rip         0x478912
+Rsp         0x7fffe9a9f190
+Rbp         0x7fffe9a9f1c8
+Rax         0xffffffffffffffda
+Rbx         0x569338
 ...
+godbg> exit
+tracee is run by tracer, kill it
 ```
 
-2、我们同时观察 `./20_trace_new_threads $(pidof fork)` 的执行情况
+进程被 `exec` 启动后先因 SIGTRAP 停在入口处。`continue` 恢复主线程执行，Go 运行时初始化时调用 clone 创建新线程，内核在克隆事件处停下克隆者，并把新线程 2369086 纳入跟踪。`waitAny` 等到这个事件后，`Continue` 读出事件消息中的 tid，把它加入 `Threads`，然后把 `PTRACE_EVENT_CLONE: new thread 2369086` 报告给命令层。
 
-```bash
-zhangjie🦀 20_trace_new_threads(master) $ ./20_trace_new_threads 35573
-===step1===: supposing running `dlv attach pid` here
-process 35573 attach succ
+此时 `pregs` 打印的是当前线程（主线程 2369083）的寄存器快照。`Rip 0x478912` 位于 `runtime.clone` 中 `syscall` 指令的返回处，`OrigRax 0x38` 是 clone 的系统调用号，说明主线程正停在发起 clone 的运行时代码中。
 
-process 35573 stopped
-tracee stopped at 7f318346f098
-
-tracee stopped, tracee pid:35573, status: trace/breakpoint trap, trapcause is clone: true
-eventmsg: new thread lwp pid: 35716
-tracee stopped, tracee pid:35573, status: trace/breakpoint trap, trapcause is clone: true
-eventmsg: new thread lwp pid: 35853
-tracee stopped, tracee pid:35573, status: trace/breakpoint trap, trapcause is clone: true
-eventmsg: new thread lwp pid: 35944
-tracee stopped, tracee pid:35573, status: trace/breakpoint trap, trapcause is clone: true
-eventmsg: new thread lwp pid: 35944
-tracee stopped, tracee pid:35573, status: trace/breakpoint trap, trapcause is clone: true
-eventmsg: new thread lwp pid: 35944
-tracee stopped, tracee pid:35573, status: trace/breakpoint trap1, trapcause is clone: true
-eventmsg: new thread lwp pid: 36086
-tracee stopped, tracee pid:35573, status: trace/breakpoint trap, trapcause is clone: true
-eventmsg: new thread lwp pid: 36192
-tracee stopped, tracee pid:35573, status: trace/breakpoint trap, trapcause is clone: true
-eventmsg: new thread lwp pid: 36295
-tracee stopped, tracee pid:35573, status: trace/breakpoint trap, trapcause is clone: true
-eventmsg: new thread lwp pid: 36398
-..
-```
-
-3、20_trace_new_threads 每隔一段时间都会打印一个event msg: `<new thread LWP pid>`
-
-结论就是，我们通过显示设置PtraceSetOptions(pid, syscall.PTRACE_O_TRACECLONE)后，恢复tracee执行，这样tracee执行起来后，当执行到clone系统调用时，就会触发一个TRAP，内核会给tracer发送一个SIGTRAP来通知tracee运行状态变化。然后tracer就可以检查对应的status数据，来判断是否是对应的clone事件。
-
-如果是clone事件，我们可以继续通过syscall.PtraceGetEventMsg(...)来获取新clone出来的线程的LWP的pid。
-
-检查是不是clone事件呢，参考 `man 2 ptrace` 手册对选项PTRACE_O_TRACECLONE的介绍部分，有解释clone状况下的status值如何编码。
-
-4、另外设置了选项PTRACE_O_TRACECLONE之后，新线程会自动被trace，所以新线程也会被暂停执行，此时如果希望新线程恢复执行，我们需要显示将其syscall.PtraceDetach或者执行syscall.PtraceContinue操作来让新线程恢复执行。
+> ps：每次运行创建线程的时机、tid 和栈地址都会不同，有时第二次 `continue` 看到的是另一个克隆事件，有时看到的是新线程的初始 SIGSTOP（输出形如 `thread <tid> status: stopped: stopped (signal)`）。前者说明克隆事件被正确识别，后者说明 ch6.20.2 尚未消费新线程的初始停止事件，这正是下一节 all-stop 挂起策略要解决的问题。
 
 ### 思考：线程上下文切换特性支持
 
@@ -482,7 +429,7 @@ eventmsg: new thread lwp pid: 36398
 
 dlv实际上是提供了 `threads` 和 `thread` 调试命令，来允许调试人员查看当前存在的线程以及在它们之间进行切换。那什么调试情景下我需要用到这个线程切换能力呢？
 
-现在主流调试器对于进程内线程管理，基本上都是采用Stop-all、Start-all Mode（原因就是方便观察、避免线程间同步逻辑异常），所以当我们提到线程间切换的时候，其实指的是将当前调试器命令执行时的上下文（context），切换为目标线程的上下文（context），比如执行命令pregs时就是打了当前线程的硬件上下文信息，而不是其他被跟踪的线程的硬件上下文信息。
+现在主流调试器对于进程内线程管理，基本上都是采用Stop-all、Start-all Mode（原因就是方便观察、避免线程间同步逻辑异常），所以当我们提到线程间切换的时候，其实指的是将当前调试器命令执行时的上下文（context），切换为目标线程的上下文（context），比如执行命令pregs时打印的就是当前线程的硬件上下文信息，而不是其他被跟踪的线程的硬件上下文信息。
 
 如果调试的线程执行的是cgo代码（这部分代码逻辑不会像goroutine逻辑那样会在线程间迁移），如果调试的goroutine执行了runtime.LockOSThread()，如果需要查看go运行时的底层逻辑，比如GMP调度，或者需要调试看下不同线程的线程可见性问题 …… 确实还是会有些场景需要用到线程上下文切换能力的支持。
 
@@ -492,7 +439,7 @@ dlv实际上是提供了 `threads` 和 `thread` 调试命令，来允许调试�
 
 举个例子，比如我们要跟踪 `protoc` 编译器的插件实现 `protoc-gen-go`，protocolbuffers编译器protoc及其非内置支持语言的工具支持是通过插件机制来完成的，protoc编译器负责读取并解析 `*.proto` 文件，并生成一个代码生成请求发送给插件，方式就是在 `$PATH` 中搜索 `protoc-gen-go` 并启动它，然后通过stdin, stdout来传递请求并获取结果。如果你对此感兴趣，可以阅读 [Protoc及其插件工作原理](https://www.hitzhangjie.pro/blog/2017-05-23-protoc%E5%8F%8A%E6%8F%92%E4%BB%B6%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90%E7%B2%BE%E5%8D%8E%E7%89%88/)。
 
-如果我们用gdb对protoc进行调试（protoc编译器是用C++写的)，并且希望对插件实现protoc-gen-go进行调试，就可以通过gdb中的 `set follow-fork-mode childk` 来选择跟踪子进程。这个功能是非常方便的，你不需要担心子进程执行过快越过想调试的代码部分。如果你不知道这个调试特性，可能会在子进程初始化逻辑中设置一个forloop然后attach后再跳出forloop才能对感兴趣的代码进行调试。
+如果我们用gdb对protoc进行调试（protoc编译器是用C++写的)，并且希望对插件实现protoc-gen-go进行调试，就可以通过gdb中的 `set follow-fork-mode child` 来选择跟踪子进程。这个功能是非常方便的，你不需要担心子进程执行过快越过想调试的代码部分。如果你不知道这个调试特性，可能会在子进程初始化逻辑中设置一个forloop然后attach后再跳出forloop才能对感兴趣的代码进行调试。
 
 OK，那对于多线程程序而言，我们跟踪到一个新线程时，是否需要允许用户选择，你需要切换到某个线程上下文去吗？意义应该不大。首先Go主要是面向goroutine级别的并发控制操作，调试时切换线程作用不大。即使前面提到确实有些场景需要线程切换支持，我们也可以手动执行命令 `thread <n>` 来切换，所以没有必要支持自动跟踪并切换到新线程的特性。
 
@@ -515,4 +462,4 @@ Enables or disables follow exec mode. When follow exec mode Delve will automatic
 
 ### 本节小结
 
-本节主要探讨了调试器如何感知和跟踪新创建线程的技术实现，核心内容包括：通过 `PTRACE_O_TRACECLONE` 选项让内核自动跟踪clone系统调用；利用 `waitpid()` 和 `PTRACE_EVENT_CLONE` 事件机制感知新线程创建；通过 `PtraceGetEventMsg()` 获取新线程的LWP ID并将其纳入调试器管理。本节还深入分析了Linux内核中线程与进程的本质区别，以及Go语言GMP调度模型对线程调试的特殊影响，为读者理解多线程、多进程调试的底层机制提供了重要基础。
+本节主要探讨了调试器如何感知和跟踪新创建线程的技术实现，核心内容包括：通过 `PTRACE_O_TRACECLONE` 选项让内核自动跟踪clone系统调用；利用 `waitAny()` 等待任意被跟踪线程停止，并通过 `PTRACE_EVENT_CLONE` 事件机制感知新线程创建；通过 `PtraceGetEventMsg()` 获取新线程的LWP ID，再以 `addThread(newTid, false)` 将其纳入调试器管理。本节还深入分析了Linux内核中线程与进程的本质区别，以及Go语言GMP调度模型对线程调试的特殊影响，为读者理解多线程、多进程调试的底层机制提供了重要基础。

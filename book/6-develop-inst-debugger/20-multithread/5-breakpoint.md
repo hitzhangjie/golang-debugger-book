@@ -1,461 +1,289 @@
-## 线程执行控制 - breakpoint
+## 线程执行控制 - 断点移除
 
-### 实现目标：多线程环境下的断点命中处理
+### 实现目标：多线程环境下移除断点时回退线程 PC
 
-前面我们已经介绍了多线程调试中的挂起策略（3-suspend_policy.md）和continue命令的实现（4-continue.md），现在我们需要深入探讨多线程环境下断点命中后的线程控制机制。
+前面几节我们完成了多线程的跟踪、all-stop 挂起策略和多线程 continue。这一节补上多线程断点管理里容易被忽略的一环：**移除断点时，如何处理正停在该断点处的线程**。
 
-在多线程调试中，当某个线程命中断点停止时，调试器面临以下关键挑战：
+在单线程调试器里，`clear`、`clearall` 只需要把断点处的 `0xCC` 还原成原始指令即可。但在多线程 + all-stop 的场景下，某个线程可能正停在这个断点上：它的 PC 已经越过了 `int3`，指向断点地址的下一条指令。此时如果只还原指令、不调整 PC，该线程恢复执行后就会从断点地址之后继续，**跳过**原本应该执行的那条指令。
 
-- **线程同步问题**：如果只停止命中断点的线程，而其他线程继续执行，可能导致线程间的同步操作（如互斥锁、信号量等）无法正常工作，造成死锁或数据竞争
-
-- **状态一致性**：需要确保所有线程在断点命中时都能及时停止，保持进程状态的一致性，便于调试人员观察和分析
-
-- **断点恢复复杂性**：命中断点的线程需要特殊的处理流程（恢复原始指令、调整PC、单步执行等），同时确保其他线程也能正确恢复执行
-
-- **竞态条件处理**：多个线程可能同时命中断点，需要正确处理这种并发情况
-
-我们的目标是实现一个支持多线程的断点处理机制，能够：
-
-1. 及时检测任意线程的断点命中事件
-
-2. 采用Stop-All策略停止所有相关线程
-
-3. 正确管理线程状态和断点恢复信息
-
-4. 为后续的continue操作做好充分准备
+因此，多线程版本的 `clear`/`clearall` 需要先找出所有停在目标断点处的线程，把它们的 PC 回退到断点地址，再还原断点指令。
 
 ### 基础知识
 
-#### 断点命中检测机制
+#### 软件断点命中后 PC 停在哪里
 
-在多线程环境中，断点命中的检测需要结合线程状态监控和信号处理机制：
+软件断点的实现方式是把断点地址处指令的首字节替换成 `int3`（`0xCC`）。CPU 执行到这条指令时触发 3 号中断，内核生成 SIGTRAP，调试器被唤醒。
 
-**软件断点的工作原理**：
+`int3` 是一条单字节指令，执行它时 CPU 已经把 PC 推进到下一条指令。因此调试器看到的寄存器状态是：
 
-- 断点指令（0xCC，即int3）替换原始指令
-
-- 当线程执行到断点位置时，触发SIGTRAP信号
-
-- 内核暂停线程执行并通知调试器
-
-**断点命中检测流程**：
-
-1. 通过`waitpid()`监控所有被跟踪线程的状态变化
-
-2. 检查线程停止原因是否为SIGTRAP信号
-
-3. 验证PC-1位置是否为断点指令（0xCC）
-
-4. 确认断点地址是否在调试器管理的断点列表中
-
-#### Stop-All策略的必要性
-
-在多线程调试中，Stop-All策略对于断点处理至关重要：
-
-**避免线程间不一致**：
-
-- 防止其他线程在断点线程停止期间继续修改共享状态
-
-- 确保调试人员观察到的程序状态是完整和一致的
-
-**支持线程同步操作**：
-
-- 许多多线程程序依赖线程间的协作和同步
-
-- 如果只有断点线程停止，可能导致死锁或无限等待
-
-**简化调试体验**：
-
-- 调试人员可以同时观察所有线程的状态
-
-- 便于分析线程间的交互和依赖关系
-
-#### 线程状态转换
-
-断点命中时的线程状态转换过程：
-
-```go
-type ThreadState int
-
-const (
-    ThreadStateRunning ThreadState = iota
-    ThreadStateStopped
-    ThreadStateStoppedAtBreakpoint  // 关键状态
-    ThreadStateStoppedAtSignal
-    ThreadStateDetached
-)
-
-// 断点命中时的状态转换
-// Running -> StoppedAtBreakpoint (命中断点)
-// Running -> Stopped (被其他线程的断点事件影响)
+```text
+PC = 断点地址 + 1
 ```
 
-#### 断点类型差异
+调试器判断“线程是否停在断点处”时，检查的就是 `PC-1` 处是否存在断点。
 
-**软件断点**：
+#### 为什么移除断点时要回退 PC
 
-- 通过修改指令实现，适用于所有线程
+假设断点地址 `addr` 处的原始指令是 `I`，被替换成了 `0xCC`。线程命中后停在 `addr+1`。此时如果直接移除断点（把 `addr` 处还原成 `I`）并恢复执行，线程会从 `addr+1` 继续，`I` 就被跳过了：
 
-- 在多线程环境下需要确保所有线程都能正确命中
+```text
+正常执行：  addr: I          → addr+n: 下一条指令
+命中后跳过： addr: 0xCC(I)    → PC=addr+1 → 从 addr+1 继续，I 未执行
+正确恢复：  PC 回退到 addr   → 执行 I    → 继续
+```
 
-- 恢复时需要特殊的单步执行处理
+所以移除断点的正确顺序是：**先回退停在断点处的线程 PC，再还原断点处的原始指令**。
 
-**硬件断点**：
+#### 为什么顺序不能反过来
 
-- 通过CPU调试寄存器实现，数量有限
+回退 PC 需要知道“哪些线程停在断点处”，而 `ThreadStoppedAtBreakpoint` 是根据断点表来判断的。`RestoreInstruction` 在还原指令的同时会把断点从 `Breakpoints`、`BreakpointsByID` 两张索引中删除；一旦先还原指令，断点表里就查不到这个地址了，再想找出停在它上面的线程就无从下手。
 
-- 通常用于特定线程的调试
+因此 `ClearBreakpoint` 必须把“回退 PC”放在“还原指令”之前。`ClearAll` 则要先把所有停在断点处的线程收集起来，再统一还原所有断点，最后回退这些线程的 PC。
 
-- 不需要修改指令，恢复相对简单
+### 代码实现
 
-### 设计实现
+#### ClearBreakpoint：先回退 PC，再还原指令
 
-#### 断点命中检测流程
+**file：pkg/target/breakpoint.go**（片段）
 
 ```go
-func (dbp *DebuggerProcess) DetectBreakpointHit() (*BreakpointEvent, error) {
-    for {
-        // 等待任意线程状态变化
-        threadID, status, err := dbp.WaitForAnyThread()
-        if err != nil {
-            return nil, err
-        }
-        
-        // 检查是否为SIGTRAP信号
-        if !status.IsBreakpoint() {
-            continue
-        }
-        
-        // 获取线程寄存器信息
-        regs, err := dbp.GetRegisters(threadID)
-        if err != nil {
-            return nil, err
-        }
-        
-        // 检查PC-1位置是否为断点指令
-        bpAddr := regs.PC() - 1
-        originalByte, err := dbp.ReadMemory(threadID, bpAddr, 1)
-        if err != nil {
-            return nil, err
-        }
-        
-        // 验证是否为断点指令
-        if originalByte[0] != 0xCC {
-            continue
-        }
-        
-        // 确认断点是否在管理列表中
-        bp, exists := dbp.GetBreakpoint(bpAddr)
-        if !exists {
-            continue
-        }
-        
-        return &BreakpointEvent{
-            ThreadID: threadID,
-            Address:  bpAddr,
-            Breakpoint: bp,
-        }, nil
-    }
+// ClearBreakpoint 移除指定编号的断点：还原断点处的原始指令、摘除索引，
+// 并回退停在断点处的线程 PC（ch6.20.5）。
+func (p *DebuggedProcess) ClearBreakpoint(id uint64) (*api.Breakpoint, error) {
+	bp, ok := p.BreakpointsByID[id]
+	if !ok {
+		return nil, api.ErrBreakpointNotExisted
+	}
+
+	// 先回退停在断点处的线程（PC-1），否则这些线程恢复执行时会
+	// 从断点指令之后继续，跳过一条指令。
+	// 注意顺序：必须早于还原指令——断点索引会在还原时被摘除，
+	// 届时将无法再找到停在断点处的线程。
+	if err := p.rewindThreadsAtBreakpoint(bp.Addr); err != nil {
+		return nil, err
+	}
+
+	if _, err := p.RestoreInstruction(bp.Addr); err != nil {
+		return nil, err
+	}
+	return toAPIBreakpoint(bp), nil
+}
+
+// rewindThreadsAtBreakpoint 回退停在断点addr处的线程 PC
+func (p *DebuggedProcess) rewindThreadsAtBreakpoint(addr uintptr) error {
+	bpStoppedThreads, err := p.ThreadStoppedAtBreakpoint()
+	if err != nil {
+		return fmt.Errorf("检查线程停在断点处失败: %v", err)
+	}
+	for tid, bpAddr := range bpStoppedThreads {
+		if bpAddr != addr {
+			continue
+		}
+		regs, err := p.ReadRegister(tid)
+		if err != nil {
+			return fmt.Errorf("读取寄存器失败: %v", err)
+		}
+		regs.SetPC(regs.PC() - 1)
+		if err = p.WriteRegister(tid, regs); err != nil {
+			return fmt.Errorf("写入寄存器失败: %v", err)
+		}
+	}
+	return nil
 }
 ```
 
-#### 停止所有线程的实现
+`rewindThreadsAtBreakpoint` 只回退停在 `addr` 这个断点上的线程；停在其他断点上的线程留给对应的 `ClearBreakpoint` 处理。每个线程读一次寄存器、`PC--`、写回，不需要单步，因为断点马上就会被还原，线程恢复执行时会从断点地址重新执行原始指令。
+
+#### ThreadStoppedAtBreakpoint：找出停在断点处的线程
+
+**file：pkg/target/breakpoint.go**（片段）
 
 ```go
-func (dbp *DebuggerProcess) StopAllThreadsOnBreakpoint(bpEvent *BreakpointEvent) error {
-    threads := dbp.GetAllTrackedThreads()
-    
-    // 记录断点命中的线程
-    bpEvent.Thread.State = ThreadStateStoppedAtBreakpoint
-    dbp.UpdateThreadState(bpEvent.ThreadID, ThreadStateStoppedAtBreakpoint)
-    
-    // 停止所有其他运行中的线程
-    var runningThreads []int
-    for _, thread := range threads {
-        if thread.ID != bpEvent.ThreadID && thread.State == ThreadStateRunning {
-            runningThreads = append(runningThreads, thread.ID)
-        }
-    }
-    
-    // 批量发送SIGSTOP信号
-    for _, threadID := range runningThreads {
-        err := syscall.Kill(threadID, syscall.SIGSTOP)
-        if err != nil {
-            return fmt.Errorf("failed to stop thread %d: %v", threadID, err)
-        }
-    }
-    
-    // 等待所有线程停止
-    for _, threadID := range runningThreads {
-        _, err := dbp.WaitForThread(threadID)
-        if err != nil {
-            return fmt.Errorf("failed to wait for thread %d: %v", threadID, err)
-        }
-        
-        // 更新线程状态
-        dbp.UpdateThreadState(threadID, ThreadStateStopped)
-    }
-    
-    return nil
+// ThreadStoppedAtBreakpoint 检查所有线程是否停在断点处，
+// 返回 tid→断点地址 的映射。
+//
+// 断点指令（int3）已执行时 PC 指向断点地址+1，因此检查 PC-1 处
+// 是否存在断点。
+func (p *DebuggedProcess) ThreadStoppedAtBreakpoint() (map[int]uintptr, error) {
+	threadStoppedAtBP := make(map[int]uintptr)
+
+	if len(p.Threads) == 0 {
+		return threadStoppedAtBP, nil
+	}
+
+	for tid, thread := range p.Threads {
+		regs, err := p.ReadRegister(thread.Tid)
+		if err != nil {
+			// 线程可能已经退出，跳过
+			if err == syscall.ESRCH {
+				continue
+			}
+			return nil, fmt.Errorf("read register for thread %d: %v", tid, err)
+		}
+
+		// 检查 PC-1 位置是否有断点
+		pc := regs.PC()
+		if bp, exists := p.Breakpoints[uintptr(pc-1)]; exists {
+			threadStoppedAtBP[tid] = bp.Addr
+		}
+	}
+
+	return threadStoppedAtBP, nil
 }
 ```
 
-#### 线程状态同步管理
+这个函数在 ch6.20.4 的 continue 中已经出现过，本节复用它来完成 clear 的 PC 回退。注意 `ESRCH` 的处理：如果线程在遍历过程中退出，读寄存器会失败，跳过即可，不应让整个 `clear` 失败。
+
+#### ClearAll：先收集，再还原，最后回退
+
+**file：pkg/target/breakpoint.go**（片段）
 
 ```go
-type ThreadManager struct {
-    threads map[int]*ThreadInfo
-    mutex   sync.RWMutex
-}
+// ClearAll 删除所有已添加的断点，并回退所有停在断点处的线程 PC
+// （ch6.20.5）。
+func (p *DebuggedProcess) ClearAll() error {
+	// 首先检查所有线程是否停在断点处（必须先于还原指令，
+	// 断点索引会在还原时被摘除）
+	stopped, err := p.ThreadStoppedAtBreakpoint()
+	if err != nil {
+		return fmt.Errorf("check thread breakpoints error: %v", err)
+	}
 
-type ThreadInfo struct {
-    ID       int
-    State    ThreadState
-    LastPC   uintptr
-    Regs     *syscall.PtraceRegs
-    Breakpoint *BreakpointInfo // 如果停在断点处
-}
+	for _, bp := range p.Breakpoints {
+		if _, err := p.RestoreInstruction(bp.Addr); err != nil {
+			return fmt.Errorf("clear breakpoint at %#x error: %v", bp.Addr, err)
+		}
+	}
 
-func (tm *ThreadManager) UpdateThreadState(threadID int, newState ThreadState) {
-    tm.mutex.Lock()
-    defer tm.mutex.Unlock()
-    
-    if thread, exists := tm.threads[threadID]; exists {
-        thread.State = newState
-    }
-}
+	// 回退所有停在断点处的线程 PC
+	for tid := range stopped {
+		regs, err := p.ReadRegister(tid)
+		if err != nil {
+			return fmt.Errorf("read register for thread %d: %v", tid, err)
+		}
+		regs.SetPC(regs.PC() - 1)
+		if err = p.WriteRegister(tid, regs); err != nil {
+			return fmt.Errorf("write register for thread %d: %v", tid, err)
+		}
+	}
 
-func (tm *ThreadManager) GetBreakpointThreads() []int {
-    tm.mutex.RLock()
-    defer tm.mutex.RUnlock()
-    
-    var bpThreads []int
-    for id, thread := range tm.threads {
-        if thread.State == ThreadStateStoppedAtBreakpoint {
-            bpThreads = append(bpThreads, id)
-        }
-    }
-    return bpThreads
+	return nil
 }
 ```
 
-#### 断点恢复准备
+`ClearAll` 的顺序更严格：
 
-```go
-func (dbp *DebuggerProcess) PrepareBreakpointRecovery(bpEvent *BreakpointEvent) error {
-    // 保存断点命中线程的完整上下文
-    regs, err := dbp.GetRegisters(bpEvent.ThreadID)
-    if err != nil {
-        return err
-    }
-    
-    // 记录断点信息，为后续恢复做准备
-    bpEvent.Breakpoint.HitThreadID = bpEvent.ThreadID
-    bpEvent.Breakpoint.OriginalPC = regs.PC()
-    bpEvent.Breakpoint.OriginalByte = dbp.GetBreakpointOriginalByte(bpEvent.Address)
-    
-    // 标记需要特殊处理的断点线程
-    dbp.MarkThreadForBreakpointRecovery(bpEvent.ThreadID, bpEvent.Breakpoint)
-    
-    return nil
-}
+1. 先调用 `ThreadStoppedAtBreakpoint` 把“哪些线程停在哪个断点”完整记录下来；
+2. 遍历所有断点，逐个 `RestoreInstruction`；
+3. 最后按第 1 步的记录回退这些线程的 PC。
+
+如果把第 3 步放在第 2 步中间，或者每次还原一个断点就回退对应线程，都会因为断点索引已被删除而查不到线程。先收集、后还原、再回退，才能保证多断点、多线程同时存在时也不漏回退。
+
+> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.20.5`。本节新增 `ClearBreakpoint` 的 PC 回退、`rewindThreadsAtBreakpoint` 和 `ClearAll` 的“收集—还原—回退”流程；`ThreadStoppedAtBreakpoint` 是 ch6.20.4 已有的实现。
+
+### 代码测试
+
+测试目标仍是 `_fixtures/loop2`。切换到本节代码并构建：
+
+```bash
+$ git checkout ch6.20.5
+$ make build
+$ make fixtures
 ```
 
-### 特殊情况处理
+在程序入口 `0x478120` 下断点，`continue` 命中后先看一次寄存器，再 `clear` 移除断点，然后再看一次寄存器：
 
-#### 多个线程同时命中断点
-
-```go
-func (dbp *DebuggerProcess) HandleConcurrentBreakpoints() error {
-    // 检测所有命中断点的线程
-    bpThreads := dbp.GetBreakpointThreads()
-    
-    if len(bpThreads) > 1 {
-        // 多个线程同时命中断点，选择第一个作为主要断点
-        primaryThread := bpThreads[0]
-        
-        // 其他线程标记为"被动停止"
-        for i := 1; i < len(bpThreads); i++ {
-            dbp.UpdateThreadState(bpThreads[i], ThreadStateStopped)
-        }
-        
-        // 记录并发断点信息
-        dbp.LogConcurrentBreakpoint(bpThreads)
-    }
-    
-    return nil
-}
+```bash
+$ ./godbg exec _fixtures/loop2
+process 2330442 launched, stopped by SIGTRAP
+godbg> break 0x478120
+breakpoint 1 added at 0x478120
+godbg> continue
+thread 2330442 status: stopped: trace/breakpoint trap
+stop all threads now
+godbg> pregs
+Register    Value
+Rip         0x478121
+Rsp         0x7ffcb3901d70
+Rbp         0x0
+Rax         0x0
+Rbx         0x0
+Rcx         0x0
+Rdx         0x0
+Rsi         0x0
+Rdi         0x0
+R8          0x0
+R9          0x0
+R10         0x0
+R11         0x0
+R12         0x0
+R13         0x0
+R14         0x0
+R15         0x0
+EFlags      0x202
+Cs          0x33
+Ss          0x2b
+Ds          0x0
+Es          0x0
+Fs          0x0
+Gs          0x0
+FsBase      0x0
+GsBase      0x0
+OrigRax     0xffffffffffffffff
+godbg> clear -n 1
+breakpoint 1 at 0x478120 cleared
+godbg> pregs
+Register    Value
+Rip         0x478120
+Rsp         0x7ffcb3901d70
+Rbp         0x0
+Rax         0x0
+Rbx         0x0
+Rcx         0x0
+Rdx         0x0
+Rsi         0x0
+Rdi         0x0
+R8          0x0
+R9          0x0
+R10         0x0
+R11         0x0
+R12         0x0
+R13         0x0
+R14         0x0
+R15         0x0
+EFlags      0x202
+Cs          0x33
+Ss          0x2b
+Ds          0x0
+Es          0x0
+Fs          0x0
+Gs          0x0
+FsBase      0x0
+GsBase      0x0
+OrigRax     0xffffffffffffffff
+godbg> exit
+tracee is run by tracer, kill it
 ```
 
-#### 线程在系统调用中
+第一次 `pregs` 显示 `Rip 0x478121`：线程执行了 `0x478120` 处的 `int3`，PC 已经推进到下一条指令。执行 `clear -n 1` 后，`ClearBreakpoint` 先通过 `ThreadStoppedAtBreakpoint` 发现主线程停在 `0x478120`，把它的 PC 回退到 `0x478120`，然后还原原始指令、摘除断点索引。
 
-```go
-func (dbp *DebuggerProcess) HandleThreadInSyscall(threadID int) error {
-    // 检查线程是否在系统调用中
-    regs, err := dbp.GetRegisters(threadID)
-    if err != nil {
-        return err
-    }
-    
-    // 如果线程在系统调用中，需要特殊处理
-    if dbp.IsThreadInSyscall(regs) {
-        // 等待系统调用完成或强制中断
-        err := dbp.InterruptSyscall(threadID)
-        if err != nil {
-            return fmt.Errorf("failed to interrupt syscall for thread %d: %v", threadID, err)
-        }
-    }
-    
-    return nil
-}
+第二次 `pregs` 显示 `Rip 0x478120`，说明 PC 已经回退。如果此时继续执行，CPU 会从 `0x478120` 重新执行被断点替换掉的原始跳转指令，不会跳过它。
+
+`clearall` 的行为也可以用同样方式验证，它会把所有停在断点处的线程 PC 都回退：
+
+```bash
+godbg> clearall
+清空断点成功
+godbg> pregs
+Register    Value
+Rip         0x478120
+...
 ```
 
-### Go程序的特殊考虑
-
-#### GMP调度模型下的断点处理
-
-Go程序的断点处理需要考虑GMP调度模型的特殊性：
-
-```go
-// Go程序中的断点类型
-type GoBreakpointType int
-
-const (
-    UserCodeBreakpoint GoBreakpointType = iota  // 用户代码断点
-    RuntimeBreakpoint                           // 运行时断点
-    SchedulerBreakpoint                         // 调度器断点
-)
-
-func (dbp *DebuggerProcess) HandleGoBreakpoint(bpEvent *BreakpointEvent) error {
-    // 判断断点类型
-    bpType := dbp.ClassifyGoBreakpoint(bpEvent.Address)
-    
-    switch bpType {
-    case UserCodeBreakpoint:
-        // 用户代码断点，正常处理
-        return dbp.HandleUserBreakpoint(bpEvent)
-        
-    case RuntimeBreakpoint:
-        // 运行时断点，需要特殊处理
-        return dbp.HandleRuntimeBreakpoint(bpEvent)
-        
-    case SchedulerBreakpoint:
-        // 调度器断点，可能需要跳过
-        return dbp.HandleSchedulerBreakpoint(bpEvent)
-    }
-    
-    return nil
-}
-```
-
-#### Goroutine断点vs线程断点
-
-```go
-func (dbp *DebuggerProcess) HandleGoroutineBreakpoint(bpEvent *BreakpointEvent) error {
-    // 获取当前goroutine信息
-    g, err := dbp.GetCurrentGoroutine(bpEvent.ThreadID)
-    if err != nil {
-        return err
-    }
-    
-    // 记录goroutine上下文
-    bpEvent.GoroutineID = g.ID
-    bpEvent.GoroutineState = g.State
-    
-    // 如果goroutine被阻塞，需要特殊处理
-    if g.State == "blocked" {
-        return dbp.HandleBlockedGoroutineBreakpoint(bpEvent)
-    }
-    
-    return nil
-}
-```
-
-### 性能优化
-
-#### 减少停止所有线程的延迟
-
-```go
-func (dbp *DebuggerProcess) OptimizedStopAllThreads(bpEvent *BreakpointEvent) error {
-    threads := dbp.GetAllTrackedThreads()
-    
-    // 使用goroutine并发停止线程
-    var wg sync.WaitGroup
-    errChan := make(chan error, len(threads))
-    
-    for _, thread := range threads {
-        if thread.ID != bpEvent.ThreadID && thread.State == ThreadStateRunning {
-            wg.Add(1)
-            go func(tid int) {
-                defer wg.Done()
-                err := syscall.Kill(tid, syscall.SIGSTOP)
-                if err != nil {
-                    errChan <- fmt.Errorf("failed to stop thread %d: %v", tid, err)
-                }
-            }(thread.ID)
-        }
-    }
-    
-    wg.Wait()
-    close(errChan)
-    
-    // 检查错误
-    for err := range errChan {
-        if err != nil {
-            return err
-        }
-    }
-    
-    return nil
-}
-```
-
-#### 批量操作优化
-
-```go
-func (dbp *DebuggerProcess) BatchUpdateThreadStates(updates map[int]ThreadState) error {
-    dbp.threadManager.mutex.Lock()
-    defer dbp.threadManager.mutex.Unlock()
-    
-    // 批量更新线程状态
-    for threadID, newState := range updates {
-        if thread, exists := dbp.threadManager.threads[threadID]; exists {
-            thread.State = newState
-        }
-    }
-    
-    return nil
-}
-```
-
-### 思考一下：断点命中的时序问题
-
-在多线程环境中，断点命中的时序是一个重要考虑因素：
-
-1. **竞态条件**：多个线程可能几乎同时命中断点，需要确保只有一个线程被识别为"主要断点线程"
-
-2. **信号传递延迟**：SIGTRAP信号的传递可能存在延迟，需要设置合理的超时机制
-
-3. **线程调度影响**：操作系统的线程调度可能影响断点检测的及时性
-
-### 思考一下：调试器性能影响
-
-断点处理对调试器性能的影响：
-
-1. **内存使用**：需要为每个线程维护状态信息，内存开销随线程数量线性增长
-
-2. **CPU开销**：频繁的线程状态检查和信号处理会增加CPU使用率
-
-3. **响应延迟**：停止所有线程的操作可能引入明显的延迟
-
-优化策略：
-
-- 使用事件驱动的线程管理
-
-- 实现线程池来管理调试线程
-
-- 采用延迟加载策略减少内存占用
+> ps：上面是某次真实运行的结果。`0x478120` 是固定工具链下 `_fixtures/loop2` 的入口地址，`readelf -h _fixtures/loop2` 的 Entry point 也是它；栈地址和 tid 每次运行都会变化。
 
 ### 本节小结
 
-本节深入探讨了多线程调试中断点命中时的线程控制机制，重点阐述了三个核心技术点：通过SIGTRAP信号检测和PC-1位置验证实现断点命中检测；采用Stop-All策略确保所有线程在断点命中时及时停止；利用线程状态同步管理维护调试器与目标进程的一致性。此外，本节还分析了Go程序GMP调度模型下的断点处理特殊性，以及性能优化的重要考虑因素。这些内容为读者构建了完整的多线程断点处理知识体系，与前面章节的挂起策略和continue命令形成了有机的整体，为后续实现完整的调试器功能奠定了坚实的技术基础。
+本节讨论了多线程环境下移除断点时的 PC 回退问题。软件断点命中后 PC 指向断点地址的下一条指令；如果移除断点时不回退 PC，线程恢复执行就会跳过断点处的原始指令。godbgv2 在 ch6.20.5 中把这一逻辑放进 target 层：`ClearBreakpoint` 先调用 `rewindThreadsAtBreakpoint` 回退停在目标断点上的线程 PC，再 `RestoreInstruction`；`ClearAll` 则先收集所有停在断点处的线程，再还原全部断点，最后统一回退 PC。
+
+这里最关键的是顺序：回退 PC 依赖断点索引来识别线程，而还原指令会删除索引，所以必须“先回退/先收集，后还原”。再结合前一节的 `ThreadStoppedAtBreakpoint` 和 all-stop continue，调试器在多线程下就能一致地处理断点的命中、恢复和移除。本节内容为后续多进程调试以及更复杂的断点管理功能打下了基础。
