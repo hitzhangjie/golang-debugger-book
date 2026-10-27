@@ -61,7 +61,7 @@ var continueCmd = &cobra.Command{
 			return continueRun()
 		}
 
-		// 有线程停在断点处（多线程，ch6.20.4）：
+		// 有线程停在断点处（多线程，ch6.17.4）：
 		// 对每个这样的线程：还原断点 → 回退 PC → 单步越过 → 恢复断点
 		bpCleared := make(map[uint64]struct{})
 		for tid, bpAddr := range bpStoppedThreads {
@@ -317,7 +317,7 @@ func (p *DebuggedProcess) Continue() (*api.StopInfo, error) {
 }
 ```
 
-与 ch6.20.3 相比，这一版最重要的修正是克隆事件里的**恢复顺序**。ch6.20.3 在 `addThread` 之后先 `waitFast(newTid)` 消费新线程的初始 SIGSTOP，再继续克隆者；但新线程的初始 SIGSTOP 只有在克隆者被恢复执行后才进入可等待状态，先等就会卡住。ch6.20.4 改为：
+与 ch6.17.3 相比，这一版最重要的修正是克隆事件里的**恢复顺序**。ch6.17.3 在 `addThread` 之后先 `waitFast(newTid)` 消费新线程的初始 SIGSTOP，再继续克隆者；但新线程的初始 SIGSTOP 只有在克隆者被恢复执行后才进入可等待状态，先等就会卡住。ch6.17.4 改为：
 
 1. `getEventMessage(wpid)` 读出 newTid；
 2. `addThread(newTid, false)` 加入线程列表；
@@ -350,21 +350,21 @@ func (p *DebuggedProcess) CurrentThreadTid() (int, error) {
 	if _, err := dbp.addThread(dbp.Process.Pid, false); err != nil {
 		return nil, err
 	}
-	// 当前线程默认为主线程（ch6.20.4 起多线程调试命令依赖它）
+	// 当前线程默认为主线程（ch6.17.4 起多线程调试命令依赖它）
 	dbp.currentThread = dbp.Threads[dbp.Process.Pid]
 	return &dbp, nil
 ```
 
 后续每次 `Continue` 真正停下来时，`currentThread` 会被更新为本次停下来的线程。于是一个典型的交互过程是：`continue` 停在线程 T，`pregs`/`step` 操作 T；再 `continue` 停在另一个线程，这些命令的上下文也随之切换。
 
-> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.20.4`。本节新增多线程断点线程的枚举与逐线程恢复、`CurrentThread`/`ThreadsStoppedAtBreakpoint` 接口、以及克隆事件恢复顺序的修正；`suspendOtherThreads`、`waitAny` 等是 ch6.20.2、ch6.20.3 已有的配套实现。
+> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.17.4`。本节新增多线程断点线程的枚举与逐线程恢复、`CurrentThread`/`ThreadsStoppedAtBreakpoint` 接口、以及克隆事件恢复顺序的修正；`suspendOtherThreads`、`waitAny` 等是 ch6.17.2、ch6.17.3 已有的配套实现。
 
 ### 代码测试
 
 测试目标仍是 `_fixtures/loop2`。切换到本节代码并构建：
 
 ```bash
-$ git checkout ch6.20.4
+$ git checkout ch6.17.4
 $ make build
 $ make fixtures
 ```

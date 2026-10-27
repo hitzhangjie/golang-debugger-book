@@ -48,7 +48,7 @@ PC = 断点地址 + 1
 
 ```go
 // ClearBreakpoint 移除指定编号的断点：还原断点处的原始指令、摘除索引，
-// 并回退停在断点处的线程 PC（ch6.20.5）。
+// 并回退停在断点处的线程 PC（ch6.17.5）。
 func (p *DebuggedProcess) ClearBreakpoint(id uint64) (*api.Breakpoint, error) {
 	bp, ok := p.BreakpointsByID[id]
 	if !ok {
@@ -132,7 +132,7 @@ func (p *DebuggedProcess) ThreadStoppedAtBreakpoint() (map[int]uintptr, error) {
 }
 ```
 
-这个函数在 ch6.20.4 的 continue 中已经出现过，本节复用它来完成 clear 的 PC 回退。注意 `ESRCH` 的处理：如果线程在遍历过程中退出，读寄存器会失败，跳过即可，不应让整个 `clear` 失败。
+这个函数在 ch6.17.4 的 continue 中已经出现过，本节复用它来完成 clear 的 PC 回退。注意 `ESRCH` 的处理：如果线程在遍历过程中退出，读寄存器会失败，跳过即可，不应让整个 `clear` 失败。
 
 #### ClearAll：先收集，再还原，最后回退
 
@@ -140,7 +140,7 @@ func (p *DebuggedProcess) ThreadStoppedAtBreakpoint() (map[int]uintptr, error) {
 
 ```go
 // ClearAll 删除所有已添加的断点，并回退所有停在断点处的线程 PC
-// （ch6.20.5）。
+// （ch6.17.5）。
 func (p *DebuggedProcess) ClearAll() error {
 	// 首先检查所有线程是否停在断点处（必须先于还原指令，
 	// 断点索引会在还原时被摘除）
@@ -179,14 +179,14 @@ func (p *DebuggedProcess) ClearAll() error {
 
 如果把第 3 步放在第 2 步中间，或者每次还原一个断点就回退对应线程，都会因为断点索引已被删除而查不到线程。先收集、后还原、再回退，才能保证多断点、多线程同时存在时也不漏回退。
 
-> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.20.5`。本节新增 `ClearBreakpoint` 的 PC 回退、`rewindThreadsAtBreakpoint` 和 `ClearAll` 的“收集—还原—回退”流程；`ThreadStoppedAtBreakpoint` 是 ch6.20.4 已有的实现。
+> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.17.5`。本节新增 `ClearBreakpoint` 的 PC 回退、`rewindThreadsAtBreakpoint` 和 `ClearAll` 的“收集—还原—回退”流程；`ThreadStoppedAtBreakpoint` 是 ch6.17.4 已有的实现。
 
 ### 代码测试
 
 测试目标仍是 `_fixtures/loop2`。切换到本节代码并构建：
 
 ```bash
-$ git checkout ch6.20.5
+$ git checkout ch6.17.5
 $ make build
 $ make fixtures
 ```
@@ -284,6 +284,6 @@ Rip         0x478120
 
 ### 本节小结
 
-本节讨论了多线程环境下移除断点时的 PC 回退问题。软件断点命中后 PC 指向断点地址的下一条指令；如果移除断点时不回退 PC，线程恢复执行就会跳过断点处的原始指令。godbgv2 在 ch6.20.5 中把这一逻辑放进 target 层：`ClearBreakpoint` 先调用 `rewindThreadsAtBreakpoint` 回退停在目标断点上的线程 PC，再 `RestoreInstruction`；`ClearAll` 则先收集所有停在断点处的线程，再还原全部断点，最后统一回退 PC。
+本节讨论了多线程环境下移除断点时的 PC 回退问题。软件断点命中后 PC 指向断点地址的下一条指令；如果移除断点时不回退 PC，线程恢复执行就会跳过断点处的原始指令。godbgv2 在 ch6.17.5 中把这一逻辑放进 target 层：`ClearBreakpoint` 先调用 `rewindThreadsAtBreakpoint` 回退停在目标断点上的线程 PC，再 `RestoreInstruction`；`ClearAll` 则先收集所有停在断点处的线程，再还原全部断点，最后统一回退 PC。
 
 这里最关键的是顺序：回退 PC 依赖断点索引来识别线程，而还原指令会删除索引，所以必须“先回退/先收集，后还原”。再结合前一节的 `ThreadStoppedAtBreakpoint` 和 all-stop continue，调试器在多线程下就能一致地处理断点的命中、恢复和移除，也为后续更复杂的断点管理功能打下了基础。

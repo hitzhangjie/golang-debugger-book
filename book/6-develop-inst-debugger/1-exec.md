@@ -441,7 +441,7 @@ static inline bool ptrace_event_enabled(struct task_struct *task, int event)
 - 第 1 个分支什么时候会命中？被调试进程已经存在了，tracer 先 ptrace attach，然后再调用 `ptrace(PTRACE_SETOPTIONS, ...)` 来设置 PTRACE_EVENT_EXEC，目的是跟踪进程后续 exec 的行为；
 - 第 2 个分支什么时候会命中？这是对调试器常用ptrace操作 PTRACEME 的处理，tracer 主动启动被调试程序，先 fork 出子进程，然后子进程执行 `ptrace(PTRACE_TRACEME, ...)`，目的是让被调试进程启动后立即被跟踪；
 
-> ps: 第 1 个分支在调试器跟踪一个已运行进程、且要感知它后续 exec 行为时才会用到；跟踪进程新建线程的 PTRACE_O_TRACECLONE 也是类似的机制，在 6.20.2 节会介绍。
+> ps: 第 1 个分支在调试器跟踪一个已运行进程、且要感知它后续 exec 行为时才会用到；跟踪进程新建线程的 PTRACE_O_TRACECLONE 也是类似的机制，在 6.17.2 节会介绍。
 
 #### 内核：SIGTRAP 的处理与 tracer 的唤醒
 
@@ -928,7 +928,7 @@ pid 每次运行都不一样。看到这行输出时，loop 还没开始打印�
 
 输入 `exit` 可以结束会话。这一版退出时还不会清理被调试进程。调试器自己退出之后，内核会把跟踪关系解开，loop 就从停下的地方继续跑，终端上会开始出现 `pid: ...`。试完记得把这个 pid 停掉。退出前的清理，6.4 节会统一补上。
 
-> ps: loop 是单 goroutine 程序，启动后停在 exec 处时还没有别的线程。Go 程序运行起来之后，运行时还会创建 sysmon、GC 等线程，如何自动跟踪这些新建线程，见 6.20 节"调试多线程程序"。
+> ps: loop 是单 goroutine 程序，启动后停在 exec 处时还没有别的线程。Go 程序运行起来之后，运行时还会创建 sysmon、GC 等线程，如何自动跟踪这些新建线程，见 6.17 节"调试多线程程序"。
 
 ### 本节小结
 
