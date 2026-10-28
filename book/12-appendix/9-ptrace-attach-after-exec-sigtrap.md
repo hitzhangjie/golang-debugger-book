@@ -132,7 +132,7 @@ syscall.PtraceAttach(pid)
 
 > "After attaching, the tracer must wait for the tracee to stop. The **usual practice** is to **reinject** these signals until SIGSTOP is seen, then suppress SIGSTOP injection. This is done by **restarting the tracee** with PTRACE_CONT with signal = the signal that caused the current stop, repeating until you see SIGSTOP."
 
-也就是说,正确的做法是**循环等待**:如果看到的不是 SIGSTOP,就通过 `PTRACE_CONT` 将该信号回注(reinject)给 tracee,让它继续运行,然后再次 `wait`,直到看到 SIGSTOP 为止,最后把 SIGSTOP suppress 掉(使用 `PTRACE_CONT(..., 0)`)。
+也就是说,正确的做法是**循环等待**:如果看到的不是 SIGSTOP,就通过 `PTRACE_CONT` 将该信号回注(reinject)给 tracee,让它继续运行,然后再次 `wait`,直到看到 SIGSTOP 为止。**注意**:man 手册中提到"then suppress SIGSTOP injection"是指在调试器**准备继续执行**时再 suppress SIGSTOP,而不是在 attach wait 循环的退出点就 suppress——循环结束时应让 tracee **保持停在 SIGSTOP stop 上**,以便后续设置断点、读取内存等操作。
 
 但这还不是我们遇到的 SIGTRAP 的直接解释。真正的关键在于下一个章节。
 
@@ -280,12 +280,14 @@ func attachAndWaitForSigstop(pid int) error {
         sig := ws.StopSignal()
         
         if sig == syscall.SIGSTOP {
-            // 看到 SIGSTOP,抑制它,attach 完成
-            return syscall.PtraceCont(pid, 0)
+            // 看到 SIGSTOP,保持停止状态,attach 完成
+            // tracee 停在这里,调试器可以继续设置断点、读取内存等
+            return nil
         }
         
         // 看到其他信号(如 post-exec SIGTRAP),抑制它,继续等待
-        // 注意:对于 post-exec SIGTRAP,必须抑制(传 0),否则会杀死进程!
+        // 注意:对于 post-exec SIGTRAP 等机制产生的信号,必须抑制(传 0),否则会杀死进程!
+        // 对于本应到达 tracee 的外部信号(如 SIGUSR1),应该回注:PtraceCont(pid, int(sig))
         if err := syscall.PtraceCont(pid, 0); err != nil {
             return err
         }
@@ -298,11 +300,12 @@ func attachAndWaitForSigstop(pid int) error {
 1. 符合 man 手册的建议,处理逻辑清晰
 2. 能够正确处理 attach 瞬间的各种竞态情况
 3. 对于 post-exec SIGTRAP,通过传 0 抑制,避免杀死进程
+4. attach 完成时 tracee 保持停止状态,调试器可以安全地设置断点、读取内存等
 
 注意事项:
 
-- 对于本应被 tracee 接收的信号(如外部发送的 SIGUSR1),循环中应该 `PtraceCont(pid, int(sig))` 回注,而不是一律传 0。但对于 post-exec SIGTRAP 和 attach SIGSTOP 本身,应该抑制。
-- 循环的终止条件是看到 SIGSTOP,然后抑制它并返回。此时 tracee 处于停止状态,调试器可以继续进行后续操作(设置断点、读取内存等)。
+- **信号处理策略**:对于 post-exec SIGTRAP 等机制产生的信号,必须抑制(传 0);对于本应被 tracee 接收的外部信号(如 `kill -USR1 <pid>`),应该回注 `PtraceCont(pid, int(sig))`,而不是一律传 0。
+- **循环终止条件**:看到 SIGSTOP 后直接返回 nil,**保持 tracee 停在 SIGSTOP stop 上**,不要执行 `PtraceCont`。此时 tracee 处于停止状态,调试器可以继续进行后续操作(设置断点、读取内存等)。对 SIGSTOP 的 suppress(通过 `PTRACE_CONT(..., 0)`)应该在调试器完成初始化、准备让程序继续执行时才做,不是 attach wait 循环的退出动作。
 
 #### 方案二:使用 PTRACE_SEIZE + PTRACE_INTERRUPT
 
@@ -379,7 +382,7 @@ syscall.PtraceSetOptions(pid, syscall.PTRACE_O_TRACEEXEC)
 
 这个问题虽然也涉及 attach,但**更关键的是 execve under ptrace 的行为**。解决方案是:
 
-1. 实现 wait 循环,处理任何先到的信号,直到 SIGSTOP;对 post-exec SIGTRAP 必须抑制(传 0),否则会杀死进程
+1. 实现 wait 循环,处理任何先到的信号,直到 SIGSTOP;对 post-exec SIGTRAP 等机制产生的信号必须抑制(传 0),否则会杀死进程;看到 SIGSTOP 后保持停止,不要 CONT
 2. 或者使用 `PTRACE_SEIZE` + `PTRACE_INTERRUPT`,从根源上规避 SIGSTOP 的各种问题
 3. 如果是已建立跟踪关系的场景,可以提前设置 `PTRACE_O_TRACEEXEC`,让 exec 产生 `PTRACE_EVENT_EXEC` 而不是 SIGTRAP
 
@@ -425,10 +428,10 @@ syscall.PtraceSetOptions(pid, syscall.PTRACE_O_TRACEEXEC)
    - **信号没有严格的优先级**:SIGTRAP 先到是 dequeue 时机的结果,不是"优先级高"
 
 5. **正确的处理方式**:
-   - **wait 循环**:非 SIGSTOP 时用 `PTRACE_CONT(pid, 0)` 抑制(对本应到达的信号应回注),直到 SIGSTOP 再抑制
+   - **wait 循环**:非 SIGSTOP 时用 `PTRACE_CONT(pid, 0)` 抑制机制产生的信号(对本应到达的外部信号应回注),继续 wait;看到 SIGSTOP 后保持停止(return nil),不要 CONT——对 SIGSTOP 的 suppress 是调试器准备继续执行时才做
    - **PTRACE_SEIZE + INTERRUPT**(推荐):无隐式 SIGSTOP,用 INTERRUPT 显式停止,产生 PTRACE_EVENT_STOP
    - **PTRACE_O_TRACEEXEC**:已建立跟踪关系时可用,让 exec 产生 PTRACE_EVENT_EXEC 而非 SIGTRAP
 
 6. **与附录 12.5 的关系**:12.5 讲 attach 的通用竞态问题和 SEIZE 解决方案,是基础;本文(12.9)是 Start+attach 场景下 post-exec SIGTRAP 的具体案例,展示排查过程和概念澄清,是应用。
 
-通过本文的分析,读者应该理解:调试器在 attach 后不能假设第一次 wait 必然是 SIGSTOP,必须实现循环等待或使用 SEIZE;对于 post-exec SIGTRAP 这类机制产生的信号,必须抑制而非回注,否则会导致目标进程被杀死。这些都是开发健壮调试器的重要知识。关于 attach 的更多通用问题,请参阅第 6.2 节"跟踪运行中进程"和附录 12.5"ptrace attach 的竞态问题"。
+通过本文的分析,读者应该理解:调试器在 attach 后不能假设第一次 wait 必然是 SIGSTOP,必须实现循环等待或使用 SEIZE;对于 post-exec SIGTRAP 这类机制产生的信号,必须抑制而非回注,否则会导致目标进程被杀死;看到 SIGSTOP 后应保持停止状态,让调试器完成初始化(设断点、读内存等),而不是立即 CONT。这些都是开发健壮调试器的重要知识。关于 attach 的更多通用问题,请参阅第 6.2 节"跟踪运行中进程"和附录 12.5"ptrace attach 的竞态问题"。
