@@ -49,6 +49,10 @@ ATTACH注入的SIGSTOP会打断tracee正在执行的系统调用。调试器等�
 
 因此，如果需要在attach后停止tracee，优先使用SEIZE + PTRACE_INTERRUPT的组合。strace等工具就优先使用PTRACE_SEIZE。当然，SEIZE要求Linux 3.4+，且INTERRUPT、LISTEN等配套命令只对seize的tracee生效，dlv等调试器出于历史兼容等原因仍然使用PTRACE_ATTACH，并配合完整的信号重注入协议来规避上述问题。
 
+### 扩展阅读
+
+对于 Start 进程后立即 attach 的场景，除了上述通用的竞态问题外，还可能遇到一个特殊情况：第一次 wait 等到的不是 SIGSTOP，而是 SIGTRAP（si_code=SI_USER）。这是因为 attach 恰好发生在子进程 execve 的窗口内，内核会投递一个 post-exec SIGTRAP，详见附录 12.9《案例：Start 后立刻 Attach 先等到 SIGTRAP》。该文展示了一次完整的问题排查过程，包括走过的弯路、根本原因分析、关键概念澄清（signal-delivery-stop、PTRACE_CONT 的 data 参数等），以及正确的处理方式。
+
 ### 参考
 
 - [man 2 ptrace](https://man7.org/linux/man-pages/man2/ptrace.2.html)，"Attaching and detaching"小节

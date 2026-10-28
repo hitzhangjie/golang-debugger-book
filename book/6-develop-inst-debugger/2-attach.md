@@ -45,7 +45,9 @@ do_signal_stop
 > tach from it.  Under Linux, a tracee can be detached in this
 > way regardless of which method was used to initiate tracing.
 
-> ps: 除了 `PTRACE_ATTACH`，内核还提供了 `PTRACE_SEIZE`（Linux 3.4+）来建立跟踪关系：SEIZE attach 之后不会向 tracee 发送 SIGSTOP，tracee 也不会立即停止，调试器需要时再通过 `PTRACE_INTERRUPT` 让其停下来，从而规避了 ATTACH 注入 SIGSTOP 引入的一些竞态问题（如信号合并丢失、stray EINTR、group-stop 状态 attach 等），详见附录《PTRACE_ATTACH 的竞态问题与 PTRACE_SEIZE》。strace 等工具优先使用 PTRACE_SEIZE；dlv 在 attach 时仍然使用 PTRACE_ATTACH（see: pkg/proc/native/ptrace_linux.go），本书示例同样使用 PTRACE_ATTACH，实现上更直观简单。
+> ps: 除了 `PTRACE_ATTACH`，内核还提供了 `PTRACE_SEIZE`（Linux 3.4+）来建立跟踪关系：SEIZE attach 之后不会向 tracee 发送 SIGSTOP，tracee 也不会立即停止，调试器需要时再通过 `PTRACE_INTERRUPT` 让其停下来，从而规避了 ATTACH 注入 SIGSTOP 引入的一些竞态问题（如信号合并丢失、stray EINTR、group-stop 状态 attach 等），详见附录 12.5《PTRACE_ATTACH 的竞态问题与 PTRACE_SEIZE》。strace 等工具优先使用 PTRACE_SEIZE；dlv 在 attach 时仍然使用 PTRACE_ATTACH（see: pkg/proc/native/ptrace_linux.go），本书示例同样使用 PTRACE_ATTACH，实现上更直观简单。
+> 
+> 另外，在 Start 进程后立即 attach 的场景下，可能会遇到一个特殊情况：第一次 wait 等到的不是 SIGSTOP，而是 SIGTRAP（si_code=SI_USER）。这是因为 attach 恰好发生在子进程 execve 的窗口内，内核会投递一个 post-exec SIGTRAP。关于这个现象的详细分析、排查过程和正确处理方式，请参阅附录 12.9《案例：Start 后立刻 Attach 先等到 SIGTRAP》。
 
 #### attach 失败常见原因
 
