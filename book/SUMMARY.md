@@ -147,6 +147,7 @@
   * [12.6 Go调试信息版本矩阵](12-appendix/6-go-dwarf-version-matrix.md)
   * [12.7 x86 实模式与内存保护模式](12-appendix/7-x86-real-and-protected-mode.md)
   * [12.8 认识ASLR](12-appendix/8-aslr.md)
+  * [12.9 案例：Start后立刻Attach先等到SIGTRAP](12-appendix/9-ptrace-attach-after-exec-sigtrap.md)
   * [12.10 编译工具链/compile](12-appendix/80-go-tool-compile.md)
   * [12.11 编译工具链/asm](12-appendix/81-go-tool-asm.md)
   * [12.12 编译工具链/link](12-appendix/82-go-tool-link.md)
