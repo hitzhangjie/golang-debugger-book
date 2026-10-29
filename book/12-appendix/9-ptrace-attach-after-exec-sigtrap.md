@@ -50,71 +50,9 @@ syscall.PtraceAttach(pid)
 
 这说明竞态窗口非常短暂,就在子进程刚刚 fork/exec 完成的附近。
 
-### 排查过程:走过的弯路
+### 排查过程
 
-#### 弯路一:怀疑 ExecPtrace 的影响
-
-godbgv2 中为了保证同一个 tracee 的所有 ptrace 操作都由同一个 OS 线程发起,使用了 `ExecPtrace` 函数,它会创建一个固定的 goroutine 并通过 `runtime.LockOSThread()` 绑定到特定的 OS 线程上。最初怀疑是这个机制引入了额外的延迟或者某种竞态,导致信号顺序异常。
-
-为了验证这个假设,我们编写了对比测试:一组测试直接调用 `syscall.PtraceAttach`,另一组通过 `ExecPtrace` 调用。结果显示:**两种方式都会遇到同样的 SIGTRAP 问题**。这说明问题与 `ExecPtrace` 的实现无关,而是 ptrace 机制本身的行为。
-
-#### 弯路二:误以为"裸 ATTACH 总是先收到 SIGSTOP"
-
-为了更好地理解问题,我们编写了最简化的 C 语言和 Go 语言测试程序:
-
-```c
-// 最小 C 复现
-pid_t pid = fork();
-if (pid == 0) {
-    execl("/bin/sleep", "sleep", "5", NULL);
-}
-ptrace(PTRACE_ATTACH, pid, NULL, NULL);
-waitpid(pid, &status, 0);
-```
-
-```go
-// 最小 Go 复现  
-cmd := exec.Command("sleep", "5")
-cmd.Start()
-syscall.PtraceAttach(cmd.Process.Pid)
-syscall.Wait4(cmd.Process.Pid, &ws, 0, nil)
-```
-
-令人意外的是,这些最简化的测试在本地环境中**总是**等到 SIGSTOP。这让我们一度认为"单纯的 fork + attach 不会有问题",**问题一定出在调试器代码的某个环节**。
-
-但这个结论是错误的!问题在于,即使是最简化的测试,sleep 这个程序本身的启动也需要一定时间(动态链接、初始化等),足以让它完全走出 exec 的关键窗口。sleep 程序"躲过"了竞态窗口,并不代表竞态不存在——这是一个**重要的误导**。
-
-#### 弯路三:试图通过"接受 SIGTRAP"来修复测试
-
-既然 CI 中经常遇到 SIGTRAP,一个看似合理的想法是:修改测试代码,让它既接受 SIGSTOP,也接受 SIGTRAP 作为 attach 成功的标志。这样 CI 就能通过了。
-
-```go
-// 错误的"修复"方式
-sig := ws.StopSignal()
-if sig != syscall.SIGSTOP && sig != syscall.SIGTRAP {
-    return fmt.Errorf("unexpected stop signal: %v", sig)
-}
-```
-
-这个改动确实能让测试通过,但它掩盖了真正的问题:**没有理解为什么会出现 SIGTRAP,也没有在实际调试器代码中正确处理这个信号**。如果生产代码沿用同样的逻辑,可能会在某些场景下出现错误的行为。因此,这个 PR 最终被关闭,转而去寻找真正的根本原因。
-
-#### 弯路四:试图通过"固定延迟"来规避问题
-
-另一个想法是:既然延迟 1ms 能稳定复现 SIGSTOP,那么在测试和生产代码中都加上这个延迟,不就解决了吗?
-
-```go
-cmd.Start()
-time.Sleep(1 * time.Millisecond)  // "躲过"竞态窗口
-syscall.PtraceAttach(pid)
-```
-
-这个做法同样是**掩耳盗铃**:
-
-1. 延迟是一个 magic number,没有理论依据保证在所有环境、所有程序中都足够
-2. 它人为降低了调试器的响应速度,没有必要
-3. 它不是协议的一部分,其他调试器和 strace 等工具也没有这样做
-
-更重要的是,**它仍然没有回答根本问题**:这个 SIGTRAP 到底是什么?调试器应该如何正确处理?
+在找到真正原因之前,排查过程中曾怀疑过几个方向:godbgv2 的 `ExecPtrace` goroutine 机制是否引入了额外竞态(对比测试证明无关),最简化的 C/Go 测试为何总是先等到 SIGSTOP(因为 sleep 启动慢、躲过了竞态窗口),以及是否可以简单地修改测试"接受 SIGTRAP"或在代码中加固定延迟来规避(这些做法掩盖问题、没有回答 SIGTRAP 的来源)。最终通过查阅 man 手册找到了答案。
 
 ### 根本原因:execve under ptrace 的 SIGTRAP
 
