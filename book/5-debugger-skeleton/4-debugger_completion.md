@@ -41,7 +41,7 @@ source ~/.bash_godbg
 
   ![godbg prompt suggestions](assets/godbg_prompt3.png)
 
-- [liner](https://github.com/peterh/liner) 上面这种弹出列表看起来直接，调试一会儿就会发现它把已经打出来的信息隔开了，阅读不连贯。第6章的指令级调试器，以及配套工程 godbgv2 从骨架（tag `ch5.4`）起，都改用 liner 读取调试命令，再交给 cobra 执行。补全还在：按下 Tab 时，先补公共前缀，再按一次就把候选项打印在提示符下方，习惯和 bash 接近。
+- [liner](https://github.com/peterh/liner) 上面这种弹出列表看起来直接，调试一会儿就会发现它把已经打出来的信息隔开了，阅读不连贯。第6章的指令级调试器，以及配套工程 godbgv2 从骨架（tag `ch5.7`）起，都改用 liner 读取调试命令，再交给 cobra 执行。补全还在：按下 Tab 时，先补公共前缀，再按一次就把候选项打印在提示符下方，习惯和 bash 接近。
 
 ps: 这里我们只对调试会话内的命令进行了输入自动补全，对于命令选项，则没有进行支持。调试器使用者可以通过 `help <command>` 查看相应选项及帮助信息。
 

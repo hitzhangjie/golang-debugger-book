@@ -122,14 +122,14 @@ func (p *DebuggedProcess) WriteMemory(addr uintptr, value []byte) error {
 
 和读内存时一样，写操作也通过 `ExecPtrace` 锁定 OS 线程执行。`PtracePokeData` 返回实际写入的字节数，写不满就返回错误——这比“系统调用没报错就等于写成功”更稳妥。
 
-> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.15`。`ReadMemory` / `WriteMemory` 这一对方法都在 `pkg/target/memory.go` 里，命令层、门面、target 三层的写法与 pmem 小节保持一致。
+> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.16`。`ReadMemory` / `WriteMemory` 这一对方法都在 `pkg/target/memory.go` 里，命令层、门面、target 三层的写法与 pmem 小节保持一致。
 
 ### 代码测试
 
 测试目标还是 godbgv2 自带的 `_fixtures/loop`。它每秒打印一次 pid 和循环计数，循环计数变量在源码里叫 `i`，打印时标为 `loop`。切到本节代码并构建：
 
 ```bash
-$ git checkout ch6.15
+$ git checkout ch6.16
 $ make build
 $ make fixtures
 ```

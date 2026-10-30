@@ -226,7 +226,7 @@ tracer如果确定了是clone导致的以后，可以进一步通过 `newpid, _ 
 
 ### 代码实现
 
-godbgv2 在 ch6.17.2 中把“跟踪新线程”拆成三个动作：注册 `PTRACE_O_TRACECLONE`、等待任意线程停止、从克隆事件中取出新线程 tid 并加入线程列表。
+godbgv2 在 ch6.18.2 中把“跟踪新线程”拆成三个动作：注册 `PTRACE_O_TRACECLONE`、等待任意线程停止、从克隆事件中取出新线程 tid 并加入线程列表。
 
 #### 注册 PTRACE_O_TRACECLONE
 
@@ -242,7 +242,7 @@ exec 启动路径在 `launchCommand` 之后立即设置选项：
 			return err
 		}
 
-		// 自动跟踪新创建的线程（ch6.17.2）
+		// 自动跟踪新创建的线程（ch6.18.2）
 		return syscall.PtraceSetOptions(dbp.Process.Pid, syscall.PTRACE_O_TRACECLONE)
 	})
 ```
@@ -254,7 +254,7 @@ attach 路径则在 `addThread` 里为每个已跟踪线程设置同样的选项
 ```go
 func (p *DebuggedProcess) addThread(tid int, attach bool) (*Thread, error) {
     ...
-	// 自动跟踪该线程后续 clone 出的新线程（ch6.17.2）：
+	// 自动跟踪该线程后续 clone 出的新线程（ch6.18.2）：
 	// 设置 PTRACE_O_TRACECLONE 后，内核会在 clone 时停止克隆者
 	// 并自动跟踪新线程（新线程以 SIGSTOP 开始）。
 	err := p.ExecPtrace(func() error {
@@ -319,9 +319,9 @@ func (p *DebuggedProcess) waitAny(options int) (int, *syscall.WaitStatus, error)
 ```go
 // Continue 恢复被调试进程执行，等待其停止，返回停止原因。
 //
-// ch6.17.2 起：若停止事件是线程克隆事件（PTRACE_EVENT_CLONE），
+// ch6.18.2 起：若停止事件是线程克隆事件（PTRACE_EVENT_CLONE），
 // 读取新线程 tid 并自动跟踪之，然后报告该事件。
-// （all-stop 挂起策略将在 ch6.17.3 中实现）
+// （all-stop 挂起策略将在 ch6.18.3 中实现）
 func (p *DebuggedProcess) Continue() (*api.StopInfo, error) {
 	pid := p.Process.Pid
 
@@ -378,9 +378,9 @@ func (p *DebuggedProcess) getEventMessage(tid int) (int, error) {
 
 `waitAny` 返回后，`Continue` 先用 `status.TrapCause()` 判断这是否是 `PTRACE_EVENT_CLONE`。如果是，就立刻用 `PtraceGetEventMsg` 读取事件附带的消息——也就是新线程的 tid——并调用 `addThread(newTid, false)` 把它加入线程列表。这里传 `false`，是因为内核已经自动跟踪了新线程，不需要再次 `PTRACE_ATTACH`。
 
-注意，此时返回给上层的 `StopInfo` 理由是 `PTRACE_EVENT_CLONE: new thread <tid>`，而不是普通的 `stopped: ...`。ch6.17.2 只做到“感知并跟踪新线程”，还没有实现 all-stop 挂起策略，所以这时新线程自身的初始 SIGSTOP 仍可能在下一次 `waitAny` 时被当作普通停止事件报告出来；ch6.17.3 会把克隆事件当作内部事件消费掉，继续等待真正的停止事件。
+注意，此时返回给上层的 `StopInfo` 理由是 `PTRACE_EVENT_CLONE: new thread <tid>`，而不是普通的 `stopped: ...`。ch6.18.2 只做到“感知并跟踪新线程”，还没有实现 all-stop 挂起策略，所以这时新线程自身的初始 SIGSTOP 仍可能在下一次 `waitAny` 时被当作普通停止事件报告出来；ch6.18.3 会把克隆事件当作内部事件消费掉，继续等待真正的停止事件。
 
-> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.17.2`。本节新增的是 `PTRACE_O_TRACECLONE` 的注册、`waitAny` 和克隆事件处理；命令层的 `continue`、`addThread` 的线程列表管理沿用 ch6.17.1 已有实现，`getEventMessage` 是对 `PTRACE_GETEVENTMSG` 的简单封装。
+> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.18.2`。本节新增的是 `PTRACE_O_TRACECLONE` 的注册、`waitAny` 和克隆事件处理；命令层的 `continue`、`addThread` 的线程列表管理沿用 ch6.18.1 已有实现，`getEventMessage` 是对 `PTRACE_GETEVENTMSG` 的简单封装。
 
 ### 代码测试
 
@@ -389,7 +389,7 @@ func (p *DebuggedProcess) getEventMessage(tid int) (int, error) {
 切换到本节代码并构建：
 
 ```bash
-$ git checkout ch6.17.2
+$ git checkout ch6.18.2
 $ make build
 $ make fixtures
 ```
@@ -417,7 +417,7 @@ tracee is run by tracer, kill it
 
 此时 `pregs` 打印的是当前线程（主线程 2369083）的寄存器快照。`Rip 0x478912` 位于 `runtime.clone` 中 `syscall` 指令的返回处，`OrigRax 0x38` 是 clone 的系统调用号，说明主线程正停在发起 clone 的运行时代码中。
 
-> ps：每次运行创建线程的时机、tid 和栈地址都会不同，有时第二次 `continue` 看到的是另一个克隆事件，有时看到的是新线程的初始 SIGSTOP（输出形如 `thread <tid> status: stopped: stopped (signal)`）。前者说明克隆事件被正确识别，后者说明 ch6.17.2 尚未消费新线程的初始停止事件，这正是下一节 all-stop 挂起策略要解决的问题。
+> ps：每次运行创建线程的时机、tid 和栈地址都会不同，有时第二次 `continue` 看到的是另一个克隆事件，有时看到的是新线程的初始 SIGSTOP（输出形如 `thread <tid> status: stopped: stopped (signal)`）。前者说明克隆事件被正确识别，后者说明 ch6.18.2 尚未消费新线程的初始停止事件，这正是下一节 all-stop 挂起策略要解决的问题。
 
 ### 思考：线程上下文切换特性支持
 
@@ -439,4 +439,4 @@ dlv实际上是提供了 `threads` 和 `thread` 调试命令，来允许调试�
 
 ### 本节小结
 
-本节主要探讨了调试器如何感知和跟踪新创建线程的技术实现，核心内容包括：通过 `PTRACE_O_TRACECLONE` 选项让内核自动跟踪clone系统调用；利用 `waitAny()` 等待任意被跟踪线程停止，并通过 `PTRACE_EVENT_CLONE` 事件机制感知新线程创建；通过 `PtraceGetEventMsg()` 获取新线程的LWP ID，再以 `addThread(newTid, false)` 将其纳入调试器管理。本节还分析了Linux内核中线程与进程的本质区别，以及Go语言GMP调度模型对线程调试的特殊影响。至于fork/exec出来的新进程该如何跟踪，以及gdb、lldb、dlv各自的多进程调试策略，将在 6.18 节继续介绍。
+本节主要探讨了调试器如何感知和跟踪新创建线程的技术实现，核心内容包括：通过 `PTRACE_O_TRACECLONE` 选项让内核自动跟踪clone系统调用；利用 `waitAny()` 等待任意被跟踪线程停止，并通过 `PTRACE_EVENT_CLONE` 事件机制感知新线程创建；通过 `PtraceGetEventMsg()` 获取新线程的LWP ID，再以 `addThread(newTid, false)` 将其纳入调试器管理。本节还分析了Linux内核中线程与进程的本质区别，以及Go语言GMP调度模型对线程调试的特殊影响。至于fork/exec出来的新进程该如何跟踪，以及gdb、lldb、dlv各自的多进程调试策略，将在 6.19 节继续介绍。

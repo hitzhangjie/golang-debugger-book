@@ -1,10 +1,10 @@
 ## 调试命令：`breakpoints` 列出断点
 
-6.6 节实现了 `break`：把目标指令的首字节 patch 成 `0xCC`，同时把断点登记进按地址、按编号两张索引。断点加进去了，但用户还看不见——加了几个、编号是几、地址是多少，只能靠记忆。而编号恰恰是后面移除断点的句柄，所以必须有一个命令把断点表读出来展示。本节实现 `breakpoints`。
+6.7 节实现了 `break`：把目标指令的首字节 patch 成 `0xCC`，同时把断点登记进按地址、按编号两张索引。断点加进去了，但用户还看不见——加了几个、编号是几、地址是多少，只能靠记忆。而编号恰恰是后面移除断点的句柄，所以必须有一个命令把断点表读出来展示。本节实现 `breakpoints`。
 
-6.6 节末尾，`cmd/debug/breakpoints.go` 里其实已经留了一个占位命令，`Run` 里只有一句 `TODO(ch6.7): breakpoints 尚未实现`。本节把它填上，并把 `api.Client`、`debugger` 门面、目标层串成完整的调用链。
+6.7 节末尾，`cmd/debug/breakpoints.go` 里其实已经留了一个占位命令，`Run` 里只有一句 `TODO(ch6.8): breakpoints 尚未实现`。本节把它填上，并把 `api.Client`、`debugger` 门面、目标层串成完整的调用链。
 
-本节配套代码在 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.7`，`git diff ch6.6 ch6.7` 可以看到这一节改了什么：三个代码文件（命令层、`api.Client`、门面）。目标层的 `ListBreakpoints`、`Breakpoints` 排序接口在 6.6 节已经随 `pkg/target/breakpoint.go` 一起实现，本节主要是把它们集成到一起。
+本节配套代码在 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.8`，`git diff ch6.7 ch6.8` 可以看到这一节改了什么：三个代码文件（命令层、`api.Client`、门面）。目标层的 `ListBreakpoints`、`Breakpoints` 排序接口在 6.7 节已经随 `pkg/target/breakpoint.go` 一起实现，本节主要是把它们集成到一起。
 
 ### 实现目标：`godbg> breakpoints` 列出断点
 
@@ -33,7 +33,7 @@ no breakpoints
 
 这里有几点约定：
 
-- 按断点编号升序输出。编号从 1 开始单调递增，是用户操作断点的句柄：本节用它查看断点，6.8 节 `clear -n <id>` 用它移除断点；
+- 按断点编号升序输出。编号从 1 开始单调递增，是用户操作断点的句柄：本节用它查看断点，6.9 节 `clear -n <id>` 用它移除断点；
 - 每条断点给出编号、地址、源码位置三项。地址用 `0x` 前缀的十六进制，和 `break <address>` 的输入格式一致；
 - 源码位置 `loc` 目前固定是 `-`。指令级调试还没有 DWARF 符号信息，拿不到 `file:line`；等 9.2.22 节实现源码位置断点后，这里会显示真实的源码位置；
 - 列出断点只读后端内存里的断点表，不访问目标进程、不执行 ptrace，因此它不会改变断点状态，也不会影响目标进程的执行。
@@ -42,11 +42,11 @@ no breakpoints
 
 断点存在 `map[uintptr]*Breakpoint`、`map[uint64]*Breakpoint` 两张表里，map 的遍历顺序不确定，不能直接遍历输出。列出的过程是：收集成切片、按编号排序、再逐条输出。
 
-按编号而不是地址排序，是因为编号是用户操作的句柄：它对应添加顺序，也是 6.8 节 `clear -n <id>` 的参数。排序放在目标层，`api.Client.ListBreakpoints` 的注释把"按编号升序"写成接口契约，命令层和 headless 客户端都依赖这个保证，不需要各自再排一遍。
+按编号而不是地址排序，是因为编号是用户操作的句柄：它对应添加顺序，也是 6.9 节 `clear -n <id>` 的参数。排序放在目标层，`api.Client.ListBreakpoints` 的注释把"按编号升序"写成接口契约，命令层和 headless 客户端都依赖这个保证，不需要各自再排一遍。
 
 ### 在 godbgv2 中实现
 
-相对 ch6.6，这一节的调用链是：
+相对 ch6.7，这一节的调用链是：
 
 ```text
 godbg> breakpoints
@@ -62,7 +62,7 @@ godbg> breakpoints
 
 #### 命令层
 
-`cmd/debug/breakpoints.go` 的完整代码如下，相对 6.6 节的占位版本，`Run` 换成了 `RunE`，`Short` 从"列出断点"改成"列出全部断点"，别名增加了 `bs`：
+`cmd/debug/breakpoints.go` 的完整代码如下，相对 6.7 节的占位版本，`Run` 换成了 `RunE`，`Short` 从"列出断点"改成"列出全部断点"，别名增加了 `bs`：
 
 ```go
 package debug
@@ -104,7 +104,7 @@ func init() {
 
 几个要点：
 
-- `RunE` 而不是 `Run`：`Client.ListBreakpoints` 可能返回错误（比如门面发现没有正在调试的进程），`RunE` 让错误能一路抛给 cobra，最终打印成 `Error: ...`。6.6 节 `break` 也是同样的写法；
+- `RunE` 而不是 `Run`：`Client.ListBreakpoints` 可能返回错误（比如门面发现没有正在调试的进程），`RunE` 让错误能一路抛给 cobra，最终打印成 `Error: ...`。6.7 节 `break` 也是同样的写法；
 - `Aliases` 注册了 `bp`、`bs`。`bp` 是 breakpoint 的常见缩写，`bs` 是 breakpoints 缩写；`Annotations` 把命令归到断点分组，`help` 按分组展示时断点相关命令排在一起（命令分组在 5.7 节搭骨架时介绍过）；
 - `len(bps) == 0` 单独处理，输出 `no breakpoints`。后端返回的是空切片而不是 `nil`，命令层用长度判断即可，不需要关心底层 map 的状态；
 - 输出格式 `breakpoint[%d] addr:%#x, loc:%s`：`%#x` 自动补 `0x` 前缀，和用户输入地址的格式保持一致；`loc` 当前是 `-`，是给源码位置预留的字段；
@@ -126,7 +126,7 @@ type Client interface {
 
 返回值是 `[]Breakpoint` 值切片，不是 `[]*Breakpoint`：
 
-- `Breakpoint` 是服务层的纯值类型（6.6 节定义在 `pkg/service/api/types.go`），字段都是 `uint64`、`string`、`byte` 这类可序列化的类型，不包含内部指针；
+- `Breakpoint` 是服务层的纯值类型（6.7 节定义在 `pkg/service/api/types.go`），字段都是 `uint64`、`string`、`byte` 这类可序列化的类型，不包含内部指针；
 - 第 9 章引入 headless RPC 后，这个返回值要直接跨进程传输，值切片可以直接序列化；如果返回内部 `*target.Breakpoint`，既暴露了目标层实现，也没法跨进程传；
 - 加 `error` 返回值是为了和接口里其他方法保持一致的签名形态。当前本地门面只在"没有正在调试的进程"时返回错误，等第 9 章换成 RPC 客户端，网络、服务端错误也会从这个位置返回，命令层不用跟着改签名。
 
@@ -184,12 +184,12 @@ func (p *DebuggedProcess) ListBreakpoints() []api.Breakpoint {
 在 godbgv2 仓库里切到这一节，把调试器和 fixture 都构建出来：
 
 ```bash
-git checkout ch6.7
+git checkout ch6.8
 make build
 make fixtures
 ```
 
-仍然用 6.6 节的 `_fixtures/loop` 做目标程序，入口地址是 `0x478120`，`_rt0_amd64` 的地址是 `0x4749e0`（`readelf -h _fixtures/loop` 和 `objdump -d` 可以看到）。启动调试会话，添加两个断点，然后列出：
+仍然用 6.7 节的 `_fixtures/loop` 做目标程序，入口地址是 `0x478120`，`_rt0_amd64` 的地址是 `0x4749e0`（`readelf -h _fixtures/loop` 和 `objdump -d` 可以看到）。启动调试会话，添加两个断点，然后列出：
 
 ```bash
 $ ./godbg exec _fixtures/loop
@@ -215,7 +215,7 @@ tracee is run by tracer, kill it
 - 两个断点按添加顺序拿到编号 1、2，`breakpoints` 按编号升序把它们列出来。底层虽然是从 map 收集的，但经过排序后输出是确定的；
 - 每行只展示编号、地址和源码位置，没有展示 `Orig`、`Enabled` 这些内部字段。`Orig` 是还原指令用的内部数据，对用户没有意义；`Enabled` 目前永远是 true，等支持启用/禁用断点后再展示；
 - `loc` 显示为 `-`，表示当前还没有源码位置信息。这不是省略，而是符号级调试能力尚未接入时的占位；
-- 重复执行 `b 0x478120`，输出仍然是 `breakpoint 1 added at 0x478120`，列表里也只有两条记录：6.6 节的按地址去重生效了，没有产生编号为 3 的新断点。输出文案和首次添加一样，是 6.6 节提过的观感问题，通过列表能确认断点数量没有变化；
+- 重复执行 `b 0x478120`，输出仍然是 `breakpoint 1 added at 0x478120`，列表里也只有两条记录：6.7 节的按地址去重生效了，没有产生编号为 3 的新断点。输出文案和首次添加一样，是 6.7 节提过的观感问题，通过列表能确认断点数量没有变化；
 - 没有断点时执行 `breakpoints`，输出 `no breakpoints`：
 
 ```bash

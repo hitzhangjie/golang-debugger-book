@@ -2,7 +2,7 @@
 
 ### 前言
 
-断点是调试器能力的核心功能之一，在介绍指令级调试器时，我们详细介绍过断点的底层工作原理。如果你忘记了指令0xCC的作用，忘记了 `ptrace(PTRACE_PEEKDATA/POKEDATA/PEEKTEXT/POKETEXT, ...)` 的功能，忘记了处理器执行0xCC后会发生什么，忘记了Linux内核如何响应SIGTRAP信号，忘记了子进程状态变化如何通过SIGCHLD通知到父进程并__wake_up_parent唤醒阻塞在wait4上的ptracer，甚至忘记了ptracer调用wait4是用来干什么的 …… 那我建议读者可以先翻到 [第6章 动态断点](../../6-develop-inst-debugger/6-breakpoint.md) 小节快速回顾一下。
+断点是调试器能力的核心功能之一，在介绍指令级调试器时，我们详细介绍过断点的底层工作原理。如果你忘记了指令0xCC的作用，忘记了 `ptrace(PTRACE_PEEKDATA/POKEDATA/PEEKTEXT/POKETEXT, ...)` 的功能，忘记了处理器执行0xCC后会发生什么，忘记了Linux内核如何响应SIGTRAP信号，忘记了子进程状态变化如何通过SIGCHLD通知到父进程并__wake_up_parent唤醒阻塞在wait4上的ptracer，甚至忘记了ptracer调用wait4是用来干什么的 …… 那我建议读者可以先翻到 [第6章 动态断点](../../6-develop-inst-debugger/7-breakpoint.md) 小节快速回顾一下。
 
 除此以外，作为我们本节及后续小节的前置内容，我们已经介绍了：
 

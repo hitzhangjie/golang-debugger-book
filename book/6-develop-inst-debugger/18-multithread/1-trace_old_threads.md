@@ -145,7 +145,7 @@ type Thread struct {
 //
 // attach=true 表示该线程尚未被跟踪，需要先 attach 再等待其停止；
 // attach=false 表示该线程已被跟踪（如 TRACEME 的主线程、
-// 或 ch6.17.2 起经 PTRACE_O_TRACECLONE 自动跟踪的新线程）。
+// 或 ch6.18.2 起经 PTRACE_O_TRACECLONE 自动跟踪的新线程）。
 func (p *DebuggedProcess) addThread(tid int, attach bool) (*Thread, error) {
 	if thread, ok := p.Threads[tid]; ok {
 		return thread, nil
@@ -156,7 +156,7 @@ func (p *DebuggedProcess) addThread(tid int, attach bool) (*Thread, error) {
 		if err != nil && err != syscall.EPERM {
 			// Do not return err if err == EPERM, we may already be
 			// tracing this thread due to PTRACE_O_TRACECLONE
-			// (ch6.17.2). We will surely blow up later if we truly
+			// (ch6.18.2). We will surely blow up later if we truly
 			// don't have permissions.
 			return nil, fmt.Errorf("could not attach to new thread %d %s", tid, err)
 		}
@@ -257,7 +257,7 @@ func AttachTargetProcess(pid int) (p *DebuggedProcess, err error) {
 		return nil, err
 	}
 
-	// attach 到该进程的其他线程（ch6.17.1）
+	// attach 到该进程的其他线程（ch6.18.1）
 	if err := p.updateThreadList(); err != nil {
 		return nil, err
 	}
@@ -306,7 +306,7 @@ func (p *DebuggedProcess) Detach() error {
 
 如果先 detach 线程组 leader，leader 会立即恢复执行，并可能继续创建或操作其他线程，调试器就失去了对组内其他线程的控制。因此这里先 detach 普通线程，最后再 detach leader。
 
-> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.17.1`。其中 `Thread`、`addThread`、`updateThreadList` 等是本节新增的多线程跟踪基础，`Detach` 的多线程处理也在本节完成；`ExecPtrace`、`waitFast` 的底层实现沿用前几节已有的 target 层设施。
+> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.18.1`。其中 `Thread`、`addThread`、`updateThreadList` 等是本节新增的多线程跟踪基础，`Detach` 的多线程处理也在本节完成；`ExecPtrace`、`waitFast` 的底层实现沿用前几节已有的 target 层设施。
 
 ### 代码测试
 
@@ -349,7 +349,7 @@ func main() {
 切换到本节代码并构建：
 
 ```bash
-$ git checkout ch6.17.1
+$ git checkout ch6.18.1
 $ make build
 $ make fixtures
 ```

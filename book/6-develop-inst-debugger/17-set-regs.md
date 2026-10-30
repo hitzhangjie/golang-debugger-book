@@ -148,14 +148,14 @@ func RegsToPtrace(regs *api.Registers) *syscall.PtraceRegs {
 
 上面这段注释说的是一个很容易踩的坑：`PTRACE_SETREGS` 不是“只改你关心的那几个寄存器”，而是把 `user_regs_struct` 整个写进内核。段寄存器、段基址这些字段如果被清零，内核会直接返回 `EIO`，写回就失败了。
 
-> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.16`。与读取寄存器类似，`PTRACE_SETREGS` 也是x86架构特有的ptrace请求，对应的架构无关新接口是 `PTRACE_SETREGSET`（Linux 2.6.30+）。Go标准库 `syscall.PtraceSetRegs` 底层即PTRACE_SETREGS，仅在amd64/386等平台提供。`Client.ReadRegs` / `Client.WriteRegs` 在 step、continue 小节已经就位，本节新增的是命令层和反射查找。
+> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.17`。与读取寄存器类似，`PTRACE_SETREGS` 也是x86架构特有的ptrace请求，对应的架构无关新接口是 `PTRACE_SETREGSET`（Linux 2.6.30+）。Go标准库 `syscall.PtraceSetRegs` 底层即PTRACE_SETREGS，仅在amd64/386等平台提供。`Client.ReadRegs` / `Client.WriteRegs` 在 step、continue 小节已经就位，本节新增的是命令层和反射查找。
 
 ### 代码测试
 
 测试目标还是 `_fixtures/loop`。它每秒打印一次 pid 和循环计数，pid 来自 `os.Getpid()` 的返回值。切到本节代码并构建：
 
 ```bash
-$ git checkout ch6.16
+$ git checkout ch6.17
 $ make build
 $ make fixtures
 ```

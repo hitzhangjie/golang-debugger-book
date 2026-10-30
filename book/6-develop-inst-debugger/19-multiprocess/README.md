@@ -1,6 +1,6 @@
 ## 调试多进程程序
 
-前面 6.17 节讨论的都是单个进程内的多线程：枚举已有线程、跟踪新线程、all-stop 挂起与恢复。但真实世界里的程序并不总是老老实实待在一个进程里：
+前面 6.18 节讨论的都是单个进程内的多线程：枚举已有线程、跟踪新线程、all-stop 挂起与恢复。但真实世界里的程序并不总是老老实实待在一个进程里：
 
 - shell 管道 `cmd1 | cmd2 | cmd3` 会创建三个进程，它们通过 stdin/stdout 的重定向串在一起；
 - protoc 编译器会去 `$PATH` 里搜索 `protoc-gen-go` 并把它启动起来，通过 stdin/stdout 传递代码生成请求；
@@ -12,7 +12,7 @@
 - **跟不跟**：子进程出现时，调试器要不要把它纳入跟踪？跟父进程还是子进程？只跟命令行匹配的那个，还是全都跟？
 - **怎么停**：一个进程命中断点、收到信号或用户中断时，要不要把其他进程也一起停下来？continue/step 时又恢复哪些进程？
 
-本节不再实现代码。跟踪多进程和跟踪多线程在内核层面本来就用同一套机制，godbgv2 在 6.17 节已经把 `PTRACE_O_TRACECLONE` 这条链路讲透了。我们换个角度，看看 gdb、lldb、dlv 这些成熟调试器分别是怎么处理多进程的，了解它们的取舍即可。
+本节不再实现代码。跟踪多进程和跟踪多线程在内核层面本来就用同一套机制，godbgv2 在 6.18 节已经把 `PTRACE_O_TRACECLONE` 这条链路讲透了。我们换个角度，看看 gdb、lldb、dlv 这些成熟调试器分别是怎么处理多进程的，了解它们的取舍即可。
 
 ### 内核对多进程跟踪的支持
 
@@ -48,7 +48,7 @@ GDB 的方案最完整，核心概念是 **inferior（下级）**：一个被调
 - `set follow-fork-mode parent|child`（默认 `parent`）：fork/vfork 之后跟谁。
 - `set detach-on-fork on|off`（默认 `on`）：不跟的那一方怎么办。`on` 表示直接放行；`off` 表示两个都留着，被放弃的进程停在原地成为一个独立 inferior，之后可以 `info inferiors` 查看、`inferior N` 切过去继续调试。
 - `set follow-exec-mode same|new`（默认 `same`）：exec 之后是在原 inferior 里换镜像（`same`），还是新建一个 inferior（`new`）。`new` 的好处是原来的程序镜像还保留着，可以 `run` 重新启动；`same` 则更贴近"进程只是换了身衣服"的直觉。
-- `set schedule-multiple on|off`（默认 `off`）：6.17 节挂起策略里提到的设置项。执行 continue/next/step 时，是只恢复当前进程的线程，还是恢复所有进程的线程。`off` 时要调试另一个进程，得先 `inferior N` 切过去。
+- `set schedule-multiple on|off`（默认 `off`）：6.18 节挂起策略里提到的设置项。执行 continue/next/step 时，是只恢复当前进程的线程，还是恢复所有进程的线程。`off` 时要调试另一个进程，得先 `inferior N` 切过去。
 
 这套组合基本覆盖了多进程调试的常见诉求。比如用 GDB 调 protoc 的插件：`set follow-fork-mode child` 之后，父进程 protoc 被放行，子进程被跟踪着 exec 成 protoc-gen-go，就可以在插件代码里下断点。如果希望父子都留着，再加 `set detach-on-fork off`；如果只想在 fork 处停下看一眼、不改变跟随策略，还可以用 `catch fork`、`catch exec` 这类 catchpoint。如果你对 protoc 的插件机制本身感兴趣，可以阅读 [Protoc及其插件工作原理](https://www.hitzhangjie.pro/blog/2017-05-23-protoc%E5%8F%8A%E6%8F%92%E4%BB%B6%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90%E7%B2%BE%E5%8D%8E%E7%89%88/)。
 
@@ -86,7 +86,7 @@ Go 运行时是多线程的，直接 fork 只会复制调用 fork 的那个线�
 
 从这张表也能看出三种典型的设计取向：GDB 把"调试多个执行实体"当成一等公民，抽象出 inferior，选项多、控制细；LLDB 把进程挂在 target 下，够用就好；Delve 则根据 Go 程序的实际情况砍掉了 fork 跟踪，只保留真正会遇到的 exec 场景。
 
-对于我们在 godbgv2 里实现的调试器来说，6.17 节已经有 `Threads` 列表和 all-stop continue，要扩展到多进程，技术上大体上是把"线程列表"换成"进程列表 + 每个进程的线程列表"，再决定要不要增加 `PTRACE_O_TRACEFORK`/`TRACEVFORK`/`TRACEEXEC`。真正花时间的是调试体验上的取舍：跟谁、停谁、怎么在多个进程之间切换视图。这也是本节只介绍策略、不继续堆代码的原因。
+对于我们在 godbgv2 里实现的调试器来说，6.18 节已经有 `Threads` 列表和 all-stop continue，要扩展到多进程，技术上大体上是把"线程列表"换成"进程列表 + 每个进程的线程列表"，再决定要不要增加 `PTRACE_O_TRACEFORK`/`TRACEVFORK`/`TRACEEXEC`。真正花时间的是调试体验上的取舍：跟谁、停谁、怎么在多个进程之间切换视图。这也是本节只介绍策略、不继续堆代码的原因。
 
 ### 本节小结
 

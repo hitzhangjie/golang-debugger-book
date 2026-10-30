@@ -158,7 +158,7 @@ godbg>
 - 会话阶段：与 exec/attach 无异，`godbg>` 提示符，help 可以列出调试命令（5.7 节介绍过）；
 - 退出阶段：输入 `exit`，会话结束，PostRun 里的 defer 删除 `__debug_bin__`，`ls` 确认当前目录没有残留。注意这一版退出时还不会清理 tracee，6.4 节补上退出善后。
 
-参数透传与 exec 共用同一套 `Client.Launch` 链路，`./godbg debug --help` 可以看到 `Usage: godbg debug [directory|file] [-- args...]`。本节还没有 continue 命令（6.12 节实现），会话里没法让 tracee 跑起来观察它拿到的 `os.Args`；等 continue 可用之后，就能在程序输出里看到 `--` 之后传进去的参数。
+参数透传与 exec 共用同一套 `Client.Launch` 链路，`./godbg debug --help` 可以看到 `Usage: godbg debug [directory|file] [-- args...]`。本节还没有 continue 命令（6.13 节实现），会话里没法让 tracee 跑起来观察它拿到的 `os.Args`；等 continue 可用之后，就能在程序输出里看到 `--` 之后传进去的参数。
 
 对比一下两种方式：`godbg exec _fixtures/loop` 调试的是现成二进制，`godbg debug ./examples/debuggee/` 是现编译现调。开发过程中 debug 更贴近工作流，而 exec 适合调试已经发布、不想重新编译的程序。
 
@@ -171,4 +171,4 @@ godbg>
 - 位置参数按 `--` 切分：`--` 之前是 go build 构建目标，`--` 之后透传给被调试程序，用 `ArgsLenAtDash` 实现，与 exec 的传参约定一致；
 - attach 的启动信息记录属于 6.2 节，本节不再重复。
 
-至此，`godbg exec`（启动已构建程序并跟踪）、`godbg attach`（跟踪运行中进程）、`godbg debug`（构建并调试）三种发起调试的方式都齐了。6.4 节我们给调试会话加一个批量回放能力，用 `--init <file>` 一键重放调试命令脚本，并补上会话退出时的进程善后。
+至此，`godbg exec`（启动已构建程序并跟踪）、`godbg attach`（跟踪运行中进程）、`godbg debug`（构建并调试）三种发起调试的方式都齐了。6.4 节先补上会话退出时的进程善后，6.5 节再给调试会话加一个批量回放能力，用 `--init <file>` 一键重放调试命令脚本，并把它建成完整的冒烟测试机制。

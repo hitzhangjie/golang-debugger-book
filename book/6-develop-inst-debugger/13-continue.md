@@ -111,7 +111,7 @@ import (
 
 // Continue 恢复被调试进程执行，等待其停止，返回停止原因。
 //
-// 当前只跟踪主线程（ch6.17 起扩展为多线程的 all-stop 模式）。
+// 当前只跟踪主线程（ch6.18 起扩展为多线程的 all-stop 模式）。
 func (p *DebuggedProcess) Continue() (*api.StopInfo, error) {
 	pid := p.Process.Pid
 
@@ -157,14 +157,14 @@ func descStatus(status *syscall.WaitStatus) string {
 }
 ```
 
-> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.12`。为了让正文聚焦在 continue 的流程上，这里只展开了命令层和恢复执行的底层实现；`api.Client` 接口、`api.StopInfo` 类型和 `debugger` 门面的改动属于配套的支撑代码。
+> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.13`。为了让正文聚焦在 continue 的流程上，这里只展开了命令层和恢复执行的底层实现；`api.Client` 接口、`api.StopInfo` 类型和 `debugger` 门面的改动属于配套的支撑代码。
 
 ### 代码测试
 
 测试对象是 godbgv2 自带的 `_fixtures/loop`，它每秒打印一次 pid 和循环计数。`main.main` 的循环体从 `0x4b3971` 开始，每轮都会执行。切到本节代码并构建：
 
 ```bash
-$ git checkout ch6.12
+$ git checkout ch6.13
 $ make build
 $ make fixtures
 ```
@@ -200,7 +200,7 @@ tracee is run by tracer, kill it
 
 我们只考虑了1个tracee线程的情况，而go程序是多线程程序，如果我们要对一个go进程进行调试，那么必须对多线程调试进行支持。否则我们只continue一个线程，而其他线程都处于stopped状态，那么这个线程可能无法正常与其他线程同步状态，可能根本就无法进行调试了。我们前面提到过类似的设计，这些tracee线程要么都停止、要么都运行，这样方便我们调试。
 
-所以当我们执行continue命令时，需要特别注意对多线程调试的支持。godbgv2 在 ch6.12 的实现只对主线程发起 `PTRACE_CONT`，多线程的 all-stop 模式留到 ch6.17 实现。
+所以当我们执行continue命令时，需要特别注意对多线程调试的支持。godbgv2 在 ch6.13 的实现只对主线程发起 `PTRACE_CONT`，多线程的 all-stop 模式留到 ch6.18 实现。
 
 ### 更多相关内容
 

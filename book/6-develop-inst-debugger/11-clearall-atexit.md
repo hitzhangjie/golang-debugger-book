@@ -20,7 +20,7 @@
 
 我们必须足够重视这个问题，需要实现一个类似C语言atexit的机制，在调试器退出前自动清理所有断点。
 
-本节配套代码在 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.10`，`git diff ch6.9 ch6.10` 可以看到这一节的改动。其中 `api.Client` 方法顺序调整、`State` 从 `client.go` 搬到 `types.go`、门面方法重新排序属于代码整理，本节只展开与退出清理直接相关的实现。
+本节配套代码在 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.11`，`git diff ch6.10 ch6.11` 可以看到这一节的改动。其中 `api.Client` 方法顺序调整、`State` 从 `client.go` 搬到 `types.go`、门面方法重新排序属于代码整理，本节只展开与退出清理直接相关的实现。
 
 ### 实现目标：自动断点清理
 
@@ -124,7 +124,7 @@ func Cleanup() {
 
 旧实现里的 `fallthrough` 会让 debug 分支把同一个进程 kill 两次；构建产物 `__debug_bin__` 的删除也移到了 `cmd/debug.go` 的 `PostRun`，`Cleanup` 只负责断点和进程。
 
-需要说明的是，ch6.10 的 `ClearAll` 只还原指令字节，还没有回退停在断点处线程的 PC（留到 6.17.5）。本节场景中 target 停在启动位置或 attach 后的 SIGSTOP，没有线程停在断点上，不受影响。
+需要说明的是，ch6.11 的 `ClearAll` 只还原指令字节，还没有回退停在断点处线程的 PC（留到 6.18.5）。本节场景中 target 停在启动位置或 attach 后的 SIGSTOP，没有线程停在断点上，不受影响。
 
 #### 4. 调试会话的创建和使用
 
@@ -194,7 +194,7 @@ func main() {
 切到本节代码并构建：
 
 ```bash
-$ git checkout ch6.10
+$ git checkout ch6.11
 $ make build
 $ make fixtures
 $ go tool nm _fixtures/loop | grep ' main.main$'
@@ -207,10 +207,10 @@ attach 示例把 target 作为 godbg 的子进程启动后再 attach，满足 Li
 
 #### 场景一：不还原断点的后果
 
-先看反例。godbgv2 在 ch6.9 的退出逻辑只做 detach，不还原断点。切到那一节构建，attach 到运行中的 `loop`，在循环体上添加断点后退出：
+先看反例。godbgv2 在 ch6.10 的退出逻辑只做 detach，不还原断点。切到那一节构建，attach 到运行中的 `loop`，在循环体上添加断点后退出：
 
 ```bash
-$ git checkout ch6.9
+$ git checkout ch6.10
 $ make build && make fixtures
 $ bash -c './_fixtures/loop > /tmp/loop.out 2>&1 & exec ./godbg attach $!'
 process 2231841 attached, stopped by SIGSTOP
@@ -230,24 +230,24 @@ PC=0x4b3972 m=0 sigcode=128
 
 goroutine 1 gp=0xc000002380 m=0 mp=0x5736a0 [running]:
 main.main()
-	/tmp/godbgv2-ch6.9/examples/debuggee/loop.go:16 +0x32 fp=0xc0000c2f78 sp=0xc0000c2ee0 pc=0x4b3972
+	/tmp/godbgv2-ch6.10/examples/debuggee/loop.go:16 +0x32 fp=0xc0000c2f78 sp=0xc0000c2ee0 pc=0x4b3972
 ...
 [process exited]
 ```
 
 两个细节值得注意：
 
-- `PC=0x4b3972` 正好是断点地址 `0x4b3971` 的下一条指令。`int3` 执行后 PC 已经后移，而 ch6.9 既没有还原指令，也没有回退 PC；
+- `PC=0x4b3972` 正好是断点地址 `0x4b3971` 的下一条指令。`int3` 执行后 PC 已经后移，而 ch6.10 既没有还原指令，也没有回退 PC；
 - 此时 tracer 已经 detach，SIGTRAP 没有接收者。Go runtime 接管了 SIGTRAP，把它当成运行时崩溃，打印 goroutine 栈后终止进程。如果是没有接管 SIGTRAP 的程序，内核会按默认动作直接终止它并产生 core dump。
 
 这就是退出前必须清理断点的原因。
 
 #### 场景二：exec 启动，退出时还原并杀掉
 
-回到 ch6.10，用 `exec` 启动 target，在入口地址添加断点后退出：
+回到 ch6.11，用 `exec` 启动 target，在入口地址添加断点后退出：
 
 ```bash
-$ git checkout ch6.10
+$ git checkout ch6.11
 $ make build && make fixtures
 $ ./godbg exec _fixtures/loop
 process 2232027 launched, stopped by SIGTRAP
@@ -316,6 +316,6 @@ tracee is run by tracer, kill it
 - 断点通过ptrace修改指令字节实现，如果不清理会导致多字节指令不完整，执行时触发SIGTRAP信号
 - 没有tracer接收SIGTRAP时，Go runtime会打印崩溃栈后退出，其他程序则由内核按默认动作终止
 - 通过实现类似C语言atexit的机制，在调试会话退出前自动清理所有断点，确保tracee进程能够继续正常运行
-- ch6.10 的 `ClearAll` 只还原指令字节，尚未回退停在断点处线程的 PC，这部分留到 6.17.5 处理
+- ch6.11 的 `ClearAll` 只还原指令字节，尚未回退停在断点处线程的 PC，这部分留到 6.18.5 处理
 
 本节内容为调试器的健壮性设计提供了重要保障，确保调试器在各种退出场景下都能正确清理资源，为读者理解调试器的生命周期管理和资源清理机制奠定了实践基础。通过本节的学习，读者可以掌握调试器开发中资源管理的最佳实践，为后续开发更复杂的调试器功能提供了重要的设计参考。

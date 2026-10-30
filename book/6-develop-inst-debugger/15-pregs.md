@@ -198,7 +198,7 @@ func RegsFromPtrace(regs *syscall.PtraceRegs) *api.Registers {
 }
 ```
 
-> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.14`。为了让正文聚焦在 pregs 上，这里只展开了命令层和寄存器读取链路；`Client.ReadRegs` / `Client.WriteRegs` 这对接口在 step、continue 小节已经就位，本节新增的是命令层和打印逻辑。
+> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.15`。为了让正文聚焦在 pregs 上，这里只展开了命令层和寄存器读取链路；`Client.ReadRegs` / `Client.WriteRegs` 这对接口在 step、continue 小节已经就位，本节新增的是命令层和打印逻辑。
 
 至此pregs命令基本完成开发，我们来测试下pregs的执行情况。
 
@@ -207,7 +207,7 @@ func RegsFromPtrace(regs *syscall.PtraceRegs) *api.Registers {
 测试对象是 godbgv2 自带的 `_fixtures/loop`，程序入口固定为 `0x478120`（Makefile 固定了构建所用的 Go 工具链版本）。切到本节代码并构建：
 
 ```bash
-$ git checkout ch6.14
+$ git checkout ch6.15
 $ make build
 $ make fixtures
 ```

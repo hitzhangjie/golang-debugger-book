@@ -6,7 +6,7 @@
 
 挂起策略（Suspend Policy），有时也叫 **Stop Mode** 或者 **Suspend Mode**。它描述的是当某个线程触发断点/异常/停止请求时，调试器应该暂停哪些线程，以及后续继续执行时，如何恢复这些线程的执行，属于线程执行控制（Thread Execution Control）的一部分。
 
-本节我们来了解下在主流调试器中，有哪些挂起策略，以及是如何实现的。最后我们会以 godbgv2 的 ch6.17.3 为例，看看 all-stop 策略在代码中如何落地。
+本节我们来了解下在主流调试器中，有哪些挂起策略，以及是如何实现的。最后我们会以 godbgv2 的 ch6.18.3 为例，看看 all-stop 策略在代码中如何落地。
 
 ### 基础知识
 
@@ -45,7 +45,7 @@ OK，这里不妨展开介绍下GDB中与挂起策略相关的几个选项设置
 - off: 当执行continue,next,step操作时只恢复当前进程内的线程执行；
 - on: 当执行continue,next,step操作时恢复所有进程内的线程执行；
 
-多进程调试中如何跟踪子进程、如何在多个进程之间暂停和恢复，6.18 节还会展开介绍。这里可以被恢复的线程集合，进一步可以由`scheduler-locking`选项来控制。
+多进程调试中如何跟踪子进程、如何在多个进程之间暂停和恢复，6.19 节还会展开介绍。这里可以被恢复的线程集合，进一步可以由`scheduler-locking`选项来控制。
 
 **设置3：set scheduler-locking on/off/step/replay (默认值off)**：决定在程序运行、单步或继续时，GDB 是否会把其他线程“锁定”（即暂停），只让当前选中的线程执行。这对定位线程间交互、排查竞争、实现确定性重放都非常重要。
 
@@ -161,7 +161,7 @@ world
 
 ### 代码实现
 
-godbgv2 在 ch6.17.3 中实现 all-stop 挂起策略。核心改动有两处：`Continue` 从“只恢复主线程”改为“恢复全部线程、等待任意线程停止、再挂起其余线程”；新增 `suspendOtherThreads` 负责向其余线程投递 SIGSTOP。
+godbgv2 在 ch6.18.3 中实现 all-stop 挂起策略。核心改动有两处：`Continue` 从“只恢复主线程”改为“恢复全部线程、等待任意线程停止、再挂起其余线程”；新增 `suspendOtherThreads` 负责向其余线程投递 SIGSTOP。
 
 **file：pkg/target/suspend.go**
 
@@ -282,9 +282,9 @@ func (p *DebuggedProcess) Continue() (*api.StopInfo, error) {
 1. **恢复全部线程**：`Continue` 不再只对主线程 `PTRACE_CONT`，而是遍历 `Threads` 对每个线程都恢复执行。否则其他线程一直处于停止状态，线程间的同步逻辑（加解锁、信号量等）可能根本无法推进。
 2. **克隆事件内部化**：`PTRACE_EVENT_CLONE` 不再作为停止原因返回给用户，而是读取新线程 tid、加入线程列表、消费它的初始 SIGSTOP，然后让克隆者继续执行，继续 `waitAny` 等待真正的停止事件。
 3. **真正的停止事件**：任意线程因断点、信号或用户中断停下来后，调用 `suspendOtherThreads(wpid)` 向其他线程投递 SIGSTOP，并等待它们停止。这就是 all-stop。
-4. **记录当前线程**：`currentThread` 指向本次停下来的线程，`stopReason` 记录停止原因，为 ch6.17.4 起 `pregs`、`step` 等按线程工作的命令做准备。
+4. **记录当前线程**：`currentThread` 指向本次停下来的线程，`stopReason` 记录停止原因，为 ch6.18.4 起 `pregs`、`step` 等按线程工作的命令做准备。
 
-注意第 2 点中的顺序：ch6.17.3 是先 `waitFast(newTid)` 消费新线程的初始 SIGSTOP，再恢复克隆者。新线程的初始 SIGSTOP 只有在克隆者恢复执行后才进入可等待状态，所以这个顺序会在 ch6.17.4 被调整为“先恢复克隆者、再消费新线程的初始 SIGSTOP”。
+注意第 2 点中的顺序：ch6.18.3 是先 `waitFast(newTid)` 消费新线程的初始 SIGSTOP，再恢复克隆者。新线程的初始 SIGSTOP 只有在克隆者恢复执行后才进入可等待状态，所以这个顺序会在 ch6.18.4 被调整为“先恢复克隆者、再消费新线程的初始 SIGSTOP”。
 
 为了保存当前线程和停止原因，`DebuggedProcess` 和 `Thread` 分别增加了字段：
 
@@ -292,7 +292,7 @@ func (p *DebuggedProcess) Continue() (*api.StopInfo, error) {
 
 ```go
 	Threads         map[int]*Thread         // 已跟踪的线程列表，k=tid
-	currentThread   *Thread                 // 最近一次停止的线程（ch6.17.3）
+	currentThread   *Thread                 // 最近一次停止的线程（ch6.18.3）
 ```
 
 **file：pkg/target/thread.go**（片段）
@@ -302,7 +302,7 @@ type Thread struct {
 	Tid     int              // thread ID
 	Process *DebuggedProcess // process this thread belongs to
 
-	stopReason string // 该线程最近一次停止的原因（ch6.17.3）
+	stopReason string // 该线程最近一次停止的原因（ch6.18.3）
 }
 ```
 
@@ -317,14 +317,14 @@ type Thread struct {
 		return nil
 ```
 
-> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.17.3`。本节新增 `suspendOtherThreads`、`currentThread`/`stopReason` 以及 `Continue` 的 all-stop 流程；`waitAny`、`addThread`、`getEventMessage` 是 ch6.17.1、ch6.17.2 已有的配套实现。
+> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.18.3`。本节新增 `suspendOtherThreads`、`currentThread`/`stopReason` 以及 `Continue` 的 all-stop 流程；`waitAny`、`addThread`、`getEventMessage` 是 ch6.18.1、ch6.18.2 已有的配套实现。
 
 ### 代码测试
 
 测试目标是 `_fixtures/loop2`。切换到本节代码并构建：
 
 ```bash
-$ git checkout ch6.17.3
+$ git checkout ch6.18.3
 $ make build
 $ make fixtures
 ```
@@ -375,7 +375,7 @@ tracee is an attached process, leave it running
 
 本节主要探讨了调试器在多线程程序中的挂起策略（Suspend Policy），核心内容包括：**全系统挂起**和**单线程挂起**两种主流策略。我们还介绍了主流调试器GDB、LLDB、Delve中的做法。GDB通过默认全系统挂起，但提供了`non-stop`、`scheduler-locking`、`schedule-multiple`等选项提供细粒度控制；LLDB默认采用全系统挂起但支持更细粒度的线程管理；Delve也是默认全系统挂起，但通过其对Go语言GMP调度模型的深度理解和支持，适配了面向goroutine级别并发的调试，我们可以自由在不同goroutine上下文之间进行切换、查看状态、恢复goroutine执行，方便Go开发者进行调试。
 
-在 godbgv2 的 ch6.17.3 中，all-stop 策略落在了 `Continue` 和 `suspendOtherThreads` 上：`Continue` 恢复全部被跟踪线程，等待任意线程停止；克隆事件作为内部事件被消费；真正的停止事件到来后，向其余线程投递 SIGSTOP 并等待它们停下来，同时用 `currentThread`、`stopReason` 记录本次停止的线程和原因。
+在 godbgv2 的 ch6.18.3 中，all-stop 策略落在了 `Continue` 和 `suspendOtherThreads` 上：`Continue` 恢复全部被跟踪线程，等待任意线程停止；克隆事件作为内部事件被消费；真正的停止事件到来后，向其余线程投递 SIGSTOP 并等待它们停下来，同时用 `currentThread`、`stopReason` 记录本次停止的线程和原因。
 
 重点需要理解的是，主流调试器都默认采用全系统挂起策略，这确保了调试时程序状态的稳定性和可预测性。尽管这种做法并不完美，大部分时候都是我们希望的，但在某些场景下我们需要更细粒度的控制，比如GDB、LLDB那样。调试器的发展演进也需要时间，我们期待后续的调试器能够提供更细粒度的控制，更方便我们进行调试。
 

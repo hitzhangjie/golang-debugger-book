@@ -1,8 +1,8 @@
 ## 启动调试：启动并跟踪进程
 
-第 5 章我们已经把调试器骨架搭起来了，对应 godbgv2 的 tag `ch5.4`。`godbg exec <prog>` 这条命令也挂上了，不过 `Run` 里面还是一句 TODO，打印完就进入调试会话，目标程序并没有真正跑起来。
+第 5 章我们已经把调试器骨架搭起来了，对应 godbgv2 的 tag `ch5.7`。`godbg exec <prog>` 这条命令也挂上了，不过 `Run` 里面还是一句 TODO，打印完就进入调试会话，目标程序并没有真正跑起来。
 
-本节我们就来把这个 TODO 填上。配套代码在 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.1`，`git checkout ch6.1` 就是这一节完成时的代码，`git diff ch5.4 ch6.1` 能看到相对骨架多了什么。后面的示例都在这一个工程里，顺着骨架往下看就行。
+本节我们就来把这个 TODO 填上。配套代码在 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.1`，`git checkout ch6.1` 就是这一节完成时的代码，`git diff ch5.7 ch6.1` 能看到相对骨架多了什么。后面的示例都在这一个工程里，顺着骨架往下看就行。
 
 ### 实现目标：`godbg exec <prog> [args...]` 启动并跟踪新进程
 
@@ -223,7 +223,7 @@ wait4 返回之后，通过 WaitStatus 就能知道 tracee 为什么停下来：
 >- 如果你在 ptrace 中设置了 PTRACE_O_TRACEEXEC 选项，内核在 exec 发生时将不再向进程发送裸的 SIGTRAP，而是产生一个专用的 ptrace 事件：PTRACE_EVENT_EXEC。
 >- 现代调试器（如 GDB、LLDB）通常会开启这个选项，以便更稳妥地识别 exec 事件，避免与普通的断点 SIGTRAP 混淆。
 
-tracee 停下来之后，tracer 就可以用 ptrace 的其他操作读写它的信息了，比如读写内存、读写寄存器（对应后面的 6.13 节 pmem、6.14 节 pregs），甚至一些更高级的用法，比如显示当前 tracee 的函数调用栈。
+tracee 停下来之后，tracer 就可以用 ptrace 的其他操作读写它的信息了，比如读写内存、读写寄存器（对应后面的 6.14 节 pmem、6.15 节 pregs），甚至一些更高级的用法，比如显示当前 tracee 的函数调用栈。
 
 当结束调试时，可以通过 ptrace detach 操作，让 tracee 恢复执行。即使不显示 detach，tracer 退出时操作系统也会代为解除跟踪关系，tracee 同样可以恢复执行。
 
@@ -441,7 +441,7 @@ static inline bool ptrace_event_enabled(struct task_struct *task, int event)
 - 第 1 个分支什么时候会命中？被调试进程已经存在了，tracer 先 ptrace attach，然后再调用 `ptrace(PTRACE_SETOPTIONS, ...)` 来设置 PTRACE_EVENT_EXEC，目的是跟踪进程后续 exec 的行为；
 - 第 2 个分支什么时候会命中？这是对调试器常用ptrace操作 PTRACEME 的处理，tracer 主动启动被调试程序，先 fork 出子进程，然后子进程执行 `ptrace(PTRACE_TRACEME, ...)`，目的是让被调试进程启动后立即被跟踪；
 
-> ps: 第 1 个分支在调试器跟踪一个已运行进程、且要感知它后续 exec 行为时才会用到；跟踪进程新建线程的 PTRACE_O_TRACECLONE 也是类似的机制，在 6.17.2 节会介绍。
+> ps: 第 1 个分支在调试器跟踪一个已运行进程、且要感知它后续 exec 行为时才会用到；跟踪进程新建线程的 PTRACE_O_TRACECLONE 也是类似的机制，在 6.18.2 节会介绍。
 
 #### 内核：SIGTRAP 的处理与 tracer 的唤醒
 
@@ -655,7 +655,7 @@ func forkAndExecInChild1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, att
 
 ### 在 godbgv2 中实现
 
-接下来我们就做这件事：把上面的逻辑搬进前面搭好调试器骨架的 godbgv2。tag `ch6.1` 相对骨架 `ch5.4`，调试会话没动，`PostRun` 里还是 `NewDebugSession().Start()`，变的是程序怎么被拉起来。
+接下来我们就做这件事：把上面的逻辑搬进前面搭好调试器骨架的 godbgv2。tag `ch6.1` 相对骨架 `ch5.7`，调试会话没动，`PostRun` 里还是 `NewDebugSession().Start()`，变的是程序怎么被拉起来。
 
 极简 demo 里写在一起的那几步，在这里拆开了：
 
@@ -666,7 +666,7 @@ func forkAndExecInChild1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, att
   - 命令层不再把程序输出收进缓冲区，只打印被调试进程的 pid。程序自己的打印仍然出现在当前终端；
 - `Run` 执行OK再进入 `PostRun` 进入已经搭好的调试会话；
 
-所以相对 tag `ch5.4`，这一节新增的主要就是下面这条调用链。
+所以相对 tag `ch5.7`，这一节新增的主要就是下面这条调用链。
 
 ```text
 godbg exec <prog> [args...]
@@ -771,7 +771,7 @@ func main() {
 }
 ```
 
-`processSignals` 放在单独的 goroutine 里处理信号。Go 运行时用 `SIGURG` 做异步抢占，这个信号我们暂时直接忽略。`SIGTERM`、`SIGINT`、`SIGQUIT` 目前先让进程退出。被调试进程与断点的退出善后从 6.4 节开始统一处理（信号退出场景的清理在 6.10 节补齐）。
+`processSignals` 放在单独的 goroutine 里处理信号。Go 运行时用 `SIGURG` 做异步抢占，这个信号我们暂时直接忽略。`SIGTERM`、`SIGINT`、`SIGQUIT` 目前先让进程退出。被调试进程与断点的退出善后从 6.4 节开始统一处理（信号退出场景的清理在 6.11 节补齐）。
 
 `api.Client` 在这一节只有一个方法。后面几节会陆续补上 attach、读写内存这些操作，会陆续有点改动。到第 9 章时，这里的完整接口才能定下来。
 
@@ -928,7 +928,7 @@ pid 每次运行都不一样。看到这行输出时，loop 还没开始打印�
 
 输入 `exit` 可以结束会话。这一版退出时还不会清理被调试进程。调试器自己退出之后，内核会把跟踪关系解开，loop 就从停下的地方继续跑，终端上会开始出现 `pid: ...`。试完记得把这个 pid 停掉。退出前的清理，6.4 节会统一补上。
 
-> ps: loop 是单 goroutine 程序，启动后停在 exec 处时还没有别的线程。Go 程序运行起来之后，运行时还会创建 sysmon、GC 等线程，如何自动跟踪这些新建线程，见 6.17 节"调试多线程程序"。
+> ps: loop 是单 goroutine 程序，启动后停在 exec 处时还没有别的线程。Go 程序运行起来之后，运行时还会创建 sysmon、GC 等线程，如何自动跟踪这些新建线程，见 6.18 节"调试多线程程序"。
 
 ### 本节小结
 
@@ -937,7 +937,7 @@ pid 每次运行都不一样。看到这行输出时，loop 还没开始打印�
 - 用一段极简代码看清 `os/exec` 要做的事，也就是解析 `exec <prog>`、启动程序并取回输出；
 - 介绍了跟踪的核心概念：tracee 是被调试的线程，tracer 是发送调试命令的调试器线程，ptrace link 一旦建立，后续所有 ptrace 请求都必须来自同一个 tracer 线程，Go 里要靠 `runtime.LockOSThread` 来满足；
 - 从内核代码出发，理清了 PTRACE_TRACEME 和 exec 的配合：子进程标记 PT_PTRACED 后，exec 成功那一刻内核给它发送同步信号 SIGTRAP，tracee 进入 TASK_TRACED 停止态，再通过 SIGCHLD/__wake_up_parent 唤醒阻塞在 wait4 上的 tracer；
-- 把这套逻辑搬进 tag `ch5.4` 的调试器骨架：命令层只调用 `api.Client.Launch`，由 `main` 装配实现，再转到 `pkg/target` 完成 `SysProcAttr.Ptrace=true` 的启动和等待 SIGTRAP；
+- 把这套逻辑搬进 tag `ch5.7` 的调试器骨架：命令层只调用 `api.Client.Launch`，由 `main` 装配实现，再转到 `pkg/target` 完成 `SysProcAttr.Ptrace=true` 的启动和等待 SIGTRAP；
 - 支持 `godbg exec <prog> [args...]`：`--` 之后参数原样透传给被调试程序，`--` 之前仍由 godbg 解析；
 
 本节内容为读者学习 6.2 节的 attach，以及后面在这个已经停住的进程上做断点、单步和查看寄存器打下了基础。

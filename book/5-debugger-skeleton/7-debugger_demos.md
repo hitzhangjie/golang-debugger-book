@@ -2,7 +2,7 @@
 
 结合前面的思考，我们初步实现了一个调试器的雏形 [godbg](https://github.com/hitzhangjie/godbgv2)，它大致包含了我们需要的交互能力。后面我们将在此基础上一步步实现指令级调试器、符号级调试器。
 
-先看下godbg的执行效果，然后大致介绍下源码的组织方式，方便读者了解讲解的功能点对应代码的哪一部分，后续新增章节的内容、源码就很容易对应上了。这一版骨架对应配套工程 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch5.4`，`git checkout ch5.4` 即可得到本节的代码，在项目目录下执行 `make install` 即可安装 godbg 到 GOPATH/bin。
+先看下godbg的执行效果，然后大致介绍下源码的组织方式，方便读者了解讲解的功能点对应代码的哪一部分，后续新增章节的内容、源码就很容易对应上了。这一版骨架对应配套工程 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch5.7`，`git checkout ch5.7` 即可得到本节的代码，在项目目录下执行 `make install` 即可安装 godbg 到 GOPATH/bin。
 
 ### 运行效果
 
@@ -130,7 +130,7 @@ TODO(ch9.2.35): list 尚未实现
 
 ### 代码实现
 
-该调试器骨架的代码在 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch5.4`，现在大致看下实现。
+该调试器骨架的代码在 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch5.7`，现在大致看下实现。
 
 #### 目录结构
 
@@ -213,7 +213,7 @@ func init() {
 
 #### 源码解析：调试会话调试命令管理
 
-调试会话在 `cmd/debug/shell.go`。读入用 liner，命令分发仍交给 cobra：liner 拿到一行输入，`s.root.SetArgs(args) -> s.root.Execute()`，命令参数解析及执行交给了 `debugRootCmd.Execute()`。
+调试会话在 `cmd/debug/shell.go`。读入用 liner，命令分发仍交给 cobra：liner 拿到一行输入，交给 `s.execute(txt)`；`execute` 内部执行 `SetArgs -> ExecuteC`，命令参数解析及执行最终交给 `debugRootCmd.ExecuteC()`。
 
 >相当于启动调试器的命令的参数及解析、，命令派遣归rootCmd管，而调试会话中的调试命令的这部分工作归debugRootCmd管。
 
@@ -233,6 +233,12 @@ func NewDebugSession() *DebugSession {
 func (s *DebugSession) Start() {
 	s.liner.SetCompleter(completer)
 	s.liner.SetTabCompletionStyle(liner.TabPrints)
+
+	defer func() {
+		for idx := len(s.defers) - 1; idx >= 0; idx-- {
+			s.defers[idx]()
+		}
+	}()
 
 	for {
 		select {
@@ -255,11 +261,44 @@ func (s *DebugSession) Start() {
 			txt = s.last
 		}
 
-		s.root.SetArgs(strings.Split(txt, " "))
-		s.root.Execute()
+		_ = s.execute(txt)
 	}
 }
 ```
+
+`defer` 里逆序执行 `s.defers`，这些是 `AtExit` 注册的退出回调；6.4 节会用它在会话退出时做清理。`Start` 只负责读输入和调度，真正执行一行命令的是 `execute`：
+
+```go
+// execute 执行一行调试命令，并在执行后复位命令的 flag 状态。
+//
+// REPL 始终复用同一棵 cobra 命令树，pflag 在多次 Parse 之间不会把上一次
+// 设置过的 flag 恢复为默认值：本次命令行里没出现的 flag 会保留上一行的
+// 值。统一在 execute 里复位，交互模式和 --init 回放才能保证每条命令都从
+// 默认 flag 状态开始执行。
+func (s *DebugSession) execute(line string) error {
+	s.root.SetArgs(strings.Split(line, " "))
+	cmd, err := s.root.ExecuteC()
+	if cmd != nil {
+		resetFlags(cmd)
+	}
+	return err
+}
+
+// resetFlags 把本次执行改过的 flag 恢复为默认值。
+// ExecuteC 内部的 ParseFlags 已经合并继承的 persistent flag，因此 VisitAll
+// 能同时覆盖本地 flag 和父命令继承下来的 flag。
+func resetFlags(cmd *cobra.Command) {
+	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+		if !f.Changed {
+			return
+		}
+		_ = f.Value.Set(f.DefValue)
+		f.Changed = false
+	})
+}
+```
+
+这里有一个容易被忽略的细节：REPL 从始至终复用同一棵 cobra 命令树，而 pflag 在多次 Parse 之间不会把上一次设置过的 flag 恢复为默认值——本次命令行里没出现的 flag 会保留上一行的值。比如后续的 `disass -n 3` 执行之后，再执行不带选项的 `disass`，如果不主动复位，第二次仍会按 `-n 3` 输出。`execute` 在每次执行后用 `resetFlags` 把本次改过的 flag 恢复为默认值，所以**日常交互调试**时选项不会跨命令残留，后续 `--init` 批量回放也能从默认 flag 状态开始。这不是冒烟测试专属的能力，而是调试会话命令分发的固有要求。
 
 `TabPrints` 就是 bash 那种补全：候选项打印在提示符下方。空行会改去执行 `s.last`，所以只敲回车等于重复上一条命令。`completer` 只补命令名和别名。
 
@@ -310,6 +349,6 @@ TODO(ch9.2.35): list 尚未实现
 
 ### 本节小结
 
-至此，本章从需求、架构到实施方案，收进了一个能运行的 godbg 雏形里。我们演示了godbg如何启动调试，以及调试会话中调试命令的组织方式，还展示了命令及选项如何唤出帮助信息。然后，我们结合 godbgv2 的 tag `ch5.4`，演示了截止到目前项目源代码的组织方式，包括项目结构、程序入口、启动命令管理、调试会话命令管理，我们特别介绍了调试会话的设计及实现，包括对不同调试命令进行分组展示、支持liner输入补全、支持cobra对不同子命令进行管理、参数解析、执行派遣。
+至此，本章从需求、架构到实施方案，收进了一个能运行的 godbg 雏形里。我们演示了godbg如何启动调试，以及调试会话中调试命令的组织方式，还展示了命令及选项如何唤出帮助信息。然后，我们结合 godbgv2 的 tag `ch5.7`，演示了截止到目前项目源代码的组织方式，包括项目结构、程序入口、启动命令管理、调试会话命令管理，我们特别介绍了调试会话的设计及实现，包括对不同调试命令进行分组展示、支持liner输入补全、支持cobra对不同子命令进行管理、参数解析、执行派遣。
 
-godbg tag `ch5.4`，这是我们提供给读者的一个可运行的调试器骨架，其中很多命令还是未实现状态。接下来我们将逐渐实现、丰富这些调试命令，并推进到更现代的调试器架构。第6章实现指令级调试器，完成进程的启动与跟踪、断点、单步，以及内存和寄存器的查看与修改，并支持多线程、多进程调试。第7章补齐走向符号级调试的基础，介绍 ELF、编译与链接，以及调试信息如何生成、存放。第8章剖析 DWARF，说明它如何描述源码、类型、变量和调用栈。第9章实现符号级调试器，支持源码级断点、单步，以及变量、栈帧和 goroutine 的查看，并把前后端分离落成可远程调试、可接入 IDE 的形态。第10章进行一些调试相关的高级话题和讨论。
+godbg tag `ch5.7`，这是我们提供给读者的一个可运行的调试器骨架，其中很多命令还是未实现状态。接下来我们将逐渐实现、丰富这些调试命令，并推进到更现代的调试器架构。第6章实现指令级调试器，完成进程的启动与跟踪、断点、单步，以及内存和寄存器的查看与修改，并支持多线程、多进程调试。第7章补齐走向符号级调试的基础，介绍 ELF、编译与链接，以及调试信息如何生成、存放。第8章剖析 DWARF，说明它如何描述源码、类型、变量和调用栈。第9章实现符号级调试器，支持源码级断点、单步，以及变量、栈帧和 goroutine 的查看，并把前后端分离落成可远程调试、可接入 IDE 的形态。第10章进行一些调试相关的高级话题和讨论。

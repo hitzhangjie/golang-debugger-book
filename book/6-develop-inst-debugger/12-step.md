@@ -145,14 +145,14 @@ godbg> step
 
 这里会影响到调试体验，我们将在后续过程中予以完善。
 
-> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.11`。为了让正文聚焦在 step 的流程上，这里只展开了命令层和单步执行的底层实现；寄存器读写、`api.Client` 接口和 `debugger` 门面的改动属于配套的支撑代码。
+> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.12`。为了让正文聚焦在 step 的流程上，这里只展开了命令层和单步执行的底层实现；寄存器读写、`api.Client` 接口和 `debugger` 门面的改动属于配套的支撑代码。
 
 ### 代码测试
 
 测试对象是 godbgv2 自带的 `_fixtures/loop`，它每秒打印一次 pid 和循环计数，程序入口固定为 `0x478120`（Makefile 固定了构建所用的 Go 工具链版本）。切到本节代码并构建：
 
 ```bash
-$ git checkout ch6.11
+$ git checkout ch6.12
 $ make build
 $ make fixtures
 ```

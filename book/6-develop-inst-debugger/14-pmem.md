@@ -155,7 +155,7 @@ import (
 
 // ReadMemory 读取内存地址addr处的数据到buf中，返回实际读取的字节数。
 //
-// 该能力最早以 peekMemory 的形态内联在 ch6.5 的反汇编实现中，
+// 该能力最早以 peekMemory 的形态内联在 ch6.6 的反汇编实现中，
 // 自本节起抽出为独立方法，供 pmem、disass 等命令复用。
 func (p *DebuggedProcess) ReadMemory(addr uintptr, buf []byte) (int, error) {
 	var (
@@ -311,7 +311,7 @@ func prettyPrintMem(address uintptr, memArea []byte, littleEndian bool, format b
 
 每行放多少列由进制决定：十六进制、八进制、十进制每行8列，二进制每行4列，避免一行太长。地址列统一格式化成固定宽度，每行起始地址按 `cols*colBytes` 递增，即一行展示的字节数。
 
-> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.13`。为了让正文聚焦在 pmem 的实现上，这里只展开了命令层以及 `ReadMemory`、`prettyPrintMem` 等核心函数；`api.Client` 接口和 `debugger` 门面的改动属于配套的支撑代码。如对字节序引起的数据转换感兴趣，可以对照16进制输出自行校验。
+> ps：上述代码取自 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.14`。为了让正文聚焦在 pmem 的实现上，这里只展开了命令层以及 `ReadMemory`、`prettyPrintMem` 等核心函数；`api.Client` 接口和 `debugger` 门面的改动属于配套的支撑代码。如对字节序引起的数据转换感兴趣，可以对照16进制输出自行校验。
 
 至此pmem命令基本完成开发，我们来测试下pmem的执行情况。
 
@@ -320,7 +320,7 @@ func prettyPrintMem(address uintptr, memArea []byte, littleEndian bool, format b
 测试对象是 godbgv2 自带的 `_fixtures/loop`，程序入口固定为 `0x478120`（Makefile 固定了构建所用的 Go 工具链版本）。切到本节代码并构建：
 
 ```bash
-$ git checkout ch6.13
+$ git checkout ch6.14
 $ make build
 $ make fixtures
 ```

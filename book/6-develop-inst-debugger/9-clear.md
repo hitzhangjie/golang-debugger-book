@@ -1,10 +1,10 @@
 ## 调试命令：`clear -n <id>` 移除断点
 
-6.6 节实现了 `break`：把断点地址处的指令首字节 patch 成 `0xCC`，并把断点登记进按地址、按编号两张索引；6.7 节实现了 `breakpoints`：按编号升序列出已添加的断点。断点能加、能看，接下来就要能删——断点下错了位置、或者某个位置已经不再关心，都需要把它摘掉。
+6.7 节实现了 `break`：把断点地址处的指令首字节 patch 成 `0xCC`，并把断点登记进按地址、按编号两张索引；6.8 节实现了 `breakpoints`：按编号升序列出已添加的断点。断点能加、能看，接下来就要能删——断点下错了位置、或者某个位置已经不再关心，都需要把它摘掉。
 
-摘掉断点不只是从列表里删一行。目标进程内存里那个 `0xCC` 必须换回原来的指令，否则进程之后执行到那里会收到一个没有对应断点的 SIGTRAP。所以移除断点和添加断点是一对严格的反向操作：添加时"保存原始字节、写入 `0xCC`、登记断点"，移除时"按编号找到断点、把原始字节写回去、摘除登记"。6.6 节保存的 `Orig` 字段，就是为这一刻准备的。
+摘掉断点不只是从列表里删一行。目标进程内存里那个 `0xCC` 必须换回原来的指令，否则进程之后执行到那里会收到一个没有对应断点的 SIGTRAP。所以移除断点和添加断点是一对严格的反向操作：添加时"保存原始字节、写入 `0xCC`、登记断点"，移除时"按编号找到断点、把原始字节写回去、摘除登记"。6.7 节保存的 `Orig` 字段，就是为这一刻准备的。
 
-本节配套代码在 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.8`，`git diff ch6.7 ch6.8` 可以看到这一节改了什么：命令层把 `clear` 子命令的占位实现补全，`api.Client` 和 `debugger` 门面各补一个方法，目标层新增 `ClearBreakpoint`、`RestoreInstruction` 以及"断点不存在"错误。
+本节配套代码在 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.9`，`git diff ch6.8 ch6.9` 可以看到这一节改了什么：命令层把 `clear` 子命令的占位实现补全，`api.Client` 和 `debugger` 门面各补一个方法，目标层新增 `ClearBreakpoint`、`RestoreInstruction` 以及"断点不存在"错误。
 
 ### 实现目标：`godbg> clear -n <id>` 移除断点
 
@@ -23,9 +23,9 @@ breakpoint 1 at 0x478120 cleared
 
 这里有几点约定：
 
-- 编号就是 `breakpoints` 输出里的 `breakpoint[1]` 中的数字。编号是用户操作断点的句柄，6.7 节用它列出断点，本节用它移除断点；
+- 编号就是 `breakpoints` 输出里的 `breakpoint[1]` 中的数字。编号是用户操作断点的句柄，6.8 节用它列出断点，本节用它移除断点；
 - `-n` 是 `uint64` 类型的 flag，默认值为 1。也就是说 `clear` 不带参数等价于 `clear -n 1`，会直接移除编号 1 的断点。为了避免误删，实际操作时应当始终显式写上 `-n <id>`；
-- 一次只移除一个断点。想一次清空全部断点用 6.9 节的 `clearall`；
+- 一次只移除一个断点。想一次清空全部断点用 6.10 节的 `clearall`；
 - 编号不存在时明确报错，而不是静默成功：
 
   ```bash
@@ -45,9 +45,9 @@ BreakpointsByID[id]  →  *Breakpoint（拿到 Addr、Orig）
 Breakpoints[addr]    →  *Breakpoint（RestoreInstruction 内部再确认一次）
 ```
 
-两张 map 都是 O(1) 查找，不需要遍历断点集合。6.6 节建立这两张索引时已经说明了分工：按编号索引服务用户视角的增删查，按地址索引服务内存操作和去重。这里正好把两者串起来。
+两张 map 都是 O(1) 查找，不需要遍历断点集合。6.7 节建立这两张索引时已经说明了分工：按编号索引服务用户视角的增删查，按地址索引服务内存操作和去重。这里正好把两者串起来。
 
-`ClearBreakpoint` 在拿到 `bp` 之后调用 `RestoreInstruction(bp.Addr)`，而不是自己直接 POKE。多一层调用的原因是"按地址还原指令"本身是一个独立的原子动作：6.9 节 `clearall` 要逐个断点还原，6.12 节 `continue` 命中断点后也要先还原指令、单步越过、再重新加上断点。把这部分抽成 `RestoreInstruction`，三处共用同一套逻辑，不会出现某一处漏删索引、或者还原顺序写反。
+`ClearBreakpoint` 在拿到 `bp` 之后调用 `RestoreInstruction(bp.Addr)`，而不是自己直接 POKE。多一层调用的原因是"按地址还原指令"本身是一个独立的原子动作：6.10 节 `clearall` 要逐个断点还原，6.13 节 `continue` 命中断点后也要先还原指令、单步越过、再重新加上断点。把这部分抽成 `RestoreInstruction`，三处共用同一套逻辑，不会出现某一处漏删索引、或者还原顺序写反。
 
 #### 还原顺序：先 POKE，后摘索引
 
@@ -60,7 +60,7 @@ Breakpoints[addr]    →  *Breakpoint（RestoreInstruction 内部再确认一次
 
 #### `PTRACE_POKETEXT` 还是 `PTRACE_POKEDATA`
 
-本节代码用的是 `syscall.PtracePokeData`，6.6 节添加断点用的是 `PtracePeekText`、`PtracePokeText`。在 Linux 上，`PTRACE_PEEKTEXT`/`PTRACE_PEEKDATA` 以及 `PTRACE_POKETEXT`/`PTRACE_POKEDATA` 的行为并没有区别：x86-64 不区分指令和数据地址空间，两套请求最终都落到同一片内存上，可以混用。6.6 节添加断点时读写的都是指令，所以用 TEXT；本节还原时写成 DATA，只是习惯上的分类，把这里换成 POKETEXT 结果完全相同，读者不必纠结。
+本节代码用的是 `syscall.PtracePokeData`，6.7 节添加断点用的是 `PtracePeekText`、`PtracePokeText`。在 Linux 上，`PTRACE_PEEKTEXT`/`PTRACE_PEEKDATA` 以及 `PTRACE_POKETEXT`/`PTRACE_POKEDATA` 的行为并没有区别：x86-64 不区分指令和数据地址空间，两套请求最终都落到同一片内存上，可以混用。6.7 节添加断点时读写的都是指令，所以用 TEXT；本节还原时写成 DATA，只是习惯上的分类，把这里换成 POKETEXT 结果完全相同，读者不必纠结。
 
 #### 本节边界：只还原指令，没有回退线程 PC
 
@@ -70,14 +70,14 @@ godbgv2 在 `ClearBreakpoint` 的注释里明确把这件事留到了后面：
 
 ```go
 // 注意：如果某个线程恰好停在断点处（PC=断点地址+1），还需回退该线程
-// 的 PC，这部分在多线程调试（ch6.17.5）中实现。
+// 的 PC，这部分在多线程调试（ch6.18.5）中实现。
 ```
 
-在本节的调试流程里，目标进程通常刚在 exec 或 attach 后停住，还没有执行到任何断点，所以不会触发这种情况；但 `continue`（6.12）让程序跑到断点之后，再执行 `clear` 就可能碰上。6.17 节实现多线程断点时会遍历线程列表，对停在断点处的线程做 PC 回退（6.17.5 节）。本节先把单线程、非命中状态下的移除做对，把限制写在注释里。
+在本节的调试流程里，目标进程通常刚在 exec 或 attach 后停住，还没有执行到任何断点，所以不会触发这种情况；但 `continue`（6.13）让程序跑到断点之后，再执行 `clear` 就可能碰上。6.18 节实现多线程断点时会遍历线程列表，对停在断点处的线程做 PC 回退（6.18.5 节）。本节先把单线程、非命中状态下的移除做对，把限制写在注释里。
 
 ### 在 godbgv2 中实现
 
-相对 ch6.7，这一节的调用链是：
+相对 ch6.8，这一节的调用链是：
 
 ```text
 godbg> clear -n <id>
@@ -93,7 +93,7 @@ godbg> clear -n <id>
 
 #### 命令层
 
-`cmd/debug/clear.go` 在 6.7 节时还是一个占位命令，`Run` 里只有一句 `TODO(ch6.8): clear 尚未实现`。本节把它补全，完整代码如下：
+`cmd/debug/clear.go` 在 6.8 节时还是一个占位命令，`Run` 里只有一句 `TODO(ch6.9): clear 尚未实现`。本节把它补全，完整代码如下：
 
 ```go
 package debug
@@ -136,7 +136,7 @@ func init() {
 
 几个要点：
 
-- `RunE` 而不是 `Run`：`ClearBreakpoint` 可能返回错误（断点不存在、ptrace 失败、没有正在调试的进程），`RunE` 让错误能一路抛给 cobra，最终打印成 `Error: ...`。6.6 节 `break`、6.7 节 `breakpoints` 也是同样的写法；
+- `RunE` 而不是 `Run`：`ClearBreakpoint` 可能返回错误（断点不存在、ptrace 失败、没有正在调试的进程），`RunE` 让错误能一路抛给 cobra，最终打印成 `Error: ...`。6.7 节 `break`、6.8 节 `breakpoints` 也是同样的写法；
 - `Annotations` 把命令归到断点分组，`help` 按分组展示时，`break`、`breakpoints`、`clear` 排在一起（命令分组在 5.7 节搭骨架时介绍过）；
 - 命令层不做查找，也不碰 ptrace：`Client.ClearBreakpoint(id)` 返回被删除断点的 `*api.Breakpoint` 快照，命令层只按 `breakpoint %d at %#x cleared` 打印编号和地址。后端不打印、前端只展示，与前面几个命令一致；
 - `Uint64P("n", "n", 1, ...)` 注册了长选项 `--n` 和短选项 `-n`，类型是 `uint64`，默认值 1。非法值（比如 `clear -n abc`）在 cobra 解析 flag 阶段就会报 `invalid argument "abc" for "-n, --n" flag`，`GetUint64` 的错误分支基本走不到；保留它只是为了让取值路径完整。
@@ -159,7 +159,7 @@ type Client interface {
 
 返回值是 `*Breakpoint` 而不是只返回 `error`，因为命令层要打印"删掉的是哪个断点"。返回的是断点信息的值快照，内部记录已经从索引里摘除了，但这份快照本身仍然有效：
 
-- `Breakpoint` 是服务层的纯值类型（6.6 节定义在 `pkg/service/api/types.go`），字段都是 `uint64`、`string`、`byte` 这类可序列化的类型；
+- `Breakpoint` 是服务层的纯值类型（6.7 节定义在 `pkg/service/api/types.go`），字段都是 `uint64`、`string`、`byte` 这类可序列化的类型；
 - 第 9 章引入 headless RPC 后，这个返回值要跨进程传输，值快照可以直接序列化；如果返回内部 `*target.Breakpoint`，既暴露目标层实现，也没法跨进程传。
 
 `pkg/service/debugger/debugger.go` 里的门面方法：
@@ -190,7 +190,7 @@ var (
 // 并摘除断点索引。
 //
 // 注意：如果某个线程恰好停在断点处（PC=断点地址+1），还需回退该线程
-// 的 PC，这部分在多线程调试（ch6.17.5）中实现。
+// 的 PC，这部分在多线程调试（ch6.18.5）中实现。
 func (p *DebuggedProcess) ClearBreakpoint(id uint64) (*api.Breakpoint, error) {
 	bp, ok := p.BreakpointsByID[id]
 	if !ok {
@@ -232,7 +232,7 @@ func (p *DebuggedProcess) RestoreInstruction(addr uintptr) (*Breakpoint, error) 
 
 - `ClearBreakpoint` 先用 `BreakpointsByID[id]` 按编号找断点，找不到就返回 `ErrBreakpointNotExisted`。这是"编号不存在"报错的来源；
 - 找到后交给 `RestoreInstruction(bp.Addr)`，由它完成真正的还原和摘除。返回值被丢弃，是因为调用方已经拿着 `bp`，只需要知道成功与否；
-- `RestoreInstruction` 再按地址查一次 `Breakpoints[addr]`。这不是多余：地址索引才是"这个地址上到底有没有断点"的权威判断，将来 `continue`、`clearall` 都会直接按地址调它。两张索引理论上是一致的——6.6 节添加断点时一起写、这里一起删——真出现不一致时，按地址查不到就按"断点不存在"处理，不会去做一次没有依据的内存写；
+- `RestoreInstruction` 再按地址查一次 `Breakpoints[addr]`。这不是多余：地址索引才是"这个地址上到底有没有断点"的权威判断，将来 `continue`、`clearall` 都会直接按地址调它。两张索引理论上是一致的——6.7 节添加断点时一起写、这里一起删——真出现不一致时，按地址查不到就按"断点不存在"处理，不会去做一次没有依据的内存写；
 - POKE 的字节数固定为 1，写的是 `bp.Orig`。`n != 1` 也当作失败处理：ptrace 的 POKE 正常只返回 1，返回其他值说明这次写入没有按预期完成；
 - POKE 和两次 `delete` 都在 `ExecPtrace` 的闭包里。6.1 节讲过 ptrace limit：跟踪关系建立后，所有 ptrace 请求必须来自同一个 tracer 线程，`ExecPtrace` 保证串行、不跨线程；
 - 删除时同时清掉 `BreakpointsByID[bp.ID]` 和 `Breakpoints[bp.Addr]`，避免留下"按编号还能查到、按地址已经查不到"的幽灵记录；
@@ -243,7 +243,7 @@ func (p *DebuggedProcess) RestoreInstruction(addr uintptr) (*Breakpoint, error) 
 在 godbgv2 仓库里切到这一节，把调试器和 fixture 都构建出来：
 
 ```bash
-git checkout ch6.8
+git checkout ch6.9
 make build
 make fixtures
 ```
@@ -305,13 +305,13 @@ tracee is run by tracer, kill it
 
 **`clear` 与 `clearall`。** 两者共用 `RestoreInstruction`：下一节的 `clearall` 只是遍历断点集合逐个调用，`continue` 命中断点后的"还原—单步—重设"也复用它。
 
-**断点表与内存的一致性。** 添加时先登记索引再 POKE、失败回滚，移除时先 POKE 再删索引、失败保留，避免索引与目标进程内存脱节。`Orig` 只存在调试器内存里，调试器异常退出时目标进程的 `0xCC` 没人还原，所以 6.10 节会在 `exit` 前调用 `clearall`。
+**断点表与内存的一致性。** 添加时先登记索引再 POKE、失败回滚，移除时先 POKE 再删索引、失败保留，避免索引与目标进程内存脱节。`Orig` 只存在调试器内存里，调试器异常退出时目标进程的 `0xCC` 没人还原，所以 6.11 节会在 `exit` 前调用 `clearall`。
 
-**GDB 与 Delve。** GDB 的 `delete <num>`、Delve 的 `clear <id>`/`clearall` 语义与本节一致。它们删除断点时还会回退停在断点处的线程 PC，godbgv2 把这部分放在 6.17.5 节实现。
+**GDB 与 Delve。** GDB 的 `delete <num>`、Delve 的 `clear <id>`/`clearall` 语义与本节一致。它们删除断点时还会回退停在断点处的线程 PC，godbgv2 把这部分放在 6.18.5 节实现。
 
 ### 本节小结
 
-本节实现了 `clear -n <id>`：按编号找到断点，把该地址处原有的指令字节写回目标进程，并从断点索引中摘除。它是 6.6 节添加断点的逆操作；停在断点处的线程 PC 回退留到 6.17.5 节处理。
+本节实现了 `clear -n <id>`：按编号找到断点，把该地址处原有的指令字节写回目标进程，并从断点索引中摘除。它是 6.7 节添加断点的逆操作；停在断点处的线程 PC 回退留到 6.18.5 节处理。
 
 下一节实现 `clearall`，一次清空所有断点；再往后是 `step`、`continue`，其中 `continue` 让程序真正运行到断点处。断点的"增、查、删、命中"闭环到这里只差最后一步。
 

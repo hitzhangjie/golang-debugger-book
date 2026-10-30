@@ -1,10 +1,10 @@
 ## 调试命令：`disass` 反汇编
 
-6.1~6.4 节讲的是怎么把调试器"架起来"：启动、attach、编译并调试目标，以及进入调试会话。截至 6.4 节，会话里还没有一条真正去看目标程序的命令。从本节开始，我们逐个实现调试会话内的调试命令，第一个是反汇编 `disass`。
+6.1~6.5 节讲的是怎么把调试器"架起来"：启动、attach、编译并调试目标，进入调试会话，退出时善后，以及脚本回放与冒烟测试机制。截至 6.5 节，会话里还没有一条真正去看目标程序的命令。从本节开始，我们逐个实现调试会话内的调试命令，第一个是反汇编 `disass`。
 
 反汇编是指令级调试的基础：指令级调试不看源码，看的就是一条条机器指令以及它们在内存里的地址。另外，只有先能看到指令及其地址，后面才能在指定地址处添加断点，所以我们先介绍反汇编。
 
-本节配套代码在 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.5`，`git diff ch6.4 ch6.5` 可以看到这一节改了什么。
+本节配套代码在 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.6`，`git diff ch6.5 ch6.6` 可以看到这一节改了什么。
 
 ### 实现目标：`godbg> disass [address]` 反汇编机器指令
 
@@ -31,9 +31,9 @@ godbg> disass 0x478120 -n 3 -s intel   # 从指定地址开始、3 条、intel �
 
 第一列是指令地址，第二列是这条指令的机器码，第三列是反汇编得到的汇编文本。
 
-为了让"不带 address"这种用法成立，本节还要前移一个最小的基础能力：读取被调试进程当前的 PC。命令层得先知道"当前停在哪儿"，才能把它当作反汇编起点。按前面的分层，这个能力要一路补到 `api.Client`、`debugger` 门面和 `pkg/target`。完整的寄存器读取命令（`pregs`）到 6.14 节才实现，这里只补一个 `CurrentPC()`，够本节使用即可。
+为了让"不带 address"这种用法成立，本节还要前移一个最小的基础能力：读取被调试进程当前的 PC。命令层得先知道"当前停在哪儿"，才能把它当作反汇编起点。按前面的分层，这个能力要一路补到 `api.Client`、`debugger` 门面和 `pkg/target`。完整的寄存器读取命令（`pregs`）到 6.15 节才实现，这里只补一个 `CurrentPC()`，够本节使用即可。
 
-还要提前说明一点：本节只做反汇编，不涉及断点。断点命令在 6.6 节才实现，所以本节的代码里没有"断点落在反汇编起点上，需要回退 PC 或还原 0xCC"这类处理。断点位置反汇编的原理我们照常讲清楚，但会把"本节代码没有做"的地方标出来。
+还要提前说明一点：本节只做反汇编，不涉及断点。断点命令在 6.7 节才实现，所以本节的代码里没有"断点落在反汇编起点上，需要回退 PC 或还原 0xCC"这类处理。断点位置反汇编的原理我们照常讲清楚，但会把"本节代码没有做"的地方标出来。
 
 ### 基础知识
 
@@ -74,7 +74,7 @@ ELF 文件的大致结构如下所示。要读取、解析 ELF 文件数据，�
 
 #### 断点位置的反汇编（原理，本节尚未实现）
 
-> 这一小节讲的是断点存在时反汇编要额外处理什么。本节代码还没有断点（6.6 节实现），所以这些处理目前都没有做，这里先把原理和后面的实现计划讲清楚。
+> 这一小节讲的是断点存在时反汇编要额外处理什么。本节代码还没有断点（6.7 节实现），所以这些处理目前都没有做，这里先把原理和后面的实现计划讲清楚。
 
 动态断点往往是通过指令 patch 来实现的，即将任意完整机器指令的第一字节数据保存，然后将其替换成 `0xCC (int 3)` 指令，处理器执行完 0xCC 之后自身就会停下来，这就是断点的效果。
 
@@ -110,11 +110,11 @@ PC = addr + 1
 - `PC-1` 处是我们下的断点：从 `PC-1` 开始反汇编，并把该处读到的 0xCC 恢复成原始字节；
 - `PC-1` 处不是断点：那 PC 本身就是下一条待执行指令的地址，直接从 PC 开始反汇编即可。exec 启动后停在入口、attach 后停在目标线程这些情况，都属于这一类。
 
-这套处理在 godbgv2 里要等 6.6 节实现断点之后才补齐。godbg 的完整实现里，`disass` 提供了 `--clearall` 选项，配合目标层的 `DisassembleWithBreakpointCleared` 扫描反汇编窗口内的所有断点、把缓冲区里的 0xCC 还原成原始字节再反汇编；godbgv2 目前还没有这部分，本节的目标层 `disassembleData` 拿到什么字节就解什么字节。等断点实现之后，我们再回来把 `disass` 的断点处理补上，这与"本节只做反汇编"的范围划分是一致的。
+这套处理在 godbgv2 里要等 6.7 节实现断点之后才补齐。godbg 的完整实现里，`disass` 提供了 `--clearall` 选项，配合目标层的 `DisassembleWithBreakpointCleared` 扫描反汇编窗口内的所有断点、把缓冲区里的 0xCC 还原成原始字节再反汇编；godbgv2 目前还没有这部分，本节的目标层 `disassembleData` 拿到什么字节就解什么字节。等断点实现之后，我们再回来把 `disass` 的断点处理补上，这与"本节只做反汇编"的范围划分是一致的。
 
 ### 在 godbgv2 中实现
 
-前面几节搭好的分层这次不用动：命令层新增 `disass` 子命令，`api.Client` 补两个方法（`CurrentPC`、`Disassemble`），`debugger` 门面转发，`pkg/target` 真正去读寄存器和读内存。相对 ch6.4，这一节的调用链是：
+前面几节搭好的分层这次不用动：命令层新增 `disass` 子命令，`api.Client` 补两个方法（`CurrentPC`、`Disassemble`），`debugger` 门面转发，`pkg/target` 真正去读寄存器和读内存。相对 ch6.5，这一节的调用链是：
 
 ```text
 godbg> disass [address]
@@ -263,7 +263,7 @@ type Client interface {
 }
 ```
 
-`CurrentPC` 插在 `State` 之后，注释里写明了它的定位：tracee 处于停止状态时，它返回的就是"当前停下位置"。完整的寄存器读取能力要到 6.14 节 `pregs` 才实现，这里只把"读 PC"这一项最小能力前移，因为无参 disass 现在就需要它。
+`CurrentPC` 插在 `State` 之后，注释里写明了它的定位：tracee 处于停止状态时，它返回的就是"当前停下位置"。完整的寄存器读取能力要到 6.15 节 `pregs` 才实现，这里只把"读 PC"这一项最小能力前移，因为无参 disass 现在就需要它。
 
 反汇编结果用 `api.AsmInstruction` 表示，定义在 `pkg/service/api/types.go`：
 
@@ -327,7 +327,7 @@ func (p *DebuggedProcess) CurrentPC() (uint64, error) {
 
 - 调试器只会在 tracee 处于停止状态时执行调试命令，所以直接 `PTRACE_GETREGS` 读寄存器，拿到的 RIP 就是"当前停止位置"；
 - ptrace 请求没有直接裸调 `syscall.PtraceGetRegs`，而是包在 `ExecPtrace` 里。6.1 节讲过 ptrace limit：跟踪关系建立后，所有 ptrace 请求必须来自同一个 tracer 线程，`ExecPtrace` 就是用来保证这一点的；`CurrentPC` 和后面的 `peekMemory` 都走这条路，串行执行，不会互相插队；
-- 这里读的是主线程（`p.Process.Pid`）的 RIP。本节示例 `loop` 停在入口时还是单线程，所以够用；多线程程序里"当前停止位置"还要考虑选哪个线程，那是 6.17 节"调试多线程程序"的内容。
+- 这里读的是主线程（`p.Process.Pid`）的 RIP。本节示例 `loop` 停在入口时还是单线程，所以够用；多线程程序里"当前停止位置"还要考虑选哪个线程，那是 6.18 节"调试多线程程序"的内容。
 
 #### 目标层：读取指令并反汇编
 
@@ -398,7 +398,7 @@ func instSyntax(inst x86asm.Inst, syntax string) (string, error) {
 }
 
 // peekMemory 读取内存地址addr处的数据到buf中，返回实际读取的字节数。
-// TODO(ch6.13): 将 peekMemory 抽出为 DebuggedProcess.ReadMemory 方法
+// TODO(ch6.14): 将 peekMemory 抽出为 DebuggedProcess.ReadMemory 方法
 func (p *DebuggedProcess) peekMemory(addr uintptr, buf []byte) (int, error) {
 	var (
 		dat int
@@ -423,7 +423,7 @@ func (p *DebuggedProcess) peekMemory(addr uintptr, buf []byte) (int, error) {
 - `disassembleData` 是 decode 循环：`count < max && offset < len(data)` 两个条件同时满足才继续；每次 `x86asm.Decode(data[offset:], 64)` 按 64 位模式解码，成功后用 `instSyntax` 转成指定语法，`Bytes` 取 `data[offset:offset+inst.Len]`，`Addr` 是 `addr+offset`，然后 `offset += inst.Len`、`count++`；
 - 解码失败分两种：`x86asm.ErrUnrecognized` 表示这段字节不是可识别的指令，跳过一个字节继续（相当于重新同步）；其他错误（比如指令被截断）直接返回。因为默认只解 10 条、窗口有 1024 字节，正常情况下走不到窗口末尾，这个错误分支不容易碰到；
 - `instSyntax` 按 `-s` 的取值选择 `GoSyntax`、`GNUSyntax`、`IntelSyntax`，未知取值返回 `invalid asm syntax error`；
-- `peekMemory` 把 PEEKTEXT 包进 `ExecPtrace` 执行。注释里的 `TODO(ch6.13)` 说明它后面会抽成正式的 `ReadMemory` 方法，到 6.13 节实现 `pmem` 时补上。
+- `peekMemory` 把 PEEKTEXT 包进 `ExecPtrace` 执行。注释里的 `TODO` 说明它后面会抽成正式的 `ReadMemory` 方法，到 6.14 节实现 `pmem` 时补上。
 
 > ps: 目标层还有一个 `DisassembleSingleInstruction`，读 16 字节、decode 一条指令就返回，留给后面需要"单条指令信息"的调试命令使用，本节的反汇编窗口不走它。
 
@@ -432,7 +432,7 @@ func (p *DebuggedProcess) peekMemory(addr uintptr, buf []byte) (int, error) {
 在 godbgv2 仓库里切到这一节，把调试器和 fixture 都构建出来：
 
 ```bash
-git checkout ch6.5
+git checkout ch6.6
 make build
 make fixtures
 ```
@@ -487,15 +487,15 @@ disass [address]
 - `_fixtures/loop` 的 ELF 入口地址是 `0x478120`（`readelf -h _fixtures/loop` 里的 Entry point address），exec 启动后初始停止位置就是入口，所以无参 `disass` 和 `disass 0x478120` 的起点一致；入口处是一条 jmp，后面跟着一串 int3 填充；
 - `disass` 默认反汇编 10 条，这里就是 1 条 jmp 加 9 条 int3；`disass -n 5` 只输出 5 条；`disass 0x478120 -n 3` 从指定地址开始、输出 3 条。每行三列分别是地址、机器码、汇编文本，用 tab 分隔；
 - `-s intel` 切换语法之后，同一条 jmp 从 `jmpq` 变成 `jmp`（gnu/AT&T 风格带操作码后缀）。指令和地址都没有变，变的只是文本呈现；
-- `-s intel` 之后再执行一次不带选项的 `disass`，输出回到默认的 10 条、gnu 语法，没有沿用上一条的 `-n 3 -s intel`：6.4 节的 `DebugSession.execute` 会在每条命令执行后复位 flag，选项不会跨命令残留；
+- `-s intel` 之后再执行一次不带选项的 `disass`，输出回到默认的 10 条、gnu 语法，没有沿用上一条的 `-n 3 -s intel`：6.5 节的 `DebugSession.execute` 会在每条命令执行后复位 flag，选项不会跨命令残留；
 - `help disass` 的第一行就是命令的 `Short`；usage 里 `[address]` 的方括号表示地址可选；`-n`、`-s` 的默认值也在这里列出来。
 
 > ps: 细心的读者会注意到 `jmpq` 的目标 `0xffffffffffffc8c4` 不像一个正常地址。这是因为 `x86asm.GNUSyntax(inst, pc, nil)` 要拿到指令自身的地址，才能把 PC 相对跳转的偏移换算成绝对目标；`instSyntax` 里传进去的是 `inst.PCRel`，而 `Inst.PCRel` 表示 PC 相对字段的**长度**（rel32 时是 4），不是偏移量，于是算出来的目标值没有实际意义。这不影响我们查看指令本身和指令地址；真要展示绝对跳转目标，把指令地址传给 `GNUSyntax` 即可。
 
-本节的冒烟脚本 `testdata/script/ch6.5.txt` 内容如下：
+本节的冒烟脚本 `testdata/script/ch6.6.txt` 内容如下：
 
 ```text
-# ch6.5 smoke: 反汇编机器指令（address 可选，缺省从当前停止位置开始）
+# ch6.6 smoke: 反汇编机器指令（address 可选，缺省从当前停止位置开始）
 # 地址 0x478120 取自 _fixtures/loop 的 ELF 入口（readelf -h），
 # fixture 由固定工具链 go1.24.13 构建，非 PIE 程序地址固定；
 # exec 初始停止位置即 ELF 入口，故无参 disass 与 disass 0x478120 结果一致。
@@ -505,11 +505,11 @@ disass 0x478120 -n 2
 =0x478120:
 ```
 
-`=` 开头的行是冒烟测试的断言，核对紧挨着的上一条 godbg 命令的输出（约定见 6.4 节）。两条命令一条不带 address、一条显式指定入口地址，都断言输出里出现 `0x478120:`，正好把"无参时从当前停止位置开始"这个行为和显式指定地址对齐验证了。运行：
+`=` 开头的行是冒烟测试的断言，核对紧挨着的上一条 godbg 命令的输出（约定见 6.5 节）。两条命令一条不带 address、一条显式指定入口地址，都断言输出里出现 `0x478120:`，正好把"无参时从当前停止位置开始"这个行为和显式指定地址对齐验证了。运行：
 
 ```bash
-$ make smoke S=ch6.5
-smoke: running testdata/script/ch6.5.txt
+$ make smoke S=ch6.6
+smoke: running testdata/script/ch6.6.txt
 smoke: all passed
 ```
 
@@ -525,17 +525,17 @@ smoke: all passed
 
 除了调试会话内的即时反汇编，还有一种常见需求是把磁盘上的二进制整体反汇编出来做离线分析：通过 `/proc/<pid>/exe` 找到程序、按 ELF 读出 `.text` 的全部指令再逐条 decode，并且对不认识的指令做跳过处理。它和 godbgv2 的 `disass` 分别代表了前面"指令数据从哪里来"的两种做法——一个面向离线全量分析，一个面向调试会话里即时查看当前指令。godbgv2 只保留后者，离线全量反汇编这里不再展开实现。
 
-完整的实现可以在 godbgv2 仓库的 tag `ch6.5` 下查看，涉及 `cmd/debug/disass.go`、`cmd/debug/address.go`、`pkg/service/api/client.go`、`pkg/service/api/types.go`、`pkg/service/debugger/debugger.go`、`pkg/target/pc.go`、`pkg/target/disassemble.go`。
+完整的实现可以在 godbgv2 仓库的 tag `ch6.6` 下查看，涉及 `cmd/debug/disass.go`、`cmd/debug/address.go`、`pkg/service/api/client.go`、`pkg/service/api/types.go`、`pkg/service/debugger/debugger.go`、`pkg/target/pc.go`、`pkg/target/disassemble.go`。
 
 ### 本节小结
 
 本节实现了指令级调试的第一个调试命令 `disass`：
 
 - 支持 `disass [address]`：address 可选，不带地址时从当前停止位置（PC）开始，带地址时从指定地址开始；两种来源都经 `disassStartAddress` 解析成同一个起始地址，再走同一条 `Client.Disassemble(addr, max, syntax)` 处理路径；
-- 支持了读取PC寄存器的最小基础能力 `CurrentPC`：`api.Client` 增加接口，`debugger` 门面转发，`pkg/target` 通过 `PTRACE_GETREGS` 读 RIP；完整的寄存器读取留到 6.14 节 `pregs`；
+- 支持了读取PC寄存器的最小基础能力 `CurrentPC`：`api.Client` 增加接口，`debugger` 门面转发，`pkg/target` 通过 `PTRACE_GETREGS` 读 RIP；完整的寄存器读取留到 6.15 节 `pregs`；
 - 反汇编选用 x86asm：变长指令逐条 decode，`Inst.Len` 用来推进偏移量；支持 `-n/--max`（默认 10 条）和 `-s/--syntax`（go/gnu/intel，默认 gnu），输出为 `0xADDR:\tBYTES\tTEXT` 三列；
 - 指令数据用 ptrace PEEKTEXT 直接从目标进程内存读（1024 字节窗口），看到的是运行时真实的指令；从 ELF 的 `.text` 全量反汇编则是独立反汇编工具的做法，本节作为背景对照介绍；
-- 讲清了断点位置反汇编的原理：0xCC patch 只覆盖指令第一字节，命中断点时 PC 已经指向下一条指令，所以无参 disass 要关注 PC-1、并恢复缓冲区里的原始字节；本节代码还没有断点，这部分留到 6.6 节实现断点之后再补齐（godbg 的完整实现用 `--clearall` 和 `DisassembleWithBreakpointCleared` 兑现该能力）。
+- 讲清了断点位置反汇编的原理：0xCC patch 只覆盖指令第一字节，命中断点时 PC 已经指向下一条指令，所以无参 disass 要关注 PC-1、并恢复缓冲区里的原始字节；本节代码还没有断点，这部分留到 6.7 节实现断点之后再补齐（godbg 的完整实现用 `--clearall` 和 `DisassembleWithBreakpointCleared` 兑现该能力）。
 
 下一节我们就在这个基础上实现动态断点：用 `break <address>` 在指定的指令地址处 patch 一个 0xCC，并记录该地址处的原始指令。
 

@@ -1,10 +1,10 @@
 ## 调试命令：`break` 添加断点
 
-6.5 节实现了 `disass`，我们能在调试会话里看到目标程序的一条条指令以及它们的地址了。有了"指令在哪儿"这个前提，本节就可以实现指令级调试最核心的操作：断点。
+6.6 节实现了 `disass`，我们能在调试会话里看到目标程序的一条条指令以及它们的地址了。有了"指令在哪儿"这个前提，本节就可以实现指令级调试最核心的操作：断点。
 
 断点的分类、`int 3` 的工作原理、软件断点与硬件断点的区别，4.2.3《断点与执行控制》已经讲过，这里不再重复。本节实现的是其中最基础也最常用的一种：**软件动态断点**。它是断点能力的地基，掌握了它，step、next、continue 这些执行控制命令才有地方落脚；再往后结合 DWARF 实现符号级断点，就能对一行源码、一个函数、一个分支下断点了。
 
-本节配套代码在 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.6`，`git diff ch6.5 ch6.6` 可以看到这一节改了什么。
+本节配套代码在 [hitzhangjie/godbgv2](https://github.com/hitzhangjie/godbgv2) 的 tag `ch6.7`，`git diff ch6.6 ch6.7` 可以看到这一节改了什么。
 
 ### 实现目标：`godbg> break <address>` 添加断点
 
@@ -16,7 +16,7 @@ godbg> b 0x4749e0            # 别名，效果相同
 godbg> breakpoint 0x4749e0   # 别名，效果相同
 ```
 
-`<address>` 是一个指令地址，可以用 `disass` 反汇编得到，也可以从 `readelf`、`objdump` 这类工具的输出里拿。地址字符串的解析直接复用 6.5 节 `cmd/debug/address.go` 里的 `parseAddress`：`0x` 前缀按十六进制、`0` 前缀按八进制、其余按十进制。
+`<address>` 是一个指令地址，可以用 `disass` 反汇编得到，也可以从 `readelf`、`objdump` 这类工具的输出里拿。地址字符串的解析直接复用 6.6 节 `cmd/debug/address.go` 里的 `parseAddress`：`0x` 前缀按十六进制、`0` 前缀按八进制、其余按十进制。
 
 添加成功后输出断点编号和地址：
 
@@ -27,7 +27,7 @@ breakpoint 1 added at 0x4749e0
 
 这里有几点约定：
 
-- 断点编号从 1 开始、单调递增。编号是断点的标识：6.7 节 `breakpoints` 按编号列出断点，6.8 节 `clear -n <id>` 按编号移除断点，都离不开它；
+- 断点编号从 1 开始、单调递增。编号是断点的标识：6.8 节 `breakpoints` 按编号列出断点，6.9 节 `clear -n <id>` 按编号移除断点，都离不开它；
 - 同一个地址重复添加不会创建新断点，直接返回已经存在的那个：编号不变，目标进程内存也不会被重复 patch。这个"按地址去重"是后面 clear、continue 不会重复处理同一个断点的前提；
 - 每添加一个断点，调试器要记下：断点地址、该地址处原有的指令首字节、断点编号和启用状态。少了哪一样，后面都还原不回去。
 
@@ -70,9 +70,9 @@ addr:  0xcc 0x1 0x2 0x3 0x4   | orig: <addr, 0x??>
 `DebuggedProcess` 里给断点准备了两张 map：
 
 - `map[uintptr]*Breakpoint`：按地址索引。重复添加同一个地址时用它判重；`disass --clearall` 还原窗口内的 `0xCC` 时，也靠"地址 → 断点"找到原始字节；
-- `map[uint64]*Breakpoint`：按编号索引。编号是用户操作的句柄，6.8 节 `clear -n <id>` 按编号删除断点就走这张表；continue（6.12）判断当前停在哪个断点、还原哪条指令，靠的是地址索引。
+- `map[uint64]*Breakpoint`：按编号索引。编号是用户操作的句柄，6.9 节 `clear -n <id>` 按编号删除断点就走这张表；continue（6.13）判断当前停在哪个断点、还原哪条指令，靠的是地址索引。
 
-如果只存一份断点切片，按地址判重、按编号查找都要遍历，断点一多就慢了；两张 map 把这两类高频查询都压到 O(1)。6.7 节 `breakpoints` 列出断点时，再把 map 里的断点收集成切片、按编号排序输出。
+如果只存一份断点切片，按地址判重、按编号查找都要遍历，断点一多就慢了；两张 map 把这两类高频查询都压到 O(1)。6.8 节 `breakpoints` 列出断点时，再把 map 里的断点收集成切片、按编号排序输出。
 
 #### 命中断点之后：还原要 PC-1
 
@@ -86,12 +86,12 @@ PC = addr + 1
 
 这带来两个后续必须处理的点：
 
-- `continue`（6.12 节）恢复执行前，要把内存里的 `0xCC` 换回 `Orig`，再把 PC 从 `addr+1` 拨回 `addr`，否则原指令永远执行不到；
-- `disass`（6.5 节）只是读内存、不控制执行，**不需要**改目标进程内存，只要把读出来的数据副本里被 patch 的字节还原即可。6.5 节末尾讲的"无参 disass 要关注 PC-1"，本节就用 `--clearall` 兑现。
+- `continue`（6.13 节）恢复执行前，要把内存里的 `0xCC` 换回 `Orig`，再把 PC 从 `addr+1` 拨回 `addr`，否则原指令永远执行不到；
+- `disass`（6.6 节）只是读内存、不控制执行，**不需要**改目标进程内存，只要把读出来的数据副本里被 patch 的字节还原即可。6.6 节末尾讲的"无参 disass 要关注 PC-1"，本节就用 `--clearall` 兑现。
 
 ### 在 godbgv2 中实现
 
-前面几节搭好的分层这次仍然不用动：命令层新增 `break` 子命令，`api.Client` 补上添加断点、还原断点反汇编两个方法，`debugger` 门面转发，`pkg/target` 真正去 PEEK/POKE 内存并维护断点索引。相对 ch6.5，这一节的调用链是：
+前面几节搭好的分层这次仍然不用动：命令层新增 `break` 子命令，`api.Client` 补上添加断点、还原断点反汇编两个方法，`debugger` 门面转发，`pkg/target` 真正去 PEEK/POKE 内存并维护断点索引。相对 ch6.6，这一节的调用链是：
 
 ```text
 godbg> break <address>
@@ -157,7 +157,7 @@ func init() {
 
 - `Use` 是 `break <address>`，`Aliases` 注册了 `b`、`breakpoint`；`Annotations` 把命令归到断点分组，`help` 按分组展示时，断点相关命令排在最前面（命令分组在 5.7 节搭骨架时介绍过）；
 - `len(args) != 1` 时返回 `usage: break <address>`：没给地址、多给了参数都走这个分支；
-- 地址解析复用 6.5 节的 `parseAddress`，`0x` 十六进制、十进制、`0` 八进制都支持，解析失败返回 `invalid address: ...`；
+- 地址解析复用 6.6 节的 `parseAddress`，`0x` 十六进制、十进制、`0` 八进制都支持，解析失败返回 `invalid address: ...`；
 - 真正的添加动作不在命令层：`Client.AddBreakpoint(addr)` 拿到的是已经添加完成后的 `*api.Breakpoint` 快照，命令层只负责按 `breakpoint %d added at %#x` 打印编号和地址。后端不打印、前端只展示，与 `disass` 的约定一致。
 
 错误处理也体现了这条分层约定：参数个数不对、地址解析失败由命令层返回错误；PEEK/POKE 失败由目标层返回错误，命令层原样上抛，最终由 cobra 统一打印 `Error: ...`。例如：
@@ -382,11 +382,11 @@ func toAPIBreakpoint(bp *Breakpoint) *api.Breakpoint {
 - 读取失败（地址未映射、权限不足等）和写入失败都会带上 pid、实际字节数、底层错误返回，方便排查；
 - 返回前用 `toAPIBreakpoint` 把内部 `*Breakpoint` 转成 `*api.Breakpoint`，内部结构不暴露给client侧。
 
-还有 `Breakpoints` 切片、`Len/Less/Swap` 排序接口和 `ListBreakpoints`，以及 `pkg/target/breakpoint_test.go` 中"编号单调递增""按 ID 排序"的相关逻辑。它们服务的是 6.7 节"列出断点"：`map` 遍历无序，要按编号输出就得先收集成切片再排序。这部分代码在本节跟随文件一起落位，6.7 节再展开。
+还有 `Breakpoints` 切片、`Len/Less/Swap` 排序接口和 `ListBreakpoints`，以及 `pkg/target/breakpoint_test.go` 中"编号单调递增""按 ID 排序"的相关逻辑。它们服务的是 6.8 节"列出断点"：`map` 遍历无序，要按编号输出就得先收集成切片再排序。这部分代码在本节跟随文件一起落位，6.8 节再展开。
 
 #### 反汇编配合：`--clearall` 还原断点
 
-断点一 add，`disass` 读到的首字节就是 `0xCC`，输出会变成 `int3` 且指令错位。6.5 节末尾把这件事留到了本节，现在补上。命令层给 `disass` 增加一个 `--clearall` 选项：
+断点一 add，`disass` 读到的首字节就是 `0xCC`，输出会变成 `int3` 且指令错位。6.6 节末尾把这件事留到了本节，现在补上。命令层给 `disass` 增加一个 `--clearall` 选项：
 
 ```go
 var disassCmd = &cobra.Command{
@@ -416,13 +416,13 @@ func init() {
 }
 ```
 
-不带 `--clearall` 时仍然是 6.5 节的行为：读到什么解什么，断点处显示 `int3`；带了才走还原逻辑。目标层的 `pkg/target/disassemble.go` 增加的方法如下：
+不带 `--clearall` 时仍然是 6.6 节的行为：读到什么解什么，断点处显示 `int3`；带了才走还原逻辑。目标层的 `pkg/target/disassemble.go` 增加的方法如下：
 
 ```go
 // DisassembleWithBreakpointCleared 智能反汇编：临时还原内存区域内的所有
 // 断点指令后再反汇编，使输出与原始指令一致。
 //
-// 添加断点后（ch6.6），断点处的指令首字节已被替换为 0xCC，直接反汇编会
+// 添加断点后（ch6.7），断点处的指令首字节已被替换为 0xCC，直接反汇编会
 // 看到 int3。本方法在读取到的数据副本上还原这些字节，不影响进程内存。
 func (p *DebuggedProcess) DisassembleWithBreakpointCleared(addr, max uint64, syntax string) ([]api.AsmInstruction, error) {
 	// 读取足够的内存数据用于反汇编
@@ -472,7 +472,7 @@ func (p *DebuggedProcess) restoreOrigInstructionAtBp(startAddr uint64, data []by
 
 这段代码要结合实际场景看：
 
-- 读取窗口从 `addr-1` 开始，而不是从 `addr` 开始，为的是先看一眼"`addr` 前一个字节是不是断点"。这正是 6.5 节讲的：命中断点后 PC = 断点地址 + 1，此时无参 `disass` 的起点是 PC，如果 PC-1 处有断点，真正要反汇编的起点是 PC-1；
+- 读取窗口从 `addr-1` 开始，而不是从 `addr` 开始，为的是先看一眼"`addr` 前一个字节是不是断点"。这正是 6.6 节讲的：命中断点后 PC = 断点地址 + 1，此时无参 `disass` 的起点是 PC，如果 PC-1 处有断点，真正要反汇编的起点是 PC-1；
 - `dat[0] == 0xcc` 且 `p.Breakpoints[addr-1]` 存在时（代码注释里说的"目标地址"就是这个 `addr-1`），把 `dat[0]` 还原成 `Orig`、`addr--`，于是反汇编从断点地址开始。这样停在断点上时，不指定address的disass操作也能看到原始指令；
 - 如果 `addr` 前一个字节不是断点，或没有登记过，说明addr-1处不是断点指令，那么把多读的那 1 字节丢掉，起点仍然是 `addr`；
 - `restoreOrigInstructionAtBp` 扫描读到的数据窗口（`dat[:n]`，最多 1024 字节），遇到 `0xCC` 就去断点表里按地址查：登记过断点才还原，没登记过就保留——目标程序里本来就有大量 `int3` 填充，不能把那些也改掉；
@@ -483,7 +483,7 @@ func (p *DebuggedProcess) restoreOrigInstructionAtBp(startAddr uint64, data []by
 在 godbgv2 仓库里切到这一节，把调试器和 fixture 都构建出来：
 
 ```bash
-git checkout ch6.6
+git checkout ch6.7
 make build
 make fixtures
 ```
@@ -544,12 +544,12 @@ tracee is run by tracer, kill it
 - 第二个断点下在 `0x4749e0`（`_rt0_amd64`）后，从 `0x4749e1` 开始解码：`8b 3c 24` 少了 REX 前缀，`mov (%rsp),%rdi` 变成了 `mov (%rsp),%edi`；后面几条恰好又恢复了字节对齐，所以只有第一条呈现异常。这个例子也说明，断点导致的错位不一定整段都乱，光看某几条指令未必能发现，必须结合断点表还原；
 - `--clearall` 之后两条反汇编都恢复成了原始指令：`0x478120` 回到 5 字节 jmp，`0x4749e0` 回到带 REX 前缀的 `mov (%rsp),%rdi`，且 `0x4749ee` 处真正的 `int3` 填充保留了下来（它没有登记为断点）；
 - 重复执行 `b 0x478120` 时输出 `breakpoint 1 added at 0x478120`，编号仍然是 1：按地址去重生效，没有产生第二个断点。输出文案和首次添加一样，是当前实现的观感问题，读者通过编号就能判断是不是新建的；
-- `jmpq` 后面的目标地址看起来不像正常地址，是 6.5 节 ps 里解释过的 `x86asm.PCRel` 用法问题，不影响指令地址和机器码的展示，这里不再重复。
+- `jmpq` 后面的目标地址看起来不像正常地址，是 6.6 节 ps 里解释过的 `x86asm.PCRel` 用法问题，不影响指令地址和机器码的展示，这里不再重复。
 
-本节的冒烟脚本 `testdata/script/ch6.6.txt` 把上面的关键行为固化了下来：
+本节的冒烟脚本 `testdata/script/ch6.7.txt` 把上面的关键行为固化了下来：
 
 ```text
-# ch6.6 smoke: 添加断点，并验证断点对反汇编的影响与还原
+# ch6.7 smoke: 添加断点，并验证断点对反汇编的影响与还原
 # 入口地址 0x478120 取自 readelf -h _fixtures/loop（固定工具链构建，地址固定）
 break 0x478120
 =breakpoint 1 added at 0x478120
@@ -561,15 +561,15 @@ disass 0x478120 --clearall
 =0x478120:.*e9
 ```
 
-`=` 开头的行是冒烟测试的断言：先断言断点添加成功，再断言默认反汇编能看到 `int3`，最后在 `--clearall` 之后断言该行是原始指令 `e9`。按 6.4 节的约定，断言只核对"最近一条 godbg 命令"的输出：回放器在执行每条命令前打印 `godbg> `，smoke.sh 按这个回显标记把会话输出切成逐命令片段，前面命令已经打印的文本不参与后面的断言。所以最后一条核对的就是 `disass 0x478120 --clearall` 自己的输出，不会被前面不带 `--clearall` 的 `disass` 污染。
+`=` 开头的行是冒烟测试的断言：先断言断点添加成功，再断言默认反汇编能看到 `int3`，最后在 `--clearall` 之后断言该行是原始指令 `e9`。按 6.5 节的约定，断言只核对"最近一条 godbg 命令"的输出：回放器在执行每条命令前打印 `godbg> `，smoke.sh 按这个回显标记把会话输出切成逐命令片段，前面命令已经打印的文本不参与后面的断言。所以最后一条核对的就是 `disass 0x478120 --clearall` 自己的输出，不会被前面不带 `--clearall` 的 `disass` 污染。
 
 断言模式用 `=0x478120:.*e9` 而不是只写 `=0x478120:`，是为了真正区分两种状态：断点生效时该行是 `0x478120: cc int3`，还原后才是 `0x478120: e9 bb c8 ff ff ...`；只断言地址前缀的话，即使还原失败也照样匹配。把这条断言挪到不带 `--clearall` 的 `disass` 后面，冒烟测试就会失败，正好说明它校验的是"还原"这一行为。
 
 运行：
 
 ```bash
-$ make smoke S=ch6.6
-smoke: running testdata/script/ch6.6.txt
+$ make smoke S=ch6.7
+smoke: running testdata/script/ch6.7.txt
 smoke: all passed
 ```
 
@@ -583,7 +583,7 @@ smoke: all passed
 
 **指令 patch 的其他用途。** 把函数入口首字节替换成跳转或其他指令，可以用来做函数 mock（gomonkey 等测试框架）、性能插桩、软件逆向分析中的代码改写。这些场景和断点用的是同一类技术：先保存原始字节，再 patch，最后负责还原。
 
-**当前实现的边界。** 本节只处理主线程（`p.Process.Pid`）的断点，多线程程序里每个线程的断点需要分别管理，6.17.5 节扩展"多线程断点"时再补齐；`break` 只接受指令地址，符号级断点要等第 9 章；断点创建后目前都是启用状态，还没有禁用/启用、条件断点、临时断点这些能力，它们属于符号级调试器的内容，9.2.21、9.2.23、9.2.24 节再展开。
+**当前实现的边界。** 本节只处理主线程（`p.Process.Pid`）的断点，多线程程序里每个线程的断点需要分别管理，6.18.5 节扩展"多线程断点"时再补齐；`break` 只接受指令地址，符号级断点要等第 9 章；断点创建后目前都是启用状态，还没有禁用/启用、条件断点、临时断点这些能力，它们属于符号级调试器的内容，9.2.21、9.2.23、9.2.24 节再展开。
 
 ### 本节小结
 
@@ -591,10 +591,10 @@ smoke: all passed
 
 - `break <address>` 支持 `0x` 十六进制、十进制、`0` 八进制地址（复用 `parseAddress`），`b`、`breakpoint` 是别名；源码位置断点留到 9.2.21~9.2.24 节；
 - 软件断点的原理是把指令首字节 patch 成 `int 3`（`0xCC`）：先 PEEK 保存原始字节到 `Orig`，再 POKE 写入 `0xCC`，同时登记断点信息；POKE 失败会回滚断点表，保证内存与记录一致；
-- `DebuggedProcess` 增加按地址、按编号两张断点索引：地址索引负责重复添加时的 O(1) 判重、`--clearall` 的按地址还原，以及 `continue`（6.12）命中后还原指令；编号索引供 `clear -n <id>`（6.8）使用；编号从 1 开始单调递增；
+- `DebuggedProcess` 增加按地址、按编号两张断点索引：地址索引负责重复添加时的 O(1) 判重、`--clearall` 的按地址还原，以及 `continue`（6.13）命中后还原指令；编号索引供 `clear -n <id>`（6.9）使用；编号从 1 开始单调递增；
 - `api.Client` 增加 `AddBreakpoint`、`DisassembleWithBreakpointCleared`，`api.Breakpoint` 作为服务层值类型（`Addr` 用 `uint64`，平台相关的 `uintptr` 转换由门面和目标层完成）；`debugger` 门面做类型转换、转发与空指针检查；
-- `disass --clearall` 兑现了 6.5 节留下的"断点位置反汇编"：从 `addr-1` 读窗口、识别 `addr-1` 处是否为断点并回退起点、在数据副本里按断点表还原窗口内的 `0xCC`，不修改目标进程内存；不带的 `disass` 仍按原始内存内容反汇编；
-- 用 `_fixtures/loop` 实际验证了 patch 效果、指令错位、`--clearall` 还原、按地址去重，并固化成冒烟脚本 `testdata/script/ch6.6.txt`（`make smoke S=ch6.6` 通过）。
+- `disass --clearall` 兑现了 6.6 节留下的"断点位置反汇编"：从 `addr-1` 读窗口、识别 `addr-1` 处是否为断点并回退起点、在数据副本里按断点表还原窗口内的 `0xCC`，不修改目标进程内存；不带的 `disass` 仍按原始内存内容反汇编；
+- 用 `_fixtures/loop` 实际验证了 patch 效果、指令错位、`--clearall` 还原、按地址去重，并固化成冒烟脚本 `testdata/script/ch6.7.txt`（`make smoke S=ch6.7` 通过）。
 
 下一节实现 `breakpoints` 命令，把已添加的断点按编号列出来；再往后是 `clear` 移除断点、`continue` 运行到断点。断点的"增、查、删、命中"闭环就完整了。
 

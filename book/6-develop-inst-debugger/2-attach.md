@@ -10,7 +10,7 @@ tracee、tracer、ptrace link、wait 这些核心概念，6.1 节已经介绍过
 
 如果进程已经在运行了，要对其进行调试需要先通过 attach 操作跟踪进程，待其停止执行后，再执行查看修改数据、控制程序执行的操作。常见的调试器如 dlv、gdb 等都支持传递 pid 参数来对运行中的进程进行跟踪调试。
 
-本节我们将实现程序 `godbg attach <pid>` 子命令：attach 到目标进程，此时目标进程会暂停执行，等它停稳后进入 5.7 节搭好的调试会话。会话结束后调试器退出，内核会解除跟踪关系，目标进程恢复执行。本节还会在 attach 成功后把目标进程的启动命令和参数从 `/proc` 里读回来存好，为后续 restart 调试做准备；调试器退出前显式 detach、还原断点、结束被调试进程这些清理动作，从 6.4 节开始统一处理（信号退出场景在 6.10 节补齐）。
+本节我们将实现程序 `godbg attach <pid>` 子命令：attach 到目标进程，此时目标进程会暂停执行，等它停稳后进入 5.7 节搭好的调试会话。会话结束后调试器退出，内核会解除跟踪关系，目标进程恢复执行。本节还会在 attach 成功后把目标进程的启动命令和参数从 `/proc` 里读回来存好，为后续 restart 调试做准备；调试器退出前显式 detach、还原断点、结束被调试进程这些清理动作，从 6.4 节开始统一处理（信号退出场景在 6.11 节补齐）。
 
 ### 基础知识
 
@@ -198,7 +198,7 @@ func AttachTargetProcess(pid int) (p *DebuggedProcess, err error) {
         return nil, err
     }
 
-    // TODO(ch6.17.1): attach 到该进程的其他线程
+    // TODO(ch6.18.1): attach 到该进程的其他线程
     return p, nil
 }
 ```
@@ -240,7 +240,7 @@ detach 与之对应，解除跟踪关系并让 tracee 恢复执行：
 
 ```go
 // Detach 分离被调试进程，使其恢复运行
-// （当前只分离主线程，ch6.17.1 起遍历全部线程）
+// （当前只分离主线程，ch6.18.1 起遍历全部线程）
 func (p *DebuggedProcess) Detach() error {
 
     // check tracee pid
@@ -468,7 +468,7 @@ func (p *DebuggedProcess) loadThreadList() ([]int, error) {
 }
 ```
 
-对进程内每个线程逐个执行 ptrace attach，所有线程也就都停下来了。All-stop Mode 很重要，这里也算是提前了解下。godbgv2 中这个能力在 6.17.1 节"跟踪已创建线程"中实现。
+对进程内每个线程逐个执行 ptrace attach，所有线程也就都停下来了。All-stop Mode 很重要，这里也算是提前了解下。godbgv2 中这个能力在 6.18.1 节"跟踪已创建线程"中实现。
 
 > 调试活动通常是带有目的性的调试，而不是漫无目的地闲逛，这样调试效率才会高。调试很重要的一点就是，在可疑代码处先提前设置好断点，执行到此位置的线程自然会停下来。如果没有提前设置好断点，可疑位置代码已经执行过了，就只能重新开始调试会话了。对于多线程程序，为了方便观察多个线程的运行情况甚至是线程间的交互情况，通常这些线程要么全部运行要么全部停止。
 
@@ -519,6 +519,6 @@ attach 操作是调试器调试运行中进程的第一步。本节在 6.1 节�
 - 分析了 attach 失败的常见原因：目标线程已被其他调试器跟踪、凭据检查不通过、tracee 处于 nondumpable 状态、Yama LSM 的 ptrace_scope 限制；
 - 在 godbgv2 中实现了命令层、服务层、目标层的完整调用链，并补充了对应的单元测试；
 - attach 成功后用 initialize 读取 `/proc/pid/comm`、`/proc/pid/cmdline`，把目标进程的启动命令与参数记录到 `DebuggedProcess.Command/Args`，为后续 restart 调试做准备（exec/debug 的场景天然已知，不需要读 /proc）；
-- 结合 Go 的协程编程模型，解释了 attach 多线程程序后"停不下来"的现象：attach 只跟踪了主线程，执行 main.main 的 main goroutine 并不绑定在主线程上，其他线程仍在运行；要解决这个问题需要 All-stop Mode，枚举 `/proc/<pid>/task` 逐个 attach，这部分在 6.17.1 节实现。
+- 结合 Go 的协程编程模型，解释了 attach 多线程程序后"停不下来"的现象：attach 只跟踪了主线程，执行 main.main 的 main goroutine 并不绑定在主线程上，其他线程仍在运行；要解决这个问题需要 All-stop Mode，枚举 `/proc/<pid>/task` 逐个 attach，这部分在 6.18.1 节实现。
 
 通过这些内容，我们梳理并解答了 attach 实现过程中一些基础但至关重要的问题，为后续深入理解调试器的实现原理打下了坚实的基础。
