@@ -4,7 +4,7 @@
 
 前面我们介绍了指令级调试过程中对tracee的各种控制，线程跟踪、执行到断点、单步执行、读写内存、读写寄存器等等，这些也是符号级调试必备的控制能力。前面提过一个设计良好的符号级调试器至少要做到3层架构，包括UI层、符号层、目标层，这样软件结构组织上清晰、扩展性也更好：
 
-、![debugger-arch-1](../5-debugger-skeleton/assets/debugger-arch-1.png)
+![debugger-arch-1](../5-debugger-skeleton/assets/debugger-arch-1.png)
 
 一起来回顾下调试器的三层架构：
 
