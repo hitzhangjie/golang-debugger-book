@@ -53,16 +53,14 @@ func (s *DebugSession) AtExit(fn func()) *DebugSession {
 
 ```go
 func (s *DebugSession) Start() {
-	s.liner.SetCompleter(completer)
-	s.liner.SetTabCompletionStyle(liner.TabPrints)
-
+	// ... 其他逻辑处理
 	defer func() {
 		for idx := len(s.defers) - 1; idx >= 0; idx-- {
 			s.defers[idx]()
 		}
 	}()
 
-	// ... 其他启动逻辑
+	// ... 其他逻辑处理
 }
 ```
 

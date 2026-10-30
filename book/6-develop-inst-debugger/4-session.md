@@ -181,45 +181,57 @@ func (s *DebugSession) SetInitFile(file string) *DebugSession {
 }
 ```
 
-3. `Start` 里如果 initFile 非空，先回放脚本，回放完 `liner.Close()` 退出，不再进入读输入的主循环：
+3. `Start` 里如果 initFile 非空，先回放脚本并直接返回，不再进入读输入的主循环。配合这处改动，`NewDebugSession` 不再在构造时就 `liner.NewLiner()`，而是等真正进入交互模式再创建：
 
 ```go
 func (s *DebugSession) Start() {
-    s.liner.SetCompleter(completer)
-    s.liner.SetTabCompletionStyle(liner.TabPrints)
-
     defer func() {
         for idx := len(s.defers) - 1; idx >= 0; idx-- {
             s.defers[idx]()
         }
     }()
 
-    // 回放 init 脚本，回放结束后退出会话
+    // 回放 init 脚本，回放结束后退出会话。
+    // 批量模式不创建 liner：它从不读写终端，而 liner.Close 会无条件
+    // 对 stdin 做 tcsetattr，后台进程组里这会收到 SIGTTOU（见下文）。
     if s.initFile != "" {
         if err := s.replay(s.initFile); err != nil {
             fmt.Fprintf(os.Stderr, "replay init file %s error: %v\n", s.initFile, err)
         }
-        s.liner.Close()
         return
     }
+
+    // 只有交互模式才创建行编辑器，返回时恢复终端模式
+    s.liner = liner.NewLiner()
+    s.liner.SetCompleter(completer)
+    s.liner.SetTabCompletionStyle(liner.TabPrints)
+    defer s.liner.Close()
 
     // ...（读输入的主循环不变，执行命令统一走 s.execute(txt)）
 }
 ```
 
+为什么批量模式要绕开 liner？`liner.Close()` 会无条件对 stdin 做 `tcsetattr` 恢复终端模式。手动在终端里运行 godbg 时，进程处于前台进程组，这个调用合法；但冒烟测试用 `timeout ./godbg ...` 启动会话时，GNU timeout 默认把子命令放进新的进程组，godbg 于是成了终端的后台进程组——后台进程组对终端做 `tcsetattr`，内核会投递 SIGTTOU，把整个进程停住（状态 T）。timeout 到点后发的 SIGTERM 对已停止的进程只能保持 pending，而 timeout 不带 `-k` 时会一直等待子进程退出，最终表现为 `make smoke` 永久挂起而不是报错。批量模式从不读写终端，本来就不需要恢复终端模式；不创建 liner 是比"忽略 SIGTTOU"更干净的修法。
+
 4. `replay` 逐行处理脚本：
 
 ```go
 // replay 逐行回放脚本中的调试命令：
-// '#' 为注释；以 '!' 或 '=' 开头的行是冒烟测试的宿主指令
-// （shell 与断言，由 scripts/smoke.sh 处理），会话回放时跳过。
-// 会话前指令与 @capture 的分工见本节冒烟设计，不在这里展开。
+// '#' 为注释；'!'、'=' 与 '@spawn/@delay/@set/...' 是冒烟测试脚本的
+// 宿主指令（由 scripts/smoke.sh 处理），会话回放时跳过；
+// '@capture <var> <re>' 由回放器自身处理：从上一
+// 命令的输出中提取正则的第一个捕获组存入 $<var>，后续命令行
+// 中的 $<var> 在执行前替换——线程 id 等只存在于本次会话输出
+// 中的值（跨会话无意义）可经此在同一会话内传递。
 func (s *DebugSession) replay(file string) error {
     f, err := os.Open(file)
     if err != nil {
         return err
     }
     defer f.Close()
+
+    caps := map[string]string{}
+    var lastOut []byte // 上一命令的输出（@capture 的来源）
 
     scanner := bufio.NewScanner(f)
     for scanner.Scan() {
@@ -230,10 +242,53 @@ func (s *DebugSession) replay(file string) error {
             strings.HasPrefix(line, "=") {
             continue
         }
+        if strings.HasPrefix(line, "@") {
+            if strings.HasPrefix(line, "@capture ") {
+                rest := strings.TrimSpace(line[len("@capture "):])
+                fields := strings.SplitN(rest, " ", 2)
+                if len(fields) != 2 {
+                    return fmt.Errorf("@capture: usage: @capture <var> <regexp>")
+                }
+                pat := strings.Trim(fields[1], "'")
+                re, err := regexp.Compile(pat)
+                if err != nil {
+                    return fmt.Errorf("@capture: invalid regexp %q: %v", pat, err)
+                }
+                m := re.FindSubmatch(lastOut)
+                if len(m) < 2 {
+                    return fmt.Errorf("@capture %s: no match for %q in last command output", fields[0], pat)
+                }
+                caps[fields[0]] = string(m[1])
+            }
+            continue
+        }
+
+        // $<var> 替换（@capture 提取的值）
+        for name, val := range caps {
+            line = strings.ReplaceAll(line, "$"+name, val)
+        }
 
         fmt.Printf("godbg> %s\n", line)
 
-        if err := s.execute(line); err != nil {
+        // 捕获本命令输出供 @capture 使用：临时重定向 os.Stdout
+        // 到管道，执行后先读全缓冲再回写真实 stdout（命令输出
+        // 量小，管道缓冲足够，不会死锁）
+        r, w, err := os.Pipe()
+        if err != nil {
+            return err
+        }
+        old := os.Stdout
+        os.Stdout = w
+        err = s.execute(line)
+        w.Close()
+        os.Stdout = old
+        out, _ := io.ReadAll(r)
+        r.Close()
+        if len(out) > 0 {
+            os.Stdout.Write(out)
+        }
+        lastOut = out
+        if err != nil {
             return err
         }
         if s.stopped {
@@ -281,7 +336,8 @@ func resetFlags(cmd *cobra.Command) {
 要点：
 
 - 回放脚本里的空行、`#` 注释行跳过；
-- 以 `!` 或 `=` 开头的行是冒烟脚本的宿主指令，这段回放不执行。`!=` 也以 `!` 开头，因此不会被当成调试命令；smoke 在宿主侧把 `!=` 认成反向断言，把其余的 `!` 认成 shell。`@` 开头的指令，大部分都是 smoke.sh 侧的指令，除了 `@capture` 这条特殊的会话内指令，该指令主要用于会话内才能动态获取的数据，方便动态生成下条调试命令；
+- 以 `!` 或 `=` 开头的行是冒烟脚本的宿主指令，这段回放不执行。`!=` 也以 `!` 开头，因此不会被当成调试命令；smoke 在宿主侧把 `!=` 认成反向断言，把其余的 `!` 认成 shell。其余 `@` 开头的指令（`@spawn`、`@delay`、`@skip-if`、`@set` 等）同样交给 smoke.sh，回放时跳过；
+- `@capture` 例外，由回放器自己处理：从上一命令的输出里用正则取出第一个捕获组，存进 `$<var>`，后续命令行在执行前替换。为了拿到"上一命令的输出"，回放器执行命令时把 `os.Stdout` 临时重定向到管道，执行完读出全部输出、回写终端，同时留给下一条 `@capture` 使用；线程 id 这类只存在于本次会话输出里的值，靠它在同一会话内传递；
 - 其余行按空格切成命令与参数，交给 `s.execute` 执行；每行回显成 `godbg> ...`，方便对照输出；
 - `exit` 等命令执行后会把 `s.stopped` 置位（`Stop` 里置位），回放提前结束。
 
@@ -306,8 +362,8 @@ func resetFlags(cmd *cobra.Command) {
 - `!`：宿主 shell。只由 `scripts/smoke.sh` 执行，回放跳过。需要在会话外看一眼进程、文件或环境时用它；
 - `=` 与 `!=`：断言，只由 smoke 核对。它们绑定最近一条 godbg 命令的输出：`=` 要求匹配，`!=` 要求不匹配。前面命令已经打出来的文本不参加这一条断言。`!=` 开头的行是反向断言，其余以 `!` 开头的行才是宿主 shell；
 - `@spawn`、`@attach`、`@exec`：会话开始前，由 smoke 把调试器和被调试进程对上，选择调试器以哪种入口接进去；
-- `@delay`：会话开始前的等待，由 smoke 处理启动时序；
-- `@skip-if`：条件成立时，smoke 跳过整条用例，回放不会把它当成调试命令；
+- `@delay <secs> <cmd>`：会话进行中的延迟执行。smoke 在会话开始前把命令挂到后台，计时 `<secs>` 秒后再执行，用来在调试会话进行到某个时刻投递信号、改文件等；回放不会把它当成调试命令；
+- `@skip-if <cmd>`：能力探测。smoke 在会话开始前执行 `<cmd>`，退出码为 0 时跳过当前用例并视为通过（例如当前内核不支持硬件监视点），回放不会把它当成调试命令；
 - `@set`：会话开始前的设置，由 smoke 在拉起 godbg 之前写入。此时还没有调试命令可以替换；
 - `@capture`：会话内。回放器替换进后续调试命令，smoke 替换进断言。
 
