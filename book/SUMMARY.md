@@ -41,7 +41,7 @@
     * [6.18.5 线程执行控制 - 断点移除](6-develop-inst-debugger/18-multithread/5-breakpoint.md)
   * [6.19 调试多进程程序](6-develop-inst-debugger/19-multiprocess/README.md)
   * [6.100 More...](6-develop-inst-debugger/100-more.md)
-* [7 挺进符号级调试器](7-headto-sym-debugger/README.md)
+* [7 符号级调试基础](7-headto-sym-debugger/README.md)
   * [7.1 Go构建内幕](7-headto-sym-debugger/1-how-go-build-works.md)
   * [7.2 理解ELF文件](7-headto-sym-debugger/2-elf.md)
   * [7.3 符号&符号表](7-headto-sym-debugger/3-syms.md)
