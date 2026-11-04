@@ -193,7 +193,7 @@ mv $WORK/b001/exe/a.out xx
 7. `go tool link` 对_pkg_.a以及importcfg.link中记录的go运行时、标准库进行链接操作，完成符号解析、重定位，生成一个可执行程序a.out，同时在其.note.go.buildid写入buildid信息；
 8. 将a.out重命名为module name，这里为xx；
 
-至此这个示例模块的构建过程结束。链接器写出的可执行程序才是 ELF，里面有符号表、DWARF、链接器与 `buildid` 写入的 `.note.go.buildid`，以及 Go 运行时跟踪调用栈用的 `.gopclntab`，这些节怎么排，下一节再看。
+至此这个示例模块的构建过程结束。链接器的产物就是这里最终的可执行程序，ELF文件格式。
 
 ### 本文小节
 
