@@ -6,7 +6,7 @@
 
 符号级调试要读 `go build` 写进二进制的 DWARF 和符号表，甚至可能会用到 Go 的 `.gopclntab`，所以我们要了解下go build的详细构建过程，看看到底做了什么。
 
-`go build` 自己并不编译源文件。它负责构建驱动：解析包依赖，准备好临时目录和 import 配置，再把活按顺序派出去。`go tool compile` 负责编译一个包里的 Go 源文件；汇编、打包、链接，分别是 `go tool asm`、`go tool pack`、`go tool link`，以及负责写入构建 ID 的 `buildid`。这条调用链可以用 `go build -v -x -work` 查看。`-v` 打印正在编译的包名，`-x` 把实际执行的命令打出来，`-work` 告诉你临时目录在哪，并且退出之后别删，我们可以进去翻 `symabis`、`go_asm.h`、`main.o` 这些中间文件。
+`go build` 自己并不编译源文件。它负责构建驱动：解析包依赖，准备好临时目录和 import 配置，再把活按顺序派出去。`go tool compile` 负责编译一个包里的 Go 源文件；汇编、打包、链接，分别是 `go tool asm`、`go tool pack`、`go tool link`，以及负责写入构建 ID 的 `buildid`。这条调用链可以用 `go build -v -x -work` 查看。`-v` 打印正在编译的包名，`-x` 把实际执行的命令打出来，`-work` 告诉你临时目录在哪，并且退出之后保留中间构建产物，我们可以进去翻 `symabis`、`go_asm.h`、`main.o` 这些中间文件。
 
 本文要讲的是这些工具怎么配合，不是某一个工具内部怎么做词法分析、怎么写 DWARF。那些留到后面几节。这里先把协作这条线理顺。
 
