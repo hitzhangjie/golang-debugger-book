@@ -6,7 +6,7 @@
 
 OK，构建要是一切顺利，谁会多此一举去翻它内部怎么工作呢，毕竟编译原理大家都学过，对不对？对。不过我们现在要做的是符号级调试，这件事就绕不开了。本章开头已经说过，指令级那一套控制能力之外，还得靠编译工具链写进二进制里的描述信息，DWARF、符号表，甚至可能会用到 Go 自己的 `.gopclntab`。调试器是后来去读它们的。这些信息是谁、在哪一步写进去的，得先跟着一次 `go build` 把命令看一遍，不然后面讲 ELF、讲 DWARF，会觉得跳得太快。
 
-`go build` 自己并不编译源文件。它是个构建驱动：解析包依赖，准备好临时目录和 import 配置，再把活按顺序派出去。`go tool compile` 负责编译一个包里的 Go 源文件；汇编、打包、链接，分别是 `go tool asm`、`go tool pack`、`go tool link`。旁边还有个 `buildid`，负责把构建 ID 写进产物。想把这条链看清楚，用 `go build -v -x -work` 就够了。`-v` 打印正在编译的包名，`-x` 把实际执行的命令打出来，`-work` 告诉你临时目录在哪，并且退出之后别删，我们可以进去翻 `symabis`、`go_asm.h`、`main.o` 这些中间文件。
+`go build` 自己并不编译源文件。它负责驱动整个构建过程：解析包依赖，准备好临时目录和 import 配置，再把活按顺序派出去。`go tool compile` 负责编译一个包里的 Go 源文件；汇编、打包、链接，分别是 `go tool asm`、`go tool pack`、`go tool link`。旁边还有个 `buildid`，负责把构建 ID 写进产物。想把这条链看清楚，用 `go build -v -x -work` 就够了。`-v` 打印正在编译的包名，`-x` 把实际执行的命令打出来，`-work` 告诉你临时目录在哪，并且退出之后别删，我们可以进去翻 `symabis`、`go_asm.h`、`main.o` 这些中间文件。
 
 本文要讲的是这些工具怎么配合，不是某一个工具内部怎么做词法分析、怎么写 DWARF。那些留到后面几节。这里先把协作这条线理顺。
 
@@ -248,7 +248,7 @@ asm -p main -trimpath "$WORK/b001=>" -I $WORK/b001/ -I /usr/local/go/pkg/include
 2. 包里有 `.s` 的话，先写一个空的 `go_asm.h`，再跑第一遍 `go tool asm -gensymabis`，得到 `symabis`。没有汇编源文件，这一步就跳过，后面的 compile 也不会带上 `-symabis` 和 `-asmhdr`。
 3. 写好 `importcfg`，里面记下 `fmt`、`runtime` 这些直接依赖的归档，在构建缓存里的路径。然后 `go tool compile` 编译 `main.go`。`-symabis` 读上一步那份 ABI 清单，`-asmhdr` 写出真正的 `go_asm.h`，`-importcfg` 按这份配置去找依赖。compile 这里带了 `-pack`，编译结果直接打进静态库 `$WORK/b001/_pkg_.a`。`-lang=go1.22` 来自 `go.mod` 里的语言版本。compile 同样带了 `-trimpath`，作用和 asm 那边一样，把临时目录前缀去掉。
 4. 第二遍 `go tool asm`，把 `main.s` 汇编成 `main.o`。汇编文件如果 `#include "go_asm.h"`，这一遍才能用上编译器刚写好的那些偏移。本例的 `main.s` 没有包含它。
-5. `go tool pack r` 把 `main.o` 追加进 `_pkg_.a`。到这儿，这个模块自己的 Go 代码和汇编，都进了同一个归档。随后 `buildid -w` 给归档写上构建 ID，构建驱动再把这个归档复制进构建缓存。
+5. `go tool pack r` 把 `main.o` 追加进 `_pkg_.a`。到这儿，这个模块自己的 Go 代码和汇编，都进了同一个归档。随后 `buildid -w` 给归档写上构建 ID，go 命令再把这个归档复制进构建缓存。
 6. 准备 `importcfg.link`。它比编译时候那个 `importcfg` 要全，链接要用到的归档都列在里面，包括 `fmt`、`runtime` 再往下依赖的那些标准库。
 7. `go tool link` 读 `_pkg_.a` 和 `importcfg.link`，做符号解析、重定位，生成 `$WORK/b001/exe/a.out`。链接命令上的 `-buildid`，再加上随后对这个可执行文件跑的 `buildid -w`，把构建 ID 写进最终程序，落在 ELF 的 `.note.go.buildid` 里。符号解析和重定位，我们放到 7.4 节再展开；链接的时候 DWARF 是怎么合并的，放到 7.7 节。
 8. 把 `a.out` 重命名成模块名，这里就是 `xx`。
