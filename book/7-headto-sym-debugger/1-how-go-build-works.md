@@ -1,24 +1,18 @@
-## How "go build" works
+## Go 构建内幕
 
 ### 基础知识
 
-`go build` 这个命令用于完成go程序构建，只要用过go的相信都不陌生，但大家是否有仔细去看过这条命令到底涉及到了哪些操作呢？更甚至有没有仔细看过 `go help build` 都支持哪些选项？和 `go tool compile` 又有什么区别？
+`go build` 这个命令用来完成 Go 程序的构建，只要用过 Go 的，相信都不陌生。可大家有没有仔细看过，这条命令底下到底调用了哪些工具？和 `go tool compile` 又有什么区别？
 
-OK，我们这里并不是故意挑事，如果运行的一切顺利，有谁会多此一举非得看看它内部是怎么工作的呢，毕竟大家都是学习过编译原理的，对不对？对。但是，我恰恰就遇到过几次事情，强迫我把go源码中的工具链部分研究了下。
+符号级调试要读 `go build` 写进二进制的 DWARF 和符号表，甚至可能会用到 Go 的 `.gopclntab`，所以我们要了解下go build的详细构建过程，看看到底做了什么。
 
-故事起因是因为 `go test` 做了些额外生成main函数桩代码、flags解析的工作，当时go1.13调整了一个flags解析顺序的代码，导致我编写的 [微服务框架trpc](https://github.com/Tencent/trpc) 配套的效率工具无法正常工作了。于是我就想知道 `go test` 到底是如何工作的，进而了解到 `go test -v -x -work` 和 `go build -v -x -work` 这几个可以展示编译构建过程、保留构建临时目录及产物的控制选项。这样一点点入手逐渐了解了 `go build` 和 `go test` 的详细执行过程。
+`go build` 自己并不编译源文件。它负责构建驱动：解析包依赖，准备好临时目录和 import 配置，再把活按顺序派出去。`go tool compile` 负责编译一个包里的 Go 源文件；汇编、打包、链接，分别是 `go tool asm`、`go tool pack`、`go tool link`，以及负责写入构建 ID 的 `buildid`。这条调用链可以用 `go build -v -x -work` 查看。`-v` 打印正在编译的包名，`-x` 把实际执行的命令打出来，`-work` 告诉你临时目录在哪，并且退出之后保留中间构建产物，方便我们去查看 `symabis`、`go_asm.h`、`main.o` 这些中间文件。
 
-这部分内容如果您感兴趣可以参考我的博客或者自己阅读go源码。
-
-- [go源码剖析 - go命令/go build](https://www.hitzhangjie.pro/blog/2020-09-28-go%E6%BA%90%E7%A0%81%E5%89%96%E6%9E%90-go%E5%91%BD%E4%BB%A4/#go-build)
-- [go源码剖析 - go命令/go test](https://www.hitzhangjie.pro/blog/2020-09-28-go%E6%BA%90%E7%A0%81%E5%89%96%E6%9E%90-go%E5%91%BD%E4%BB%A4/#go-test)
-- [go源码剖析 - go test实现](https://www.hitzhangjie.pro/blog/2020-02-23-go%E6%BA%90%E7%A0%81%E5%89%96%E6%9E%90-gotest%E5%AE%9E%E7%8E%B0/)
-
-OK，上面几篇文章详细介绍了下 go tool compile 的工作过程，以及go test生成测试用入口桩代码的过程，但是没有提及 go tool asm、pack、link、buildid 在构建过程中的作用。本文主要是想介绍编译工具链中各个工具的协作，而非单一工具具体是如何做的。所以你也可以不看上面几篇文章，而是将重点放在我们关心的这个协作目标上。
+本文要讲的是这些工具怎么配合，先把编译工具链各种工具之间的协作理清楚。怎么做词法分析、怎么写 DWARF，那些留到后面几节。
 
 ### 示例准备
 
-go提供了完整的编译工具链，运行 `go tool` 命令可以查看到编译器compile、汇编器asm、链接器link、静态库打包工具pack，以及一些其他的工具。本节我们先关注这些，其他的有需要的时候再介绍。
+go提供了完整的编译工具链，运行 `go tool` 命令可以查看到编译器compile、汇编器asm、链接器link、静态库打包工具pack，以及 buildid 等其他工具。本节我们先关注这些，其他的有需要的时候再介绍。
 
 ```bash
 $ go tool
@@ -42,7 +36,14 @@ trace
 vet
 ```
 
-为了能演示go编译工具链的功能，尽可能让compile、asm、linker、pack这几个工具都能被执行，我们设计如下这个工程实例，详见：[golang-debugger-lessons/30_how_gobuild_works](https://github.com/hitzhangjie/golang-debugger-lessons/tree/master/30_how_gobuild_works) .
+为了能演示go编译工具链的功能，尽可能让compile、asm、linker、pack这几个工具都能被执行，我们设计如下这个工程实例。
+
+```text
+xx/
+├── go.mod
+├── main.go
+└── main.s
+```
 
 file1: main.go
 
@@ -57,7 +58,7 @@ func main() {
 
 ```
 
-file2： main.s
+file2: main.s
 
 ```asm
 // Copyright 2009 The Go Authors. All rights reserved.
@@ -184,15 +185,15 @@ mv $WORK/b001/exe/a.out xx
 上述输出中，我们对感兴趣的工具的执行步骤进行了标记（🚩），简单总结如下：
 
 1. 准备构建用的临时目录，后续构建产物都在这个临时目录中，我们可以cd到此目录查看，但是因为涉及到mv操作、rm操作，构建结束后某些中间产物会消失；
-2. `go tool asm` 处理汇编源文件main.s，输出汇编文件中定义的函数列表 symabis。如果没有汇编源文件，此步骤会跳过；
+2. `go tool asm` 先处理汇编源文件main.s。这一遍使用 `-gensymabis`，只写出 `symabis`（ABI 清单），不生成机器码，交给下一步 compile 的 `-symabis`。如果没有汇编源文件，此步骤会跳过；
 3. `go tool compile` 处理go源文件main.go，输出目标文件，注意compile直接将*.o文件加到了静态库_pkg_.a中；
 4. `go tool asm` 对汇编源文件执行汇编操作，输出目标文件main.o。注意哦，main.go以及其他go文件对应的目标文件加到了静态库_pkg_.a中；
-5. `go tool pack` 将main.o加到静态库文件_pkg_.a中。此时示例module中的源文件都编译、汇编加入_pkg_.a中了；
+5. `go tool pack` 将main.o追加到静态库文件_pkg_.a中。此时示例module中的源文件都编译、汇编加入_pkg_.a中了；
 6. 准备其他需要链接的目标文件列表，已经编译构建好的go运行时、标准库对应的目标文件，全部写入importcfg.link文件；
 7. `go tool link` 对_pkg_.a以及importcfg.link中记录的go运行时、标准库进行链接操作，完成符号解析、重定位，生成一个可执行程序a.out，同时在其.note.go.buildid写入buildid信息；
 8. 将a.out重命名为module name，这里为xx；
 
-至此这个示例模块的构建过程结束。
+至此这个示例模块的构建过程结束。链接器的产物就是这里最终的可执行程序，ELF文件格式。
 
 ### 本文小节
 
