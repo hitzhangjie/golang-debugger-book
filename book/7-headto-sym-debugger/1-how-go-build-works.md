@@ -251,7 +251,7 @@ asm -p main -trimpath "$WORK/b001=>" -I $WORK/b001/ -I /usr/local/go/pkg/include
 7. `go tool link` 读 `_pkg_.a` 和 `importcfg.link`，做符号解析、重定位，生成 `$WORK/b001/exe/a.out`。链接命令上的 `-buildid`，再加上随后对这个可执行文件跑的 `buildid -w`，把构建 ID 写进最终程序，落在 ELF 的 `.note.go.buildid` 里。符号解析和重定位，我们放到 7.4 节再展开；链接的时候 DWARF 是怎么合并的，放到 7.7 节。
 8. 把 `a.out` 重命名成模块名，这里就是 `xx`。
 
-至此，这个示例模块的构建就结束了。再提一个容易混的地方：`main.o` 是汇编器写出的 Go 目标文件，`_pkg_.a` 是个 ar 归档，链接器读的是这个归档。它写出来的可执行程序 `xx`，才是 ELF。文件头、段头表、节头表，还有符号表、DWARF、`.note.go.buildid` 在这个文件里怎么排，我们下一节打开来看。
+至此，这个示例模块的构建就结束了。再提一个容易混的地方：`main.o` 是汇编器写出的 Go 目标文件，`_pkg_.a` 是个 ar 归档，链接器读的是这个归档。它写出来的可执行程序 `xx`，才是 ELF。文件头、段头表、节头表里有符号表和 DWARF，还有链接器与 `buildid` 写入的 `.note.go.buildid`，以及 Go 运行时跟踪调用栈用的 `.gopclntab`。这些节怎么排，下一节再看。
 
 ### 本文小节
 
