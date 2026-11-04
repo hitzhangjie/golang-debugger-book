@@ -86,7 +86,7 @@ go 1.22.3
 
 ### 执行测试
 
-执行构建命令 `go build -v -x -work`。上面说的这几个选项，`go help build` 里是这么写的：
+执行构建命令 `go build -v -x -work`，我们介绍下这里用到的这几个选项：
 
 ```bash
 $ go help build
