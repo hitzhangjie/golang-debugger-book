@@ -36,7 +36,7 @@ trace
 vet
 ```
 
-为了能演示go编译工具链的功能，尽可能让compile、asm、linker、pack这几个工具都能被执行，我们设计如下这个工程实例。包里放了汇编文件，所以后面 asm 会跑两遍。
+为了能演示go编译工具链的功能，尽可能让compile、asm、linker、pack这几个工具都能被执行，我们设计如下这个工程实例。
 
 ```text
 xx/
