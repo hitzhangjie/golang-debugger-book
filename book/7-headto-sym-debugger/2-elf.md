@@ -1,6 +1,6 @@
 ## 认识ELF文件
 
-上一节的 `go build` 走到 `go tool link`，得到的可执行程序就是 ELF 文件。调试器后面要读的符号表、DWARF，以及 `.note.go.buildid`，都放在这个格式里。本节从文件结构看起。
+上一节我们用 `go build -v -x -work` 把编译、汇编、打包、链接摊开看了一遍。走到最后，`go tool link` 给出的可执行程序，就是一个 ELF 文件。调试器后面要读的符号表、DWARF，还有 `.note.go.buildid`，都放在这个格式里面。这一节我们就从文件结构看起。
 
 ELF ([Executable and Linkable Format](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format))，可执行可链接格式，是Unix、Linux环境下一种十分常见的文件格式，它可用于可执行程序、目标文件、共享库、core文件等。
 

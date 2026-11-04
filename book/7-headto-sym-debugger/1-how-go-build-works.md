@@ -1,8 +1,18 @@
 ## Go 构建内幕
 
-本章开头已经说过，符号级调试要补的是编译工具链写进二进制的那些描述信息：DWARF、符号表，以及 Go 自己的 `.gopclntab` 等。调试器在这之后读取它们。在打开 ELF、逐个看 section 之前，先把一次 `go build` 实际跑了哪些命令、命令之间如何交接走一遍。词法分析、代码生成、DWARF 的具体写法留到后面几节，这一节看 compile、asm、pack、link 如何配合。
+### 基础知识
 
-`go build` 自己不编译源文件。它是构建驱动：解析包依赖，准备临时目录和 import 配置，再按顺序调用工具链。`go tool compile` 编译一个包里的 Go 源文件；汇编、打包、链接分别是 `go tool asm`、`go tool pack`、`go tool link`。运行 `go tool` 可以看到这些工具。和本节直接相关的是 `compile`、`asm`、`pack`、`link`，以及给产物写入构建 ID 的 `buildid`。
+`go build` 这个命令用来完成 Go 程序的构建，只要用过 Go 的，相信都不陌生。可大家有没有仔细看过，这条命令底下到底调用了哪些工具？和 `go tool compile` 又有什么区别？
+
+OK，构建要是一切顺利，谁会多此一举去翻它内部怎么工作呢，毕竟编译原理大家都学过，对不对？对。不过我们现在要做的是符号级调试，这件事就绕不开了。本章开头已经说过，指令级那一套控制能力之外，还得靠编译工具链写进二进制里的描述信息，DWARF、符号表，还有 Go 自己的 `.gopclntab` 之类。调试器是后来去读它们的。这些信息是谁、在哪一步写进去的，不把一次 `go build` 摊开看，后面讲 ELF、讲 DWARF，都会觉得跳得太快。
+
+`go build` 自己并不编译源文件。它是个构建驱动：解析包依赖，准备好临时目录和 import 配置，再把活按顺序派出去。`go tool compile` 负责编译一个包里的 Go 源文件；汇编、打包、链接，分别是 `go tool asm`、`go tool pack`、`go tool link`。旁边还有个 `buildid`，负责把构建 ID 写进产物。想把这条链看清楚，用 `go build -v -x -work` 就够了。`-v` 打印正在编译的包名，`-x` 把实际执行的命令打出来，`-work` 告诉你临时目录在哪，并且退出之后别删，我们可以进去翻 `symabis`、`go_asm.h`、`main.o` 这些中间文件。
+
+本文要讲的是这些工具怎么配合，不是某一个工具内部怎么做词法分析、怎么写 DWARF。那些留到后面几节。这里先把协作这条线理顺。
+
+### 示例准备
+
+Go 提供了完整的编译工具链，跑一下 `go tool` 就能看到。本节我们先关注编译器 compile、汇编器 asm、链接器 link、静态库打包工具 pack，以及 buildid。其他的，有需要的时候再介绍。
 
 ```bash
 $ go tool
@@ -26,9 +36,7 @@ trace
 vet
 ```
 
-### 示例
-
-要让编译、汇编、打包、链接出现在同一次构建里，包里需要同时有 Go 源文件和汇编源文件。有 `.s` 文件时，下面才会看到 asm 跑两遍；纯 Go 包会跳过汇编。示例只有三个文件：
+为了把 compile、asm、pack、link 都带出来，包里得同时有 Go 源文件和汇编源文件。有 `.s` 的时候，下面才会看到 asm 跑两遍；纯 Go 的包，汇编这两步是跳过的。示例很小，就三个文件：
 
 ```text
 xx/
@@ -37,9 +45,9 @@ xx/
 └── main.s
 ```
 
-`main.go` 向标准输出打一行字。`main.s` 里的 `archSqrt` 没有对应的 Go 调用，作用是让这个包带上汇编文件。`go.mod` 把模块名定为 `xx`，链接结束后的可执行文件也叫这个名字。
+`main.go` 只是往标准输出打一行字。`main.s` 里用汇编写了个 `archSqrt`，Go 代码并没有调用它，留着就是为了让这个包带上汇编文件，构建日志里才会出现汇编器。`go.mod` 把模块名定成 `xx`，最后链接出来的可执行文件也会叫这个名字。
 
-`main.go`：
+file1: main.go
 
 ```go
 package main
@@ -52,7 +60,7 @@ func main() {
 
 ```
 
-`main.s`：
+file2: main.s
 
 ```asm
 // Copyright 2009 The Go Authors. All rights reserved.
@@ -70,7 +78,7 @@ TEXT ·archSqrt(SB), NOSPLIT, $0
 
 ```
 
-`go.mod`：
+file3: go.mod
 
 ```go
 module xx
@@ -78,9 +86,9 @@ module xx
 go 1.22.3
 ```
 
-### 一次构建的输出
+### 执行测试
 
-看清驱动过程，用 `go build -v -x -work`。`go help build` 对这三个选项的说明如下：
+执行构建命令 `go build -v -x -work`。上面说的这几个选项，`go help build` 里是这么写的：
 
 ```bash
 $ go help build
@@ -99,9 +107,7 @@ and test commands:
 ...
 ```
 
-`-v` 打印正在编译的包名，`-x` 打印实际执行的命令，`-work` 打印临时工作目录 `WORK`，并在退出后保留它，方便回头查看 `symabis`、`go_asm.h`、`main.o` 这些中间文件。
-
-下面这份输出抓取时，依赖已经在构建缓存里，所以只展开了当前模块 `xx`。缓存为空时，标准库里带 `.s` 的包（例如 `runtime`）会各自再走一遍同样的步骤，日志更长，顺序不变。标了 🚩 的命令是本节要跟着读的。
+我们看下这次构建打出来的东西。加了这几个选项之后，执行了哪些命令、临时目录里留下了什么，都能看见。下面这份输出，是依赖已经躺在构建缓存里的时候抓的，所以只展开了当前模块 `xx`。缓存要是空的，标准库里带 `.s` 的包，比如 `runtime`，会各自再走一遍同样的步骤，日志会长出一大截，顺序倒是一样的。标了 🚩 的，就是我们要跟着看的命令。
 
 ```bash
 $ go build -v -x -work
@@ -178,43 +184,47 @@ mv $WORK/b001/exe/a.out xx
 
 ### 构建过程
 
-上面日志里，`go tool asm` 出现了两次。两次的大部分参数相同，差别在第一次多了 `-gensymabis`，并且 `-o` 指向 `$WORK/b001/symabis`；第二次没有 `-gensymabis`，`-o` 指向 `$WORK/b001/main.o`。
+上述输出里，感兴趣的工具已经用 🚩 标出来了。先说一个容易看漏的地方：`go tool asm` 出现了两次。两次大部分参数是一样的，差别在第一次多了个 `-gensymabis`，`-o` 指向 `$WORK/b001/symabis`；第二次没有 `-gensymabis`，`-o` 指向 `$WORK/b001/main.o`。
 
-两次都带的参数：
+相同的那些参数，我们挨个说下它们是干什么的。
 
-- `-p main`：声明这段汇编属于导入路径为 `main` 的包。`main.s` 里的 `TEXT ·archSqrt(SB)` 会被记成 `main.archSqrt`。
-- `-trimpath "$WORK/b001=>"`：从记入产物的源文件路径中去掉临时目录前缀。`=>` 右侧为空，就是把这段前缀删掉，避免本机的 `WORK` 绝对路径留在目标文件里。
-- `-I $WORK/b001/`：在包的临时目录中查找 `#include`。编译器写出的 `go_asm.h` 放在这个目录。
-- `-I /usr/local/go/pkg/include`：在工具链自带的头文件目录中查找 `#include`。`main.s` 开头的 `#include "textflag.h"` 来自这里，`NOSPLIT` 就定义在这个头文件中。日志里的路径跟着当时的 `GOROOT` 走。
-- `-D GOOS_linux`、`-D GOARCH_amd64`、`-D GOAMD64_v1`：预定义宏，汇编源文件可以用 `#ifdef` 按操作系统、架构和微架构变体选择代码。取值来自当前的 `GOOS`、`GOARCH` 和 `GOAMD64`。本例的 `main.s` 没有写这种条件编译，构建驱动仍然会带上这些 `-D`。
+`-p main`，是在告诉汇编器，这段代码属于导入路径为 `main` 的包。所以 `main.s` 里写的 `TEXT ·archSqrt(SB)`，记下来就成了 `main.archSqrt`。
 
-第一遍是：
+`-trimpath "$WORK/b001=>"`，把记进产物的源文件路径里、临时目录那一截前缀去掉。`=>` 右边是空的，意思就是直接删掉这一截，免得本机 `WORK` 的绝对路径留在目标文件里。
+
+`-I` 给了两个目录。`$WORK/b001/` 是这个包的临时目录，编译器一会儿写出的 `go_asm.h` 就放在这儿。`/usr/local/go/pkg/include` 是工具链自带的头文件目录，`main.s` 开头的 `#include "textflag.h"` 就是从这儿找到的，`NOSPLIT` 定义在这个头里面。日志里的路径跟着当时的 `GOROOT` 走，你自己机器上未必是 `/usr/local/go`。
+
+`-D GOOS_linux -D GOARCH_amd64 -D GOAMD64_v1`，是预定义三个宏。汇编里可以用 `#ifdef` 按操作系统、架构，以及 GOAMD64 这种更细的档位来挑代码，取值就来自当前的 `GOOS`、`GOARCH`、`GOAMD64`。本例的 `main.s` 并没有写这种条件编译，构建的时候这几个 `-D` 还是会带上。
+
+OK，相同的部分就这些。两遍各自干什么，差别就在 `-gensymabis` 和 `-o` 上。
+
+第一遍是这样：
 
 ```text
 asm -p main -trimpath "$WORK/b001=>" -I $WORK/b001/ -I /usr/local/go/pkg/include -D GOOS_linux -D GOARCH_amd64 -D GOAMD64_v1 -gensymabis -o $WORK/b001/symabis ./main.s
 ```
 
-`-gensymabis` 让汇编器把符号的 ABI 信息写到 `-o` 指定的文件，不生成机器码。`go tool asm -help` 里的原文是：`write symbol ABI information to output file, don't assemble`。所以这一遍的产物是文本文件 `symabis`，还没有 `main.o`。
+注意哦，`-gensymabis` 让汇编器把符号的 ABI 信息写到 `-o` 指定的那个文件里，这一遍不生成机器码。`go tool asm -help` 的原文就是：`write symbol ABI information to output file, don't assemble`。所以这一遍你在临时目录里还找不到 `main.o`，只有一个文本文件 `symabis`。
 
-本例这个文件的内容是：
+本例这个文件里就一行：
 
 ```text
 def main.archSqrt ABI0
 ```
 
-每一行三个字段：`def` 或 `ref`、符号名、ABI 名称。`def` 表示该 `TEXT` 符号在汇编中有定义。`-p main` 把 `·archSqrt` 写成了 `main.archSqrt`。这条 `TEXT` 没有标注 `<ABIInternal>`，扫出来的约定是 `ABI0`，也就是稳定的、参数通过栈传递的调用约定。汇编里若引用了其他文本符号，还会出现 `ref 符号名 ABI0` 或 `ref 符号名 ABIInternal`；本例没有这类引用。
+一行三个字段，`def` 或者 `ref`，然后是符号名，然后是 ABI 的名字。`def` 表示这个 `TEXT` 符号在汇编里有定义。`-p main` 把 `·archSqrt` 补成了 `main.archSqrt`。这条 `TEXT` 没有写 `<ABIInternal>`，扫出来就是 `ABI0`，也就是那套稳定的、参数走栈的调用约定。汇编里要是引用了别的文本符号，还会多出 `ref 符号名 ABI0` 或者 `ref 符号名 ABIInternal` 这样的行。本例没有这种引用。
 
-下一步的 `go tool compile` 用 `-symabis` 读入它：
+这个文件是交给下一步的编译器的。你看 compile 的命令行上带着 `-symabis $WORK/b001/symabis`：
 
 ```text
 compile -o $WORK/b001/_pkg_.a ... -symabis $WORK/b001/symabis ... -asmhdr $WORK/b001/go_asm.h ./main.go
 ```
 
-Go 函数默认使用 `ABIInternal`，参数尽量放在寄存器中。汇编 `TEXT` 在未另行标注时使用 `ABI0`。编译器依靠这份清单把两边对齐。Go 源文件里若有同名、且没有函数体的声明，编译器就把该函数的调用约定设为清单中的值；约定和 Go 的 `ABIInternal` 不一致时，再生成 ABI 包装函数，在两种约定之间转换参数。`ref` 行处理相反的方向：汇编按某种约定调用 Go 符号时，同样用它决定要不要包一层。包里没有 `.s` 文件时，第一遍 asm 不运行，compile 的命令行上也不会出现 `-symabis`。
+编译器为什么要先知道这些？Go 函数默认走 `ABIInternal`，参数尽量放在寄存器里；汇编里的 `TEXT` 如果没有另外标注，走的是 `ABI0`。两边约定不一样，调用会对不上。编译器读到这份清单之后，Go 源文件里如果有同名、又没有函数体的声明，就把这个函数的调用约定设成清单里写的那个；和 `ABIInternal` 不一致的话，再生成一个 ABI 包装函数，在两种约定之间把参数倒一手。`ref` 那一行是反过来的情况，汇编按某种约定去调用 Go 的符号，同样靠它决定要不要包一层。包里要是没有 `.s` 文件，第一遍 asm 整个跳过，compile 的命令行上也不会出现 `-symabis`。
 
-本例的 `main.go` 没有声明 `archSqrt`，`def main.archSqrt ABI0` 对不上任何一个 Go 函数，编译器在这一步不会为它生成包装。`archSqrt` 的机器码要等第二遍汇编。
+本例的 `main.go` 并没有声明 `archSqrt`，`def main.archSqrt ABI0` 对不上任何一个 Go 函数，这一步就不会给它生成包装。`archSqrt` 的机器码，得等第二遍汇编。
 
-和 `symabis` 一起出现的还有 `go_asm.h`。第一遍 asm 之前，日志里有一行 `echo -n > $WORK/b001/go_asm.h`，先放一个空文件。标准库里很多汇编会 `#include "go_asm.h"`，而此时编译器还没运行，真正的头文件尚不存在。第一遍只扫描符号，并不需要这些宏已经有具体取值，空文件足以让 `#include` 通过。编译器接着用 `-asmhdr` 覆盖这个文件，把本包常量和结构体字段偏移写成宏，形式如下：
+和 `symabis` 一起出现的，还有 `go_asm.h`。第一遍 asm 之前，日志里有一句 `echo -n > $WORK/b001/go_asm.h`，先放了个空文件。标准库里不少汇编会 `#include "go_asm.h"`，可这时候编译器还没跑，真正的头文件还不存在。第一遍只是扫符号，并不需要这些宏已经有具体的值，有个空文件，`#include` 能通过就行。编译器接着用 `-asmhdr` 把这个文件盖掉，把本包的常量、结构体大小、字段偏移写成宏，样子是这样的：
 
 ```text
 #define const_<名字> <值>
@@ -222,29 +232,31 @@ Go 函数默认使用 `ABIInternal`，参数尽量放在寄存器中。汇编 `T
 #define <类型>_<字段> <偏移>
 ```
 
-第二遍 asm 使用同一个 `-I $WORK/b001/`，`#include "go_asm.h"` 就能拿到这些偏移。本例的 `main.go` 没有需要导出给汇编的常量或结构体，`main.s` 也没有包含这个头，编译结束后 `go_asm.h` 里只有一行 `// generated by compile -asmhdr from package main`。
+第二遍 asm 还带着同一个 `-I $WORK/b001/`，`#include "go_asm.h"` 就能拿到这些偏移。本例的 `main.go` 没有要导出给汇编的常量和结构体，`main.s` 也没有包含这个头，所以编译结束以后，`go_asm.h` 里只剩下一行 `// generated by compile -asmhdr from package main`。
 
-第二遍是：
+第二遍长这样：
 
 ```text
 asm -p main -trimpath "$WORK/b001=>" -I $WORK/b001/ -I /usr/local/go/pkg/include -D GOOS_linux -D GOARCH_amd64 -D GOAMD64_v1 -o $WORK/b001/main.o ./main.s
 ```
 
-这里没有 `-gensymabis`。汇编器把 `main.s` 汇编成目标文件 `main.o`。`main.o` 是 Go 自己的目标文件，要等链接器写出可执行程序，才得到 ELF。
+这次没有 `-gensymabis`。汇编器这才把 `main.s` 编成目标文件 `main.o`。注意哦，这个 `main.o` 是 Go 自己的目标文件，还不是 ELF。ELF 要等最后链接器把可执行程序写出来，才看得到。
 
-按日志顺序，整次构建是：
+按日志里的顺序，整次构建可以收成下面几步：
 
-1. 准备临时目录 `$WORK/b001`。`-work` 让它在构建结束后仍然保留。`-v` 打印的包名 `xx` 出现在日志前部。
-2. 包内有 `.s` 时，先写入空的 `go_asm.h`，再跑第一遍 `go tool asm -gensymabis`，得到 `symabis`。没有汇编源文件则跳过，后面的 compile 也不带 `-symabis` 和 `-asmhdr`。
-3. 写入 `importcfg`，记下 `fmt`、`runtime` 这些直接依赖的归档在构建缓存中的路径。`go tool compile` 编译 `main.go`：`-symabis` 读入上一步的 ABI 清单，`-asmhdr` 写出真正的 `go_asm.h`，`-importcfg` 按这份配置查找依赖，`-pack` 把编译结果直接写入静态库 `$WORK/b001/_pkg_.a`。`-lang=go1.22` 来自 `go.mod` 的语言版本，`-trimpath` 与 asm 相同，用来去掉临时目录前缀。
-4. 第二遍 `go tool asm` 把 `main.s` 汇编成 `main.o`。汇编源文件如果 `#include "go_asm.h"`，这一遍才能用上编译器刚写好的偏移。本例的 `main.s` 没有包含它。
-5. `go tool pack r` 把 `main.o` 追加进 `_pkg_.a`。至此，这个模块自己的 Go 代码和汇编都在同一个归档里。随后 `buildid -w` 给归档写入构建 ID，构建驱动再把归档复制进构建缓存。
-6. 写入 `importcfg.link`。它比编译阶段的 `importcfg` 更全，列出链接所需的全部归档，包括 `fmt`、`runtime` 继续依赖的标准库。
-7. `go tool link` 读取 `_pkg_.a` 和 `importcfg.link`，完成符号解析与重定位，生成 `$WORK/b001/exe/a.out`。链接命令上的 `-buildid`，以及随后对可执行文件执行的 `buildid -w`，把构建 ID 写进最终程序，对应 ELF 中的 `.note.go.buildid`。符号解析和重定位在 7.4 节展开，链接阶段如何合并 DWARF 在 7.7 节展开。
-8. 将 `a.out` 重命名为模块名 `xx`。
+1. 先准备构建用的临时目录 `$WORK/b001`，后面的产物都在这个目录里。因为加了 `-work`，构建结束以后它还在，我们可以 cd 进去看。`-v` 打出来的包名 `xx` 出现在日志前头。不过末尾有 `mv`，那个最终的可执行文件会被挪走。
+2. 包里有 `.s` 的话，先写一个空的 `go_asm.h`，再跑第一遍 `go tool asm -gensymabis`，得到 `symabis`。没有汇编源文件，这一步就跳过，后面的 compile 也不会带上 `-symabis` 和 `-asmhdr`。
+3. 写好 `importcfg`，里面记下 `fmt`、`runtime` 这些直接依赖的归档，在构建缓存里的路径。然后 `go tool compile` 编译 `main.go`。`-symabis` 读上一步那份 ABI 清单，`-asmhdr` 写出真正的 `go_asm.h`，`-importcfg` 按这份配置去找依赖。compile 这里带了 `-pack`，编译结果直接打进静态库 `$WORK/b001/_pkg_.a`。`-lang=go1.22` 来自 `go.mod` 里的语言版本。compile 同样带了 `-trimpath`，作用和 asm 那边一样，把临时目录前缀去掉。
+4. 第二遍 `go tool asm`，把 `main.s` 汇编成 `main.o`。汇编文件如果 `#include "go_asm.h"`，这一遍才能用上编译器刚写好的那些偏移。本例的 `main.s` 没有包含它。
+5. `go tool pack r` 把 `main.o` 追加进 `_pkg_.a`。到这儿，这个模块自己的 Go 代码和汇编，都进了同一个归档。随后 `buildid -w` 给归档写上构建 ID，构建驱动再把这个归档复制进构建缓存。
+6. 准备 `importcfg.link`。它比编译时候那个 `importcfg` 要全，链接要用到的归档都列在里面，包括 `fmt`、`runtime` 再往下依赖的那些标准库。
+7. `go tool link` 读 `_pkg_.a` 和 `importcfg.link`，做符号解析、重定位，生成 `$WORK/b001/exe/a.out`。链接命令上的 `-buildid`，再加上随后对这个可执行文件跑的 `buildid -w`，把构建 ID 写进最终程序，落在 ELF 的 `.note.go.buildid` 里。符号解析和重定位，我们放到 7.4 节再展开；链接的时候 DWARF 是怎么合并的，放到 7.7 节。
+8. 把 `a.out` 重命名成模块名，这里就是 `xx`。
 
-`main.o` 是汇编器写出的 Go 目标文件，`_pkg_.a` 是 ar 归档。链接器读入归档，写出的可执行程序 `xx` 才是 ELF。文件头、段头表、节头表，以及符号表、DWARF、`.note.go.buildid` 在这个文件里如何排列，是下一节的内容。
+至此，这个示例模块的构建就结束了。再提一个容易混的地方：`main.o` 是汇编器写出的 Go 目标文件，`_pkg_.a` 是个 ar 归档，链接器读的是这个归档。它写出来的可执行程序 `xx`，才是 ELF。文件头、段头表、节头表，还有符号表、DWARF、`.note.go.buildid` 在这个文件里怎么排，我们下一节打开来看。
 
-### 本节小结
+### 本文小节
 
-本节主要顺着一次 `go build -v -x -work`，看构建驱动如何串起汇编器、编译器、打包工具和链接器。核心内容包括：包里带有汇编文件时 `go tool asm` 会执行两遍，两遍的 `-p`、`-trimpath`、`-I`、`-D` 相同，第一遍额外使用 `-gensymabis` 把符号 ABI 写到 `symabis`，第二遍才生成 `main.o`；`symabis` 由 `go tool compile -symabis` 读取，用来对齐汇编函数和 Go 函数的调用约定，并据此决定是否生成 ABI 包装函数；编译器同时用 `-asmhdr` 写出 `go_asm.h`，供第二遍汇编中的 `#include` 使用。本节把工具链留下的中间产物摊开，为下一节阅读链接器产出的 ELF 文件打下基础。
+OK，本文顺着一次 `go build -v -x -work`，把编译器、汇编器、静态库打包工具、链接器、buildid 这些是怎么配合的，简单走了一遍。包里要是带了汇编，`go tool asm` 会跑两遍。两遍的 `-p`、`-trimpath`、`-I`、`-D` 是一样的，第一遍多一个 `-gensymabis`，只把符号 ABI 写进 `symabis`，交给后面的 `go tool compile -symabis`，好让编译器把汇编函数和 Go 函数的调用约定对齐，需要的时候再生成 ABI 包装；第二遍才真正把 `main.s` 编成 `main.o`。编译器同时还用 `-asmhdr` 写出 `go_asm.h`，第二遍汇编如果要 `#include`，用的就是它。
+
+接下来我们还会进一步展开讲下，它们究竟做了什么。但是在我们详细介绍每一个工具的工作之前，我们得把关注点转向链接器的最终产物 —— ELF 文件。我们得先了解下 ELF 文件的构成（如节头表、段头表、sections、segments）以及它们的具体作用，了解了这些之后，我们再回头看这些工具是如何协调起来去生成它们的，以及后续其他的工具，加载器、调试器，又如何利用它们。
