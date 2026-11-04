@@ -187,7 +187,7 @@ mv $WORK/b001/exe/a.out xx
 1. 准备构建用的临时目录，后续构建产物都在这个临时目录中，我们可以cd到此目录查看，但是因为涉及到mv操作、rm操作，构建结束后某些中间产物会消失；
 2. `go tool asm` 先处理汇编源文件main.s。这一遍使用 `-gensymabis`，只写出 `symabis`（ABI 清单），不生成机器码，交给下一步 compile 的 `-symabis`。如果没有汇编源文件，此步骤会跳过；
 3. `go tool compile` 处理go源文件main.go，输出目标文件，注意compile直接将*.o文件加到了静态库_pkg_.a中；
-4. `go tool asm` 再次处理汇编源文件，这一遍没有 `-gensymabis`，才输出目标文件main.o。`-asmhdr` 写出的 `go_asm.h`，汇编里若有 `#include`，就在这一遍用上。注意哦，main.go以及其他go文件对应的目标文件已经加到了静态库_pkg_.a中；
+4. `go tool asm` 对汇编源文件执行汇编操作，输出目标文件main.o。注意哦，main.go以及其他go文件对应的目标文件加到了静态库_pkg_.a中；
 5. `go tool pack` 将main.o追加到静态库文件_pkg_.a中。此时示例module中的源文件都编译、汇编加入_pkg_.a中了；
 6. 准备其他需要链接的目标文件列表，已经编译构建好的go运行时、标准库对应的目标文件，全部写入importcfg.link文件；
 7. `go tool link` 对_pkg_.a以及importcfg.link中记录的go运行时、标准库进行链接操作，完成符号解析、重定位，生成一个可执行程序a.out，同时在其.note.go.buildid写入buildid信息；
