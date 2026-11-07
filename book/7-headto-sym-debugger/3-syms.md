@@ -411,7 +411,7 @@ $ go tool objdump main.o | grep R_
 
 我们使用 `grep R_`来过滤objdump的输出，现在我们看到的这些操作指令，其中都涉及了一些需要进行重定位的符号，比如类型定义type.string，比如全局变量os.Stdout，比如全局函数fmt.Fprintln、os.(*file).close。
 
-> ps: plan9中汇编指令R_PCREL, R_CALL，表示这里需要进行重定位，后面会介绍。
+> ps: 这里的 R_PCREL、R_CALL 是 Go 目标文件中的重定位类型（objabi.RelocType），不是 Plan 9 汇编助记符，表示这里需要进行重定位，后面会介绍。
 
 这些符号将在后续 `go tool link`时进行解析并完成重定位，最终构建出一个完全链接的可执行程序，可以尝试运行 `go tool link main.o`，会生成一个a.out文件，这就是链接完全的可执行程序了。
 
