@@ -10,7 +10,7 @@
 
 - 会接受go源文件作为输入，
 - 然后读取源文件进行词法分析得到一系列tokens，
-- 进而进行语法分析（基于gramma进行规约）得到AST，
+- 进而进行语法分析（基于grammar进行规约）得到AST，
 - 然后基于AST进行类型检查，
 - 类型检查无误后开始执行函数编译（buildssa、代码优化、生成plist、转换为平台特定机器码），
 - 最后将结果输出到目标文件中。
@@ -131,21 +131,23 @@ typedef struct {
 
 下面来详细了解下各个字段的作用：
 
-- st_name: 符号的名称，是一个字符串表的索引值。非0表示在.strtab中的索引值；为0则表示该符号没有名字（.strtab[0]=='\0')
+- st_name: 符号的名称，是符号表节头sh_link指向的字符串表中的偏移。.symtab对应.strtab，.dynsym对应.dynstr。非0表示该偏移处的名字；为0则表示该符号没有名字（字符串表首字节为'\0'）
 - st_value: 符号的值。在可重定位目标文件（e_type 为 ET_REL）中，符号已定义且 st_shndx 指向普通节时，st_value 是节内偏移。st_shndx 为 SHN_ABS 时，st_value 是绝对值。st_shndx 为 SHN_COMMON 时，st_value 是对齐约束。st_shndx 为 SHN_UNDEF 时，符号没有定义位置。在可执行文件与共享目标文件（e_type 为 ET_EXEC 或 ET_DYN）中，普通已定义符号的 st_value 是虚拟地址。符号类型为 STT_TLS 时，st_value 是相对 TLS 模板或线程指针的偏移。
 - st_size: 符号指向的对象大小，如果大小未知或者无需指定大小就为0。如符号对应的int变量的字节数；
 - st_info: 符号的类型和绑定属性(binding attributes)
-  - STT_NOTYPE: 未指定类型
-  - STT_OBJECT: 该符号关联的是一个数据对象
-  - STT_FUNC: 该符号关联的是一个函数
-  - STT_SECTION: 该符号关联的是一个section
-  - STT_FILE: 该符号关联的是一个目标文件对应的原文件名
-  - STT_LOPROC, STT_HIPROC： 范围[STT_LOPROC, STT_HIPROC]预留给处理器相关的机制
-  - STB_LOCAL：局部绑定(local binding)，链接作用域限于当前编译单元（目标文件）。多个编译单元中可以存在同名的 STB_LOCAL 符号，互不干扰
-  - STB_GLOBAL：全局绑定(global binding)，链接作用域覆盖参与链接的各编译单元（目标文件）。一个编译单元中的定义，可以在另一个编译单元中引用
-  - STB_WEAK: 弱绑定(weak binding)，链接作用域与全局符号相同，但其定义的优先级更低
-  - STB_LOPROC, STB_HIPROC：范围[STB_LOPROC, STB_HIPROC]预留给处理器相关的机制
-  - STT_TLS: 该符号关联的是TLS变量
+  - 类型(type, STT_*)
+    - STT_NOTYPE: 未指定类型
+    - STT_OBJECT: 该符号关联的是一个数据对象
+    - STT_FUNC: 该符号关联的是一个函数
+    - STT_SECTION: 该符号关联的是一个section
+    - STT_FILE: 该符号关联的是一个目标文件对应的原文件名
+    - STT_TLS: 该符号关联的是TLS变量
+    - STT_LOPROC, STT_HIPROC： 范围[STT_LOPROC, STT_HIPROC]预留给处理器相关的机制
+  - 绑定(binding, STB_*)
+    - STB_LOCAL：局部绑定(local binding)，链接作用域限于当前编译单元（目标文件）。多个编译单元中可以存在同名的 STB_LOCAL 符号，互不干扰
+    - STB_GLOBAL：全局绑定(global binding)，链接作用域覆盖参与链接的各编译单元（目标文件）。一个编译单元中的定义，可以在另一个编译单元中引用
+    - STB_WEAK: 弱绑定(weak binding)，链接作用域与全局符号相同，但其定义的优先级更低
+    - STB_LOPROC, STB_HIPROC：范围[STB_LOPROC, STB_HIPROC]预留给处理器相关的机制
 - st_other: 定义了符号的可见性 (visibility)
   - STV_DEFAULT: 默认可见性规则；全局符号和弱符号对其他模块可见；本地模块中的引用，可以解析为其他模块中的定义；
   - STV_INTERNAL: 处理器特定的隐藏类型；
@@ -169,7 +171,7 @@ type Sym32 struct {
 }
 ```
 
-关于如何读取符号表，可以参考go源码实现：https://sourcegraph.com/github.com/golang/go/-/blob/src/debug/elf/file.go?L489:16。
+关于如何读取符号表，可以参考go源码 `src/debug/elf/file.go`：https://sourcegraph.com/github.com/golang/go/-/blob/src/debug/elf/file.go。
 
 现在go工具链已经支持读取符号表，推荐大家优先使用go工具链。Linux binutils也提供了一些类似工具，但是对于go程序而言，有点特殊之处：
 
@@ -249,7 +251,7 @@ Symbol table '.symtab' contains 2298 entries:
 
 “vim-go”算不算符号？其本身是一个只读数据，存储在.rodata section中，其本身算不上符号，但可以被符号引用，比如定义一个全局变量 `var s = "vim-go"` 则变量s有对应的符号，其符号名称为s，变量值引用自.rodata中的vim-go。
 
-我们可以通过 `readelf --hex-dump .rodata | grep vim-go`来验证。上述示例中其实会生成一个临时变量，该临时变量的值为"vim_go"，要想查看符号依赖图，可以通过 `go tool link --dumpdep main.o | grep main.main`验证，或者 `go build -ldflags "--dumpdep" main.go | grep main.main` 也可以。
+我们可以通过 `readelf --hex-dump .rodata | grep vim-go`来验证。上述示例中其实会生成一个临时变量，该临时变量的值为"vim-go"，要想查看符号依赖图，可以通过 `go tool link --dumpdep main.o | grep main.main`验证，或者 `go build -ldflags "--dumpdep" main.go | grep main.main` 也可以。
 
 > ```bash
 > $ go build -ldflags "--dumpdep" main.go 2>&1 | grep main.main
