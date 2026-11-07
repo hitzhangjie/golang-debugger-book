@@ -129,7 +129,7 @@ typedef struct {
 下面来详细了解下各个字段的作用：
 
 - st_name: 符号的名称，是一个字符串表的索引值。非0表示在.strtab中的索引值；为0则表示该符号没有名字（.strtab[0]=='\0')
-- st_value: 符号的值，对可重定位模块，value是相对定义该符号的位置的偏移量；对于可执行文件来说，该值是一个虚拟内存地址；
+- st_value: 符号的值，须按文件类型和 st_shndx 分开看。ET_REL 中，st_shndx 指向普通节的已定义符号，该值是节内偏移；SHN_ABS 为绝对值，SHN_COMMON 为对齐约束，SHN_UNDEF 无定义位置。ET_EXEC 与 ET_DYN 中，普通已定义符号的值才是虚拟地址（VMA）；SHN_ABS 仍是绝对值。符号类型为 STT_TLS 时，该值是相对 TLS 模板或线程指针的偏移，不是 VMA。
 - st_size: 符号指向的对象大小，如果大小未知或者无需指定大小就为0。如符号对应的int变量的字节数；
 - st_info: 符号的类型和绑定属性(binding attributes)
   - STT_NOTYPE: 未指定类型
@@ -304,7 +304,7 @@ $ go tool nm main.o
 
 `go tool nm`和Linux下binutils提供的nm，虽然支持的对象文件格式不同，但是其输出格式还是相同的，查看man手册，我们了解到：
 
-- 第一列，symbol value，表示定义符号处的虚拟地址（如变量名对应的变量地址）；
+- 第一列，symbol value，符号值：.o 里多半是节内偏移，已链接可执行文件里才是 VMA；
 - 第二列，symbol type，用小写字母表示局部符号，大写则为全局符号（uvw例外）；
 
   运行命令 `man nm`查看nm输出信息：
@@ -356,7 +356,7 @@ $ go tool nm main.o
   ```
 - 第三列，symbol name，符号名在字符串表中索引，对应字符串是存储在字符串表中；
 
-我们回头再看下我们的示例来加深下理解，OK，让我们关注下main函数本身，我们注意到nm输出显示符号 `%22%22.main`是定义在虚地址 `0x13ed`处，并且表示它是一个.text section中定义的符号，那只有一种可能要么是package main，要么是func main.main，其实是main.main。
+我们回头再看下我们的示例来加深下理解，OK，让我们关注下main函数本身，我们注意到nm输出显示符号 `%22%22.main`的符号值是 `0x13ed`（main.o 里这是 .text 的节内偏移），并且表示它是一个.text section中定义的符号，那只有一种可能要么是package main，要么是func main.main，其实是main.main。
 
 ```bash
 $ go tool nm main.o
@@ -372,7 +372,7 @@ $ go tool nm main.o
     ....
 ```
 
-我们可以通过 `go tool objdump -S main.o`反汇编main.o查看虚地址处对应的信息来求证，我们注意到虚地址 `0x13ed`处恰为func main.main的入口地址。
+我们可以通过 `go tool objdump -S main.o`反汇编main.o，按这一符号值对照求证，我们注意到 `0x13ed`处恰为func main.main的入口。
 
 ```bash
 $ go tool objdump -S main.o
