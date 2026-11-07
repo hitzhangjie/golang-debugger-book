@@ -140,7 +140,7 @@ typedef struct {
   - STT_SECTION: 该符号关联的是一个section
   - STT_FILE: 该符号关联的是一个目标文件对应的原文件名
   - STT_LOPROC, STT_HIPROC： 范围[STT_LOPROC, STT_HIPROC]预留给处理器相关的机制
-  - STB_LOCAL：符号可见性仅限于当前编译单元（目标文件）内部，多个编译单元中可以存在多个相同的符号名但是为STT_LOCAL类型的符号
+  - STB_LOCAL：符号可见性仅限于当前编译单元（目标文件）内部，多个编译单元中可以存在多个相同的符号名但是为STB_LOCAL类型的符号
   - STB_GLOBAL：全局符号对于所有的编译单元（目标文件）可见，一个编译单元中定义的全局符号，可以在另一个编译单元中引用
   - STB_WEAK: 弱符号，模拟全局符号，但是它的定义拥有更低的优先级
   - STB_LOPROC, STB_HIPROC：范围[STB_LOPROC, STB_HIPROC]预留给处理器相关的机制
@@ -153,7 +153,7 @@ typedef struct {
 
 ### 读取符号表
 
-go标准库中对ELF32 Symbol的定义 `debug/elf.Sym32/64` 如下，go没有位字段，定义上有些许差别，理解即可：
+go标准库中对ELF32 Symbol的定义 `debug/elf.Sym32/64` 如下。go没有位字段，`Info`、`Other` 仍各是一个 `uint8`：`Info` 高 4 位为 binding、低 4 位为 type（`ELF32_ST_BIND` 为 `info>>4`，`ST_TYPE` 为 `info&0xf`），`Other` 的低 2 位为 visibility。
 
 ```go
 // ELF32 Symbol.
@@ -161,8 +161,8 @@ type Sym32 struct {
 	Name  uint32
 	Value uint32
 	Size  uint32
-    	Info  uint8	// type:4+binding:4
-	Other uint8	// reserved
+    	Info  uint8	// binding:4+type:4
+	Other uint8	// low 2 bits: visibility
 	Shndx uint16	// section
 }
 ```
