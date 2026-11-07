@@ -132,7 +132,7 @@ typedef struct {
 下面来详细了解下各个字段的作用：
 
 - st_name: 符号的名称，是一个字符串表的索引值。非0表示在.strtab中的索引值；为0则表示该符号没有名字（.strtab[0]=='\0')
-- st_value: 符号的值。ET_REL 中，st_shndx 指向普通节的已定义符号，该值是节内偏移。SHN_ABS 的值是绝对值，SHN_COMMON 的值是对齐约束，SHN_UNDEF 没有定义位置。ET_EXEC 与 ET_DYN 中，普通已定义符号的值是虚拟地址。符号类型为 STT_TLS 时，该值是相对 TLS 模板或线程指针的偏移。
+- st_value: 符号的值。在可重定位目标文件（e_type 为 ET_REL）中，符号已定义且 st_shndx 指向普通节时，st_value 是节内偏移。st_shndx 为 SHN_ABS 时，st_value 是绝对值。st_shndx 为 SHN_COMMON 时，st_value 是对齐约束。st_shndx 为 SHN_UNDEF 时，符号没有定义位置。在可执行文件与共享目标文件（e_type 为 ET_EXEC 或 ET_DYN）中，普通已定义符号的 st_value 是虚拟地址。符号类型为 STT_TLS 时，st_value 是相对 TLS 模板或线程指针的偏移。
 - st_size: 符号指向的对象大小，如果大小未知或者无需指定大小就为0。如符号对应的int变量的字节数；
 - st_info: 符号的类型和绑定属性(binding attributes)
   - STT_NOTYPE: 未指定类型
