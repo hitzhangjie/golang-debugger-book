@@ -156,3 +156,4 @@
   * [12.14 More: 语法分析vs语义分析区别](12-appendix/91-syntax-and-semantic-analysis.md)
   * [12.15 More: 为什么GDB使用符号表+DWARF](12-appendix/92-why-gdb-uses-symtab.md)
   * [12.16 More: ELF core文件格式剖析](12-appendix/93-anatomy-of-elf-core-file.md)
+  * [12.17 More: PIE可执行文件为什么有.interp/.dynsym/.dynamic](12-appendix/94-why-pie-has-dyn-sections.md)
