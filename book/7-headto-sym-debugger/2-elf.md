@@ -359,6 +359,8 @@ Key to Flags:
   l (large), p (processor specific)
 ```
 
+上面 `.zdebug_` 前缀的节（这里列出 `.zdebug_line`、`.zdebug_frame`）是 Go 1.18 及更早的 ELF：zlib 压缩后用节名前缀表示已压缩，Flags 为空。Go 1.19 起，ELF 中对应节名为 `.debug_line`、`.debug_frame`，开启压缩时 Flags 为 `C`（`SHF_COMPRESSED`）。
+
 ### 节 (Sections)
 
 #### 类型定义

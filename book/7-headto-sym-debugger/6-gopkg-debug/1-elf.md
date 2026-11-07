@@ -111,6 +111,8 @@ elf.NewFile()读取ELF文件内容时根据ELF文件头中的Class类型（未�
 })
 ```
 
+这里的 `.zdebug_abbrev`、`.zdebug_line`、`.zdebug_info` 等是 Go 1.18 及更早的 ELF。调试节用 zlib 压缩后，节名改用 `.zdebug_` 前缀，这个前缀就是压缩标记。Go 1.19 起，ELF 压缩后仍使用 `.debug_*`，并在节标志中设置 `SHF_COMPRESSED`。`.debug_gdb_scripts` 不含压缩数据，节名保持 `.debug_gdb_scripts`。
+
 #### 读取文件段头表
 
 elf.File中的Progs字段，即为段头表（Program Header Table）。前面示例展示了如何读取ELF文件并打印其结构。在此基础上我们将继续对段头表数据一探究竟。
@@ -215,6 +217,8 @@ No.   Name                 Type           Flags                     Addr       O
 24    .shstrtab            SHT_STRTAB     0x0                       0x0        2035652   280      0      0      1           0         280
 
 ```
+
+这张节头表与上面的 `spew` 输出来自同一次 `testdata/loop` 构建，同样是 Go 1.18 及更早的 ELF。`.zdebug_*` 的 Flags 为 `0x0`，压缩信息写在节名里。Go 1.19 及以后，这些节名为 `.debug_abbrev`、`.debug_line`、`.debug_info` 等，开启压缩时 Flags 含 `SHF_COMPRESSED`。
 
 #### 读取指定section
 
