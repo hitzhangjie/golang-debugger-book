@@ -138,9 +138,9 @@ typedef struct {
   - STT_SECTION: 该符号关联的是一个section
   - STT_FILE: 该符号关联的是一个目标文件对应的原文件名
   - STT_LOPROC, STT_HIPROC： 范围[STT_LOPROC, STT_HIPROC]预留给处理器相关的机制
-  - STB_LOCAL：符号可见性仅限于当前编译单元（目标文件）内部，多个编译单元中可以存在多个相同的符号名但是为STT_LOCAL类型的符号
-  - STB_GLOBAL：全局符号对于所有的编译单元（目标文件）可见，一个编译单元中定义的全局符号，可以在另一个编译单元中引用
-  - STB_WEAK: 弱符号，模拟全局符号，但是它的定义拥有更低的优先级
+  - STB_LOCAL：局部绑定(local binding)，链接作用域限于当前编译单元（目标文件）。多个编译单元中可以存在同名的 STB_LOCAL 符号，互不干扰
+  - STB_GLOBAL：全局绑定(global binding)，链接作用域覆盖参与链接的各编译单元（目标文件）。一个编译单元中的定义，可以在另一个编译单元中引用
+  - STB_WEAK: 弱绑定(weak binding)，链接作用域与全局符号相同，但其定义的优先级更低
   - STB_LOPROC, STB_HIPROC：范围[STB_LOPROC, STB_HIPROC]预留给处理器相关的机制
   - STT_TLS: 该符号关联的是TLS变量
 - st_other: 定义了符号的可见性 (visibility)
