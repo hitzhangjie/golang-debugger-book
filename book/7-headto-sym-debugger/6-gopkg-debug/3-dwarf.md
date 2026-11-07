@@ -6,7 +6,7 @@
 
 go生成DWARF调试信息时，会对DWARF信息进行压缩再存储到不同的section中。比如描述types、variables、function定义的数据，开启压缩前是存储在.debug_info中，开启压缩后则被存储到.zdebug_info中，通常采用的是zlib压缩算法。在早期版本的 `go-delve/delve` 实现中就是这么做的，但是实际情况是，ELF section中有个标识字段 `Compressed` 来表示Section中的数据是否开启了压缩，在go新版本中，压缩后的调试信息也不会再写到 .zdebug_ 相关sections了，而是统一写入 .debug_ sections中，同时设置标识位 `Compressed=true`。
 
-编译构建go程序时可以指定链接器选项 `go build -ldflags="dwarfcompress=false"`来禁用dwarf数据压缩，有些DWARF信息查看的工具比较陈旧，不支持解压缩，此时可以考虑关闭dwarf数据压缩。`debug/dwarf`有提供了DWARF信息读取的能力，并且对上述这些过去的设计实现有做兼容处理。美中不足的是，`debug/dwarf`**未提供调用栈信息的读取**，这部分功能需要自行实现。
+编译构建go程序时可以指定链接器选项 `go build -ldflags=-compressdwarf=false`来禁用dwarf数据压缩，有些DWARF信息查看的工具比较陈旧，不支持解压缩，此时可以考虑关闭dwarf数据压缩。`debug/dwarf`有提供了DWARF信息读取的能力，并且对上述这些过去的设计实现有做兼容处理。美中不足的是，`debug/dwarf`**未提供调用栈信息的读取**，这部分功能需要自行实现。
 
 ### 数据类型及关系
 
@@ -14,7 +14,7 @@ package `debug/dwarf`中的相关重要数据结构，如下图所示：
 
 ![image-20201206022523363](assets/image-20201206022523363.png)
 
-当我们打开了一个elf.File之后，便可以读取DWARF数据，当我们调用 `elf.File.Data()`时便可以返回读取、解析后的DWARF数据（即类图中Data），接下来便是在此基础上进一步读取DWARF中的各类信息，以及与对源码的理解结合起来。
+当我们打开了一个elf.File之后，便可以读取DWARF数据，当我们调用 `file.DWARF()`时便可以返回读取、解析后的DWARF数据（即类图中Data），接下来便是在此基础上进一步读取DWARF中的各类信息，以及与对源码的理解结合起来。
 
 通过Data可以获取一个reader，该reader能够读取并解析.[z]debug_info section的数据，通过这个reader可以遍历DIE（即类图中Entry），每个DIE都由一个Tag和一系列Attr构成。
 
