@@ -219,10 +219,12 @@ func main() {
 
 `readelf -s <prog>`，可以显示出程序prog中的所有符号列表，举个例子：
 
+> ps：下面是 `go build` 默认 `-buildmode=exe` 的输出。go1.24.13，linux/amd64。`.symtab` 条目数随运行时变化，这次是 2298。`runtime.text` 之后仍是 `cmpbody`、`memeqbody`，直到 `gcWriteBarrier`。
+
 ```bash
 $ readelf -s main
 
-Symbol table '.symtab' contains 1991 entries:
+Symbol table '.symtab' contains 2298 entries:
    Num:    Value          Size Type    Bind   Vis      Ndx Name
      0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND 
      1: 0000000000000000     0 FILE    LOCAL  DEFAULT  ABS go.go
@@ -230,12 +232,12 @@ Symbol table '.symtab' contains 1991 entries:
      3: 0000000000402d00   557 FUNC    LOCAL  DEFAULT    1 cmpbody
      4: 0000000000402f50   339 FUNC    LOCAL  DEFAULT    1 memeqbody
      5: 0000000000403100   297 FUNC    LOCAL  DEFAULT    1 indexbytebody
-     6: 000000000045f5c0    64 FUNC    LOCAL  DEFAULT    1 gogo
-     7: 000000000045f600    43 FUNC    LOCAL  DEFAULT    1 callRet
-     8: 000000000045f640    47 FUNC    LOCAL  DEFAULT    1 gosave_systemsta[...]
-     9: 000000000045f680    13 FUNC    LOCAL  DEFAULT    1 setg_gcc
-    10: 000000000045f690  1380 FUNC    LOCAL  DEFAULT    1 aeshashbody
-    11: 000000000045fc00   205 FUNC    LOCAL  DEFAULT    1 gcWriteBarrier
+     6: 000000000046ae80    64 FUNC    LOCAL  DEFAULT    1 gogo
+     7: 000000000046aec0    43 FUNC    LOCAL  DEFAULT    1 callRet
+     8: 000000000046af00    47 FUNC    LOCAL  DEFAULT    1 gosave_systemsta[...]
+     9: 000000000046af40    13 FUNC    LOCAL  DEFAULT    1 setg_gcc
+    10: 000000000046af50  1380 FUNC    LOCAL  DEFAULT    1 aeshashbody
+    11: 000000000046b4c0   205 FUNC    LOCAL  DEFAULT    1 gcWriteBarrier
         ...
 ```
 
