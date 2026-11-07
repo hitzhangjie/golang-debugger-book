@@ -373,6 +373,62 @@ Key to Flags:
   D (mbind), l (large), p (processor specific)
 ```
 
+### 节 (Sections)
+
+#### 类型定义
+
+这里的section指的就是ELF section里面的数据了，就是一堆bytes，它由节头表、段头表来引用。比如节头表表项中有地址、size指向对应的某块section数据。
+
+#### 常见的节
+
+ELF文件会包含很多的sections，前面给出的测试实例中就包含了25个sections。先了解些常见的sections的作用，为后续加深对linker、loader、debgguer工作原理的认识提前做点准备。
+
+- .text: 编译好的程序指令；
+- .rodata: 只读数据，如程序中的常量字符串；
+- .data：已经初始化的全局变量；
+- .bss：未经初始化的全局变量，在ELF文件中只是个占位符，不占用实际空间；
+- .symtab：符号表，每个可重定位文件都有一个符号表，存放程序中定义的全局函数和全局变量的信息，注意它不包含局部变量信息，局部非静态变量由栈来管理，它们对链接器符号解析、重定位没有帮助。
+- .debug_*: 调试信息，调试器读取该信息以支持符号级调试（如gcc -g生成，go build默认生成）；
+- .strtab：字符串表，包括.symtab和.[z]debug_*节引用的字符串值；节名在.shstrtab；
+- .rel.text：一个.text section中引用的位置及符号列表，当链接器尝试把这个目标文件和其他文件链接时，需要对其中符号进行解析、重定位成正确的地址；
+- .rel.data：引用的一些全局变量的位置及符号列表，和.rel.text有些类似，也需要符号解析、重定位成正确的地址；
+
+如果您想了解更多支持的sections及其作用，可以查看man手册：`man 5 elf`，这里我们就不一一列举了。
+
+#### 自定义节
+
+ELF也支持自定义sections，如go语言添加了.gosymtab、.gopclntab、.note.build.id来支持go运行时、go工具链的一些操作。
+
+#### 工具演示
+
+这里我们来简单介绍下如何查看sections中的内容：
+
+- 以字符串形式打印：`readelf --string-dump=<section> <prog>`；
+- 以十六进制数打印：`readelf --hex-dump=<section> <prog>`；
+- 打印前先完成重定位，再以十六进制打印：`readelf --relocated-dump=<section> <prog>`；
+- 打印DWARF调试信息：`readelf --debug-dump=<section> <prog>`；
+
+以go语言为例，首先 `go tool buildid <prog>`提取buildid信息，这个其实就是存储在.note.go.buildid section中的。来验证下，首先通过 `go tool buildid`来提取buildid信息：
+
+```bash
+$ go tool buildid testdata/loop
+_Iq-Pc8WKArkKz99o-e6/6mQTe-5rece47rT9tQco/8IOigl4fPBb3ZSKYst1T/QZmo-_A8O3Ec6NVYEn_1
+```
+
+接下来通过 `readelf --string-dump=.note.go.buildid <prog>`直接读取ELF文件中的数据：
+
+```bash
+$ readelf --string-dump=.note.go.buildid testdata/loop
+String dump of section '.note.go.buildid':
+  [     4]  S
+  [     c]  Go
+  [    10]  _Iq-Pc8WKArkKz99o-e6/6mQTe-5rece47rT9tQco/8IOigl4fPBb3ZSKYst1T/QZmo-_A8O3Ec6NVYEn_1
+```
+
+结果发现buildid数据是一致的，证实了我们上述判断。
+
+本节ELF内容就先介绍到这里，在此基础上，接下来我们将循序渐进地介绍linker、loader、debugger的工作原理。
+
 ### 用 readelf 看 Go 产物的文件布局
 
 开头说 Go 内部链接常见的排布是节头表紧跟段头表、节数据在后。还是同一份 hello（go1.24.13，linux/amd64）。
@@ -438,62 +494,6 @@ $ hexdump -C -s 0xf70 -n 0xa0 hello
 ```
 
 这些 0 写在文件偏移为 0 的那个 PT_LOAD 里（FileSiz `0xb1bb1`），是对齐填充，一般不是稀疏空洞。文件就是从偏移 0 起的连续字节，位置以 `e_phoff`、`e_shoff` 和 `Off` 为准。只有链接器特意做成 sparse 时，`SEEK_HOLE` 才会显示真正的空洞；Go 默认链接产物通常不是 sparse，空隙在文件中用 0 填上，留洞只在链接器或工具链有意为之，或拷贝时使用了保留空洞的选项时出现。若文件中不写这些 0、留给文件系统空洞，`ls -ls` 与 `stat` 会显示占用块数远小于逻辑大小，`lseek(..., SEEK_HOLE)` 以及 `fiemap`、`FIBMAP` 能定位空洞；`hexdump`、`od` 读到该区域时内核仍返回 0，与文件中写了 0 相同，不能据此判断磁盘上占了这些块。
-
-### 节 (Sections)
-
-#### 类型定义
-
-这里的section指的就是ELF section里面的数据了，就是一堆bytes，它由节头表、段头表来引用。比如节头表表项中有地址、size指向对应的某块section数据。
-
-#### 常见的节
-
-ELF文件会包含很多的sections，前面给出的测试实例中就包含了25个sections。先了解些常见的sections的作用，为后续加深对linker、loader、debgguer工作原理的认识提前做点准备。
-
-- .text: 编译好的程序指令；
-- .rodata: 只读数据，如程序中的常量字符串；
-- .data：已经初始化的全局变量；
-- .bss：未经初始化的全局变量，在ELF文件中只是个占位符，不占用实际空间；
-- .symtab：符号表，每个可重定位文件都有一个符号表，存放程序中定义的全局函数和全局变量的信息，注意它不包含局部变量信息，局部非静态变量由栈来管理，它们对链接器符号解析、重定位没有帮助。
-- .debug_*: 调试信息，调试器读取该信息以支持符号级调试（如gcc -g生成，go build默认生成）；
-- .strtab：字符串表，包括.symtab和.[z]debug_*节引用的字符串值；节名在.shstrtab；
-- .rel.text：一个.text section中引用的位置及符号列表，当链接器尝试把这个目标文件和其他文件链接时，需要对其中符号进行解析、重定位成正确的地址；
-- .rel.data：引用的一些全局变量的位置及符号列表，和.rel.text有些类似，也需要符号解析、重定位成正确的地址；
-
-如果您想了解更多支持的sections及其作用，可以查看man手册：`man 5 elf`，这里我们就不一一列举了。
-
-#### 自定义节
-
-ELF也支持自定义sections，如go语言添加了.gosymtab、.gopclntab、.note.build.id来支持go运行时、go工具链的一些操作。
-
-#### 工具演示
-
-这里我们来简单介绍下如何查看sections中的内容：
-
-- 以字符串形式打印：`readelf --string-dump=<section> <prog>`；
-- 以十六进制数打印：`readelf --hex-dump=<section> <prog>`；
-- 打印前先完成重定位，再以十六进制打印：`readelf --relocated-dump=<section> <prog>`；
-- 打印DWARF调试信息：`readelf --debug-dump=<section> <prog>`；
-
-以go语言为例，首先 `go tool buildid <prog>`提取buildid信息，这个其实就是存储在.note.go.buildid section中的。来验证下，首先通过 `go tool buildid`来提取buildid信息：
-
-```bash
-$ go tool buildid testdata/loop
-_Iq-Pc8WKArkKz99o-e6/6mQTe-5rece47rT9tQco/8IOigl4fPBb3ZSKYst1T/QZmo-_A8O3Ec6NVYEn_1
-```
-
-接下来通过 `readelf --string-dump=.note.go.buildid <prog>`直接读取ELF文件中的数据：
-
-```bash
-$ readelf --string-dump=.note.go.buildid testdata/loop
-String dump of section '.note.go.buildid':
-  [     4]  S
-  [     c]  Go
-  [    10]  _Iq-Pc8WKArkKz99o-e6/6mQTe-5rece47rT9tQco/8IOigl4fPBb3ZSKYst1T/QZmo-_A8O3Ec6NVYEn_1
-```
-
-结果发现buildid数据是一致的，证实了我们上述判断。
-
-本节ELF内容就先介绍到这里，在此基础上，接下来我们将循序渐进地介绍linker、loader、debugger的工作原理。
 
 ### 本节小结
 
