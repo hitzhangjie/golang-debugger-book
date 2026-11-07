@@ -186,17 +186,20 @@ typedef struct {
 
 #### 工具演示
 
-下面这个示例，则展示了测试程序 golang-debugger-lessons/testdata/loop2 的完整段头表定义，运行 `readelf -l`查看其段头表，共有7个表项，每个段定义包含了类型、在虚拟内存中的地址、读写执行权限，以及引用的sections。通过 `Section to Segment mapping: Segment Sections...`部分可以看到，最终组织好的：
+下面这个示例，则展示了测试程序 golang-debugger-lessons/testdata/loop2 的完整段头表定义，运行 `readelf -l`查看其段头表，共有6个表项，每个段定义包含了类型、在虚拟内存中的地址、读写执行权限，以及引用的sections。通过 `Section to Segment mapping: Segment Sections...`部分可以看到：
 
-- text segment（编号02的segment其Flags为R+E，表示可读可执行，这就是text segment）包含了如下sections `.text .note.go.buildid`;
+- 编号00是 PHDR，编号05是 GNU_STACK，这两项没有引用 section；
+- text segment（编号02的segment其Flags为R+E，表示可读可执行，这就是text segment）包含了如下sections `.text .note.gnu.build-id .note.go.buildid`；
 - rodata segment (编号03的segment其Flags为R，表示只读，就是rodata segment) 包含了 `.rodata .typelink .itablink .gosymtab .gopclntab` 这些go运行时需要的数据；
-- data segment (编号04的segment其Flags为RW，表示可读可写，就是data segment) 包含了 `.data .bss` 等这些可读写的数据；
+- data segment (编号04的segment其Flags为RW，表示可读可写，就是data segment) 包含了 `.go.buildinfo .go.fipsinfo .noptrdata .data .bss .noptrbss`；
+
+> ps：本节 `readelf -l` 和 `readelf -W -S` 取自同一个 loop2。go1.24.13，linux/amd64。源文件同 golang-debugger-lessons/testdata/loop2.go，`go.mod` 写成 `module loop2`、`go 1.24`，构建命令是 `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -gcflags='all=-N -l' -o loop2 loop2.go`。不加 `-W` 时，超过 16 个字符的节名会被截断。
 
 ```bash
 $ readelf -l testdata/loop2
 
 Elf file type is EXEC (Executable file)
-Entry point 0x475a80
+Entry point 0x478120
 There are 6 program headers, starting at offset 64
 
 Program Headers:
@@ -204,26 +207,25 @@ Program Headers:
                  FileSiz            MemSiz              Flags  Align
   PHDR           0x0000000000000040 0x0000000000400040 0x0000000000400040
                  0x0000000000000150 0x0000000000000150  R      0x1000
-  NOTE           0x0000000000000f9c 0x0000000000400f9c 0x0000000000400f9c
+  NOTE           0x0000000000000f78 0x0000000000400f78 0x0000000000400f78
                  0x0000000000000064 0x0000000000000064  R      0x4
   LOAD           0x0000000000000000 0x0000000000400000 0x0000000000400000
-                 0x00000000000af317 0x00000000000af317  R E    0x1000
-  LOAD           0x00000000000b0000 0x00000000004b0000 0x00000000004b0000
-                 0x00000000000a6e70 0x00000000000a6e70  R      0x1000
-  LOAD           0x0000000000157000 0x0000000000557000 0x0000000000557000
-                 0x000000000000a520 0x000000000002e0c0  RW     0x1000
+                 0x00000000000b1fd1 0x00000000000b1fd1  R E    0x1000
+  LOAD           0x00000000000b2000 0x00000000004b2000 0x00000000004b2000
+                 0x00000000000aed10 0x00000000000aed10  R      0x1000
+  LOAD           0x0000000000161000 0x0000000000561000 0x0000000000561000
+                 0x0000000000009f80 0x000000000002dca0  RW     0x1000
   GNU_STACK      0x0000000000000000 0x0000000000000000 0x0000000000000000
                  0x0000000000000000 0x0000000000000000  RW     0x8
 
  Section to Segment mapping:
   Segment Sections...
-   00
-   01     .note.go.buildid
-   02     .text .note.go.buildid
-   03     .rodata .typelink .itablink .gosymtab .gopclntab
-   04     .go.buildinfo .noptrdata .data .bss .noptrbss
-   05
-   06 
+   00     
+   01     .note.go.buildid 
+   02     .text .note.gnu.build-id .note.go.buildid 
+   03     .rodata .typelink .itablink .gosymtab .gopclntab 
+   04     .go.buildinfo .go.fipsinfo .noptrdata .data .bss .noptrbss 
+   05     
 ```
 
 一个section中数据最终会不会被加载到内存，也是由引用它的段的类型决定：PT_LOAD类型会被加载到内存，反之不会。
@@ -316,47 +318,41 @@ typedef struct {
 OK，以测试程序golang-debugger-lessons/testdata/loop2测试程序为例，我们来看下其链接器角度的视图，可以看到其包含了25个sections，每个section都有类型、偏移量、大小、链接顺序、对齐等信息，用以指导链接器完成链接操作。
 
 ```bash
-$ readelf -S testdata/loop2 
-There are 25 section headers, starting at offset 0x1c8:
+$ readelf -W -S testdata/loop2
+There are 25 section headers, starting at offset 0x190:
 
 Section Headers:
-  [Nr] Name              Type             Address           Offset
-       Size              EntSize          Flags  Link  Info  Align
-  [ 0]                   NULL             0000000000000000  00000000
-       0000000000000000  0000000000000000           0     0     0
-  [ 1] .text             PROGBITS         0000000000401000  00001000
-       0000000000098294  0000000000000000  AX       0     0     32
-  [ 2] .rodata           PROGBITS         000000000049a000  0009a000
-       00000000000440c7  0000000000000000   A       0     0     32
-       .............................................................
-  [ 4] .typelink         PROGBITS         00000000004de2a0  000de2a0
-       0000000000000734  0000000000000000   A       0     0     32
-  [ 5] .itablink         PROGBITS         00000000004de9d8  000de9d8
-       0000000000000050  0000000000000000   A       0     0     8
-  [ 6] .gosymtab         PROGBITS         00000000004dea28  000dea28
-       0000000000000000  0000000000000000   A       0     0     1
-  [ 7] .gopclntab        PROGBITS         00000000004dea40  000dea40
-       000000000005fe86  0000000000000000   A       0     0     32
-       .............................................................
-  [10] .data             PROGBITS         000000000054d4e0  0014d4e0
-       0000000000007410  0000000000000000  WA       0     0     32
-       .............................................................
-  [14] .zdebug_line      PROGBITS         0000000000588119  00155119
-       000000000001cc0d  0000000000000000           0     0     1
-  [15] .zdebug_frame     PROGBITS         00000000005a4d26  00171d26
-       00000000000062e9  0000000000000000           0     0     1
-       .............................................................
-  [22] .note.go.buildid  NOTE             0000000000400f9c  00000f9c
-       0000000000000064  0000000000000000   A       0     0     4
-  [23] .symtab           SYMTAB           0000000000000000  001d0000
-       0000000000011370  0000000000000018          24   422     8
-  [24] .strtab           STRTAB           0000000000000000  001e1370
-       00000000000109fb  0000000000000000           0     0     1
+  [Nr] Name              Type            Address          Off    Size   ES Flg Lk Inf Al
+  [ 0]                   NULL            0000000000000000 000000 000000 00      0   0  0
+  [ 1] .text             PROGBITS        0000000000401000 001000 0b0fd1 00  AX  0   0 32
+  [ 2] .rodata           PROGBITS        00000000004b2000 0b2000 036456 00   A  0   0 32
+  [ 3] .typelink         PROGBITS        00000000004e8460 0e8460 0007a0 00   A  0   0 32
+  [ 4] .itablink         PROGBITS        00000000004e8c00 0e8c00 000070 00   A  0   0 32
+  [ 5] .gosymtab         PROGBITS        00000000004e8c70 0e8c70 000000 00   A  0   0  1
+  [ 6] .gopclntab        PROGBITS        00000000004e8c80 0e8c80 078090 00   A  0   0 32
+  [ 7] .go.buildinfo     PROGBITS        0000000000561000 161000 000110 00  WA  0   0 16
+  [ 8] .go.fipsinfo      PROGBITS        0000000000561120 161120 000078 00  WA  0   0 32
+  [ 9] .noptrdata        PROGBITS        00000000005611a0 1611a0 004e22 00  WA  0   0 32
+  [10] .data             PROGBITS        0000000000565fe0 165fe0 004f92 00  WA  0   0 32
+  [11] .bss              NOBITS          000000000056af80 16af80 020290 00  WA  0   0 32
+  [12] .noptrbss         NOBITS          000000000058b220 18b220 003a80 00  WA  0   0 32
+  [13] .debug_abbrev     PROGBITS        0000000000000000 16b000 000157 00   C  0   0  1
+  [14] .debug_line       PROGBITS        0000000000000000 16b157 01a116 00   C  0   0  1
+  [15] .debug_frame      PROGBITS        0000000000000000 18526d 009a12 00   C  0   0  1
+  [16] .debug_gdb_scripts PROGBITS        0000000000000000 18ec7f 000018 00      0   0  1
+  [17] .debug_info       PROGBITS        0000000000000000 18ec97 036768 00   C  0   0  1
+  [18] .debug_loc        PROGBITS        0000000000000000 1c53ff 019c77 00   C  0   0  1
+  [19] .debug_ranges     PROGBITS        0000000000000000 1df076 003e0f 00   C  0   0  1
+  [20] .note.gnu.build-id NOTE            0000000000400fdc 000fdc 000024 00   A  0   0  4
+  [21] .note.go.buildid  NOTE            0000000000400f78 000f78 000064 00   A  0   0  4
+  [22] .shstrtab         STRTAB          0000000000000000 20bf55 000127 00      0   0  1
+  [23] .symtab           SYMTAB          0000000000000000 1e2e88 013698 18     24 102  8
+  [24] .strtab           STRTAB          0000000000000000 1f6520 015a35 00      0   0  1
 Key to Flags:
   W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
   L (link order), O (extra OS processing required), G (group), T (TLS),
   C (compressed), x (unknown), o (OS specific), E (exclude),
-  l (large), p (processor specific)
+  D (mbind), l (large), p (processor specific)
 ```
 
 ### 节 (Sections)
