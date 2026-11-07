@@ -16,7 +16,7 @@
 - 最后将结果输出到目标文件中。
 
 这里的*.o文件实际上是一个ar文件（通过 `file \*.o` 可以求证），并不是gcc生成\*.o文件时常用的ELF格式。这种实现思路是go团队借鉴plan9项目的目标文件格式。每个编译单元对应的\*.o文件中包括了两部分，一部分是compiler object file，一部分是linker object file（通过  `ar -t *.o `可以看到内部的 `__.PKGDEF `文件和 `__go__.o `文件）。`-linkobj=???`，分布式构建中为了加速也可以指定只输出compiler object file或者linker object file，比如bazel分布式构建来进行编译加速。
-编译器还会在输出的目标文件中记录一些将来由Linker处理的符号信息，这些符号信息实际上就是一个LSym的列表，在前面进行类型检查过程中，编译器会维护这样一个列表，输出到目标文件中。
+编译器还会在输出的目标文件中记录一些将来由Linker处理的符号信息，这些符号信息实际上就是一个LSym的列表。这个列表到写目标文件阶段才维护，再写入目标文件。
 
 ```go
 // An LSym is the sort of symbol that is written to an object file.
