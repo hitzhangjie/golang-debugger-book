@@ -295,7 +295,7 @@ go标准库 `runtime/debug.PrintStack()`就是这么实现的，只是它考虑�
 
 **那调试器应该如何做呢？**
 
-**研究delve源码发现，在[go-delve/delve@913153e7](https://sourcegraph.com/github.com/go-delve/delve@913153e7ffb62512ccdf850bc37bf3abd3aecc2b/-/blob/pkg/proc/stack.go?subtree=true#L115)及之前的版本中是借助gosym.Table结合DWARF FDE实现的**：
+**研究delve源码发现，在[go-delve/delve@6d405179](https://sourcegraph.com/github.com/go-delve/delve@6d405179/-/blob/pkg/proc/stack.go?subtree=true#L113)之前，其父提交上的[pkg/proc/stack.go](https://sourcegraph.com/github.com/go-delve/delve@6d405179~1/-/blob/pkg/proc/stack.go?subtree=true#L115)是借助gosym.Table结合DWARF FDE实现的**：
 
 - dlv首先利用DWARF .debug_frame section来构建FDE列表；
 - dlv获得tracee的pc值，然后遍历FDE列表，找到FDE地址范围覆盖pc的FDE，这个FDE就是pc对应的函数栈帧了；
