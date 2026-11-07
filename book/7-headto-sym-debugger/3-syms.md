@@ -426,14 +426,16 @@ $ ./a.out
 vim-go
 ```
 
-最后需要注意的是，纯go程序是静态链接的，所以最终构建出的可执行程序中是不存在需要动态符号解析的symbol或section的。但如果是cgo编译的，还是会的。
+最后需要注意的是，在 linux/amd64、go1.24 上，纯go程序走内部链接且使用默认 `-buildmode=exe` 时，最终构建出的可执行程序大体仍是静态链接的 ET_EXEC，其中不存在需要动态符号解析的symbol或section。使用 `-buildmode=pie` 时会出现 `.interp`、`.dynsym`、`.dynamic`，这是因为 PIE 需要动态加载器完成自举重定位，并不代表依赖共享库，所以 `ldd` 有时仍显示 `statically linked`；外部链接、cgo、`-linkshared` 则属于真正的动态链接，同样会带上这些section。关于这些section的来龙去脉、`ldd` 输出的含义以及几种构建方式的对比，见附录 [12.17 PIE可执行文件为什么有.interp/.dynsym/.dynamic](../12-appendix/94-why-pie-has-dyn-sections.md)。
 
 ```
-$ ldd -r test1 // 这是一个简单的纯go程序
+$ ldd -r test1 // 这是一个简单的纯go程序，默认 -buildmode=exe 构建
         not a dynamic executable
 
+$ ldd -r test1-pie // 同一程序的 -buildmode=pie 构建
+        statically linked
+
 $ ldd -r test2 // 这是一个引用了共享库的cgo构建的go程序
-ldd -r seasonsvr
         linux-vdso.so.1 (0x00007fff35dec000)
         /$LIB/libonion.so => /lib64/libonion.so (0x00007f7c6f744000)
         libresolv.so.2 => /lib64/libresolv.so.2 (0x00007f7c6f308000)
