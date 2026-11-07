@@ -186,39 +186,25 @@ typedef struct {
 
 #### 工具演示
 
-下面这个程序用来看完整段头表。`loop2.go`：
+下面这个程序用来看完整段头表。`main.go`：
 
 ```go
 package main
 
 import "fmt"
-import "os"
-import "time"
 
-func init() {
-	go func() {
-		for {
-			fmt.Println("main.func1 pid:", os.Getpid())
-			time.Sleep(time.Second)
-		}
-	}()
-}
 func main() {
-	pid := os.Getpid()
-	for {
-		fmt.Println("main.main pid:", pid)
-		time.Sleep(time.Second * 3)
-	}
+	fmt.Println("hello")
 }
 ```
 
-`go.mod` 写成 `module loop2`、`go 1.24`。构建：
+`go.mod` 写成 `module hello`、`go 1.24`。构建：
 
 ```bash
-$ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -gcflags='all=-N -l' -o loop2 loop2.go
+$ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -gcflags='all=-N -l' -o hello main.go
 ```
 
-运行 `readelf -l loop2` 查看其段头表，共有6个表项，每个段定义包含了类型、在虚拟内存中的地址、读写执行权限，以及引用的sections。通过 `Section to Segment mapping: Segment Sections...`部分可以看到：
+运行 `readelf -l hello` 查看其段头表，共有6个表项，每个段定义包含了类型、在虚拟内存中的地址、读写执行权限，以及引用的sections。通过 `Section to Segment mapping: Segment Sections...`部分可以看到：
 
 - 编号00是 PHDR，编号05是 GNU_STACK，这两项没有引用 section；
 - text segment（编号02的segment其Flags为R+E，表示可读可执行，这就是text segment）包含了如下sections `.text .note.gnu.build-id .note.go.buildid`；
@@ -228,10 +214,10 @@ $ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -gcflags='all=-N -l' 
 > ps：下面的 `readelf -l` 和 `readelf -W -S` 是同一次构建的输出。go1.24.13，linux/amd64。不加 `-W` 时，超过 16 个字符的节名会被截断。
 
 ```bash
-$ readelf -l loop2
+$ readelf -l hello
 
 Elf file type is EXEC (Executable file)
-Entry point 0x478120
+Entry point 0x477ee0
 There are 6 program headers, starting at offset 64
 
 Program Headers:
@@ -242,11 +228,11 @@ Program Headers:
   NOTE           0x0000000000000f78 0x0000000000400f78 0x0000000000400f78
                  0x0000000000000064 0x0000000000000064  R      0x4
   LOAD           0x0000000000000000 0x0000000000400000 0x0000000000400000
-                 0x00000000000b1fd1 0x00000000000b1fd1  R E    0x1000
+                 0x00000000000b1bb1 0x00000000000b1bb1  R E    0x1000
   LOAD           0x00000000000b2000 0x00000000004b2000 0x00000000004b2000
-                 0x00000000000aed10 0x00000000000aed10  R      0x1000
+                 0x00000000000ae938 0x00000000000ae938  R      0x1000
   LOAD           0x0000000000161000 0x0000000000561000 0x0000000000561000
-                 0x0000000000009f80 0x000000000002dca0  RW     0x1000
+                 0x0000000000009f60 0x000000000002dc80  RW     0x1000
   GNU_STACK      0x0000000000000000 0x0000000000000000 0x0000000000000000
                  0x0000000000000000 0x0000000000000000  RW     0x8
 
@@ -347,39 +333,39 @@ typedef struct {
 
 #### 工具演示
 
-OK，还是这个 loop2，我们来看下其链接器角度的视图，可以看到其包含了25个sections，每个section都有类型、偏移量、大小、链接顺序、对齐等信息，用以指导链接器完成链接操作。
+OK，还是这个 hello，我们来看下其链接器角度的视图，可以看到其包含了25个sections，每个section都有类型、偏移量、大小、链接顺序、对齐等信息，用以指导链接器完成链接操作。
 
 ```bash
-$ readelf -W -S loop2
+$ readelf -W -S hello
 There are 25 section headers, starting at offset 0x190:
 
 Section Headers:
   [Nr] Name              Type            Address          Off    Size   ES Flg Lk Inf Al
   [ 0]                   NULL            0000000000000000 000000 000000 00      0   0  0
-  [ 1] .text             PROGBITS        0000000000401000 001000 0b0fd1 00  AX  0   0 32
-  [ 2] .rodata           PROGBITS        00000000004b2000 0b2000 036456 00   A  0   0 32
-  [ 3] .typelink         PROGBITS        00000000004e8460 0e8460 0007a0 00   A  0   0 32
-  [ 4] .itablink         PROGBITS        00000000004e8c00 0e8c00 000070 00   A  0   0 32
-  [ 5] .gosymtab         PROGBITS        00000000004e8c70 0e8c70 000000 00   A  0   0  1
-  [ 6] .gopclntab        PROGBITS        00000000004e8c80 0e8c80 078090 00   A  0   0 32
+  [ 1] .text             PROGBITS        0000000000401000 001000 0b0bb1 00  AX  0   0 32
+  [ 2] .rodata           PROGBITS        00000000004b2000 0b2000 0363f2 00   A  0   0 32
+  [ 3] .typelink         PROGBITS        00000000004e8400 0e8400 0007a0 00   A  0   0 32
+  [ 4] .itablink         PROGBITS        00000000004e8ba0 0e8ba0 000070 00   A  0   0 32
+  [ 5] .gosymtab         PROGBITS        00000000004e8c10 0e8c10 000000 00   A  0   0  1
+  [ 6] .gopclntab        PROGBITS        00000000004e8c20 0e8c20 077d18 00   A  0   0 32
   [ 7] .go.buildinfo     PROGBITS        0000000000561000 161000 000110 00  WA  0   0 16
   [ 8] .go.fipsinfo      PROGBITS        0000000000561120 161120 000078 00  WA  0   0 32
-  [ 9] .noptrdata        PROGBITS        00000000005611a0 1611a0 004e22 00  WA  0   0 32
-  [10] .data             PROGBITS        0000000000565fe0 165fe0 004f92 00  WA  0   0 32
-  [11] .bss              NOBITS          000000000056af80 16af80 020290 00  WA  0   0 32
-  [12] .noptrbss         NOBITS          000000000058b220 18b220 003a80 00  WA  0   0 32
+  [ 9] .noptrdata        PROGBITS        00000000005611a0 1611a0 004e02 00  WA  0   0 32
+  [10] .data             PROGBITS        0000000000565fc0 165fc0 004f92 00  WA  0   0 32
+  [11] .bss              NOBITS          000000000056af60 16af60 020290 00  WA  0   0 32
+  [12] .noptrbss         NOBITS          000000000058b200 18b200 003a80 00  WA  0   0 32
   [13] .debug_abbrev     PROGBITS        0000000000000000 16b000 000157 00   C  0   0  1
-  [14] .debug_line       PROGBITS        0000000000000000 16b157 01a116 00   C  0   0  1
-  [15] .debug_frame      PROGBITS        0000000000000000 18526d 009a12 00   C  0   0  1
-  [16] .debug_gdb_scripts PROGBITS        0000000000000000 18ec7f 000018 00      0   0  1
-  [17] .debug_info       PROGBITS        0000000000000000 18ec97 036768 00   C  0   0  1
-  [18] .debug_loc        PROGBITS        0000000000000000 1c53ff 019c77 00   C  0   0  1
-  [19] .debug_ranges     PROGBITS        0000000000000000 1df076 003e0f 00   C  0   0  1
+  [14] .debug_line       PROGBITS        0000000000000000 16b157 01a065 00   C  0   0  1
+  [15] .debug_frame      PROGBITS        0000000000000000 1851bc 0099a8 00   C  0   0  1
+  [16] .debug_gdb_scripts PROGBITS        0000000000000000 18eb64 000018 00      0   0  1
+  [17] .debug_info       PROGBITS        0000000000000000 18eb7c 036676 00   C  0   0  1
+  [18] .debug_loc        PROGBITS        0000000000000000 1c51f2 019ba7 00   C  0   0  1
+  [19] .debug_ranges     PROGBITS        0000000000000000 1ded99 003dfd 00   C  0   0  1
   [20] .note.gnu.build-id NOTE            0000000000400fdc 000fdc 000024 00   A  0   0  4
   [21] .note.go.buildid  NOTE            0000000000400f78 000f78 000064 00   A  0   0  4
-  [22] .shstrtab         STRTAB          0000000000000000 20bf55 000127 00      0   0  1
-  [23] .symtab           SYMTAB          0000000000000000 1e2e88 013698 18     24 102  8
-  [24] .strtab           STRTAB          0000000000000000 1f6520 015a35 00      0   0  1
+  [22] .shstrtab         STRTAB          0000000000000000 20bb4e 000127 00      0   0  1
+  [23] .symtab           SYMTAB          0000000000000000 1e2b98 0135f0 18     24 102  8
+  [24] .strtab           STRTAB          0000000000000000 1f6188 0159c6 00      0   0  1
 Key to Flags:
   W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
   L (link order), O (extra OS processing required), G (group), T (TLS),
