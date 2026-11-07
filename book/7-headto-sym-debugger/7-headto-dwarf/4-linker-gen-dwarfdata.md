@@ -42,7 +42,7 @@ func Main() {
 
 - `dwarfGenerateDebugInfo`:
 
-  - 在符号名称被修改(mangled)之前执行 （源代码中的函数 `func Add(a, b int) int`，经过名称修饰后可能变成 `go.info.Add$main$int$int$int`）
+  - 在符号名称被修改(mangled)之前执行（Go 符号是包名.名字，`main.Add` 的 DWARF 信息符号是 `go:info.main.Add`）
   - 负责生成所有类型、变量和函数的调试信息条目
   - 主要处理 DWARF 信息的内容生成
 - `dwarfGenerateDebugSyms`:
