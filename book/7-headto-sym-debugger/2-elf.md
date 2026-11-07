@@ -373,6 +373,31 @@ Key to Flags:
   D (mbind), l (large), p (processor specific)
 ```
 
+### 用 readelf 看 Go 产物的文件布局
+
+开头说 Go 内部链接常见的排布是节头表紧跟段头表、节数据在后。同一份 hello（go1.24.13，linux/amd64）可以把这句话对到文件偏移上。`readelf -h hello` 里和布局有关的是这几行：
+
+```bash
+$ readelf -h hello
+  Start of program headers:          64 (bytes into file)
+  Start of section headers:          400 (bytes into file)
+  Size of this header:               64 (bytes)
+  Size of program headers:           56 (bytes)
+  Number of program headers:         6
+  Size of section headers:           64 (bytes)
+  Number of section headers:         25
+```
+
+文件头 64 字节，占 [0, 0x40)。段头表从 64（`e_phoff`）起，6 项 × 56 字节 = 0x150，到 0x190 结束。`readelf -l` 的 “starting at offset 64” 和 PHDR 的 FileSiz `0x150` 就是这块。节头表从 400（`e_shoff`，即 0x190）起，25 项 × 64 字节 = 0x640，到 0x7d0 结束。`readelf -W -S` 的 “starting at offset 0x190” 就是这个 `e_shoff`。
+
+文件前部就是这三段：文件头，接着段头表，接着节头表。节数据在这三段之后。
+
+节数据按 `readelf -W -S` 的 `Off` 看。`[Nr]` 只是节头表下标。按 `Off` 排，节头表结束之后最先是 `.note.go.buildid`（0xf78，长度 0x64）和 `.note.gnu.build-id`（0xfdc，长度 0x24），`.text` 从 0x1000 起。0xfdc + 0x24 = 0x1000，两个 note 和 `.text` 首尾相接，都在 0x7d0 之后。
+
+0x7d0 到 0xf78 没有节，是对齐留下的填充。文件偏移为 0 的那个 PT_LOAD，FileSiz 是 0xb1bb1，这段 0 写在文件里，一般不是文件系统上的稀疏空洞（sparse hole）。`hexdump -C -s 0x780 -n 0x200 hello` 从节头表末尾看 512 字节：0x7d0 之前还是最后几项节头，过了 0x7d0 就是 0。`hexdump -C -s 0xf70 -n 0x20 hello` 对着 note 的起点：0xf78 之前仍是 0，从 0xf78 起才是 `.note.go.buildid`。
+
+节头表里的先后也不是文件上的先后。`[1]` 是 `.text`，`Off` 是 0x1000；`.note.go.buildid` 在 `[21]`，`Off` 是 0xf78，比 `.text` 靠前。ELF 文件就是从偏移 0 起的连续字节，位置以 `e_phoff`、`e_shoff` 和各节的 `Off` 为准。
+
 ### 节 (Sections)
 
 #### 类型定义
