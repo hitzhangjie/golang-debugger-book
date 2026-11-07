@@ -87,14 +87,14 @@ ELF 符号表主要记录的是具有外部作用范围的对象，包括：
 - 静态函数和静态变量（仅对当前源文件或编译单元可见）
 - 以及其他需要跨文件或模块访问的符号
 
-我们这里所说的符号，是指的.symtab中的表项，并不是DWARF调试信息，它主要是为了方便链接器进行符号解析和重定位而记录的。但是它记录的这些符号信息也确实会被某些调试器使用，尤其是类似DWARF一样的调试信息标准成为业界标准之前。实际上dlv就完全没有使用.symtab，但是gdb有使用，我们在扩展阅读部分也进行了介绍。
+我们这里所说的符号，是指的.symtab中的表项，并不是DWARF调试信息，它主要是为了方便链接器进行符号解析和重定位而记录的。但是它记录的这些符号信息也确实会被某些调试器使用，尤其是类似DWARF一样的调试信息标准成为业界标准之前。dlv 的源级调试主路径是 DWARF。加载 ELF 时，它仍读取 .symtab。一项用途是查找 TLS 符号，计算 g 指针相对于线程 TLS 的偏移：AArch64 查找 `runtime.tls_g`，x86_64 与 386 查找 `runtime.tlsg`，再结合 PT_TLS 段计算；找不到符号时，部分架构使用默认偏移，见 [setGStructOffsetElf](https://github.com/hitzhangjie/delve/blob/50b8d4189fc63defeb362dc7b0f2b767363e8b3e/pkg/proc/bininfo.go#L1936-L1992) 与 [getSymbol](https://github.com/hitzhangjie/delve/blob/50b8d4189fc63defeb362dc7b0f2b767363e8b3e/pkg/proc/bininfo.go#L1994-L2008)（`getSymbol` 调用 `exe.Symbols()` 读取这张静态符号表）。另一项用途是读取函数符号，供反汇编等场景按地址显示符号名。将 .symtab strip 掉之后，源级调试的核心能力多半仍可依靠 .gopclntab；找不到 TLS 符号时，相关架构改用默认偏移，反汇编也不再能从 .symtab 按地址取出函数符号名。gdb 对 .symtab 的使用，见 [GDB为什么同时使用.symtab和DWARF](../12-appendix/92-why-gdb-uses-symtab.md)。
 
 还记得我们的初衷吗，“让大家认识到那些高屋建瓴的设计是如何协调compiler、linker、loader、debugger工作的”，读者不妨大胆多问几个为什么？没多少人能不做一番调研就说他精通这些。
 
 - 编译构建过程中.symtab是如何生成的？本文已介绍
 - 链接、加载过程中.symtab有什么作用？链接时符号解析、重定位
 - 构建产物中的.symtab为什么要保留？留给nm、readelf和调试器查看符号名与地址，可用strip去掉；共享库再被链接时依赖方用.dynsym
-- 删掉它对gdb、dlv之类调试器有没有影响？对gdb有影响，对dlv应该没影响
+- 删掉它对gdb、dlv之类调试器有没有影响？对gdb有影响。dlv 的源级调试主要靠 DWARF。它读取 .symtab，用来查找 TLS 符号并计算 g 指针相对于线程 TLS 的偏移（AArch64 为 `runtime.tls_g`，x86_64 与 386 为 `runtime.tlsg`，结合 PT_TLS；找不到时部分架构使用默认偏移），也用来在反汇编等场景按地址显示函数符号名。strip 掉 .symtab 后，源级调试的核心能力多半仍可依靠 .gopclntab；找不到 TLS 符号时，相关架构改用默认偏移，反汇编也不再能从 .symtab 按地址取出函数符号名
 - 从共享库中删掉.symtab，对依赖它的程序的构建有没有影响？依赖方链接使用.dynsym，删掉.symtab不必然导致链接失败
 - 从共享库中删掉.symtab，对依赖它的程序的运行有没有影响？动态链接器同样使用.dynsym，删掉.symtab不必然导致加载时动态链接失败，主要影响 nm 和部分调试器
 - 从共享库中删掉.dynsym，对依赖它的程序的构建有没有影响？依赖方链接使用.dynsym，删掉后通常导致链接失败，比删掉.symtab更致命
