@@ -419,9 +419,7 @@ String dump of section '.note.go.buildid':
 
 本文较为详细地介绍了ELF文件结构，介绍了ELF文件头、段头表、节头表的定义，以及通过实例演示了段头表、节头表对节的引用，以及如何通过readelf命令进行查看。我们还介绍了一些常见的节的作用，go语言中为了支持高级特性自主扩展的一些节。读完本节内容后相信读者已经对ELF文件结构有了一个初步的认识。
 
-接下来，我们将介绍符号表、符号的内容，这里先简单提一下。说起符号，ELF .symtab、DWARF .debug_* sections都提供了“符号”信息，编译过程中会记录下来有哪些符号，链接器连接过程中会决定将上述哪些符号生成到.symtab，以及哪些调试类型的符号需要生成信息到.debug_* sections。现在来看.debug_* sections是专门为调试准备的，是链接器严格按照DWARF标准、语言设计、和调试器约定来生成的，.symtab则主要包含链接器符号解析、重定位需要用到的符号。.symtab中其实也可以包含用于支持调试的符号信息，主要看链接器是个什么策略。
-
-比如，gdb作为一款诞生年代很久的调试器，就非常依赖.symtab中的符号信息来进行调试。DWARF是后起之秀，尽管gdb现在也逐渐往DWARF上去靠，但是为了兼容性（如支持老的二进制调试、工具链）还是会保留利用符号表调试的实现方式。如果想让gdb也能调试go程序，就得了解gdb的工作机制，在.symtab, .debug_\* sections中生成其需要的信息，see：[GDB为什么同时使用.symtab和DWARF](./92-why-gdb-uses-symtab.md)。
+接下来将介绍符号表及符号。`.symtab` 与 `.debug_*` 里都会出现“符号”，用途并不相同；不同场景下各指什么，见第7章开头 [符号级调试基础](./README.md)。gdb 同时使用 `.symtab` 与 DWARF 的说明，见 [GDB为什么同时使用.symtab和DWARF](../12-appendix/92-why-gdb-uses-symtab.md)。
 
 ### 参考文献
 
