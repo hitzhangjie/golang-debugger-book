@@ -95,9 +95,9 @@ typedef struct {
 - e_phnum: 段头表中的条目数量；
 - e_shentsize: 节头表中每个条目占用的空间大小；
 - e_shnum: 节头表中的条目数量；
-- e_shstrndx: 节名字符串表在节头表中的索引，该节按惯例是.shstrtab；
+- e_shstrndx: 存放节名的字符串表在节头表中的下标，惯例是.shstrtab；
 
-> ps：ELF文件头其他字段都比较容易懂。.shstrtab与.strtab存储方式相同，.shstrtab存节名，.strtab存符号名。man手册里“字符串表可表示符号名和节名”是对字符串表的总述，不是.strtab的定义。
+> ps：ELF文件头其他字段都比较容易懂。.strtab存符号名，.shstrtab存节名；两者都是字符串表，存储方式相同。
 >
 > **String Table (.strtab section)**
 >
@@ -107,7 +107,7 @@ typedef struct {
 > | **10** | `i`  | `a`  | `b` | `l` | `e`  | `\0` | `a`  | `b` | `l` | `e` |
 > | **20** | `\0` | `\0` | `x` | `x` | `\0` | ` ` |        |       |       |       |
 >
-> 假定有上述.strtab，那么idx=0对应的字符串为none，idx=1的对应着字符串为“name.”，idx=7的对应的字符串为“Variable”。对于.shstrtab，它的存储方式与.strtab相同，但是存储的是所有节的名字，而节的名字在.shstrtab中的索引由Elf32/Elf64_Shdr.sh_name来指定。
+> 假定有上述.strtab，那么idx=0对应的字符串为none，idx=1的对应着字符串为“name.”，idx=7的对应的字符串为“Variable”。对于.shstrtab，它的存储方式与.strtab相同，但是存储的是所有节的名字，而节的名字在.shstrtab中的字节偏移由Elf32/Elf64_Shdr.sh_name来指定。
 
 ### 段头表 (Program Header Table)
 
@@ -282,7 +282,7 @@ typedef struct {
 
 上面分别是32位、64位的定义，下面详细解释下每个字段的含义:
 
-- sh_name: section name在节头字符串表中的索引，该表按惯例是.shstrtab；
+- sh_name: 节名在.shstrtab中的字节偏移；
 - sh_type: section类型
   - SHT_NULL: 空section，不包含任何数据；
   - SHT_PROGBITS: 代码段、数据段；
