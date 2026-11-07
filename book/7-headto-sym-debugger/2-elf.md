@@ -419,7 +419,9 @@ String dump of section '.note.go.buildid':
 
 本文较为详细地介绍了ELF文件结构，介绍了ELF文件头、段头表、节头表的定义，以及通过实例演示了段头表、节头表对节的引用，以及如何通过readelf命令进行查看。我们还介绍了一些常见的节的作用，go语言中为了支持高级特性自主扩展的一些节。读完本节内容后相信读者已经对ELF文件结构有了一个初步的认识。
 
-接下来将介绍符号表及符号。`.symtab` 与 `.debug_*` 里都会出现“符号”，用途并不相同；不同场景下各指什么，见第7章开头 [符号级调试基础](./README.md)。gdb 同时使用 `.symtab` 与 DWARF 的说明，见 [GDB为什么同时使用.symtab和DWARF](../12-appendix/92-why-gdb-uses-symtab.md)。
+不同场景下，“符号”所指并不相同。`.symtab` 中的符号用于链接时的符号解析与重定位，`.debug_*` 中的信息面向调试器，编译器分析阶段的内部符号表则用于类型检查和代码生成。
+
+接下来介绍 ELF 中的符号表与符号，以及它们的一些作用。nm、readelf 等第三方工具会读取 `.symtab`，查看函数与全局变量的名称和地址。有的调试器（如 gdb）也会在调试中使用 `.symtab` 完成部分操作，见 [GDB为什么同时使用.symtab和DWARF](../12-appendix/92-why-gdb-uses-symtab.md)。
 
 ### 参考文献
 
