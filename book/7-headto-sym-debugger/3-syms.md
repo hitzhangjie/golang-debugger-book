@@ -153,7 +153,12 @@ typedef struct {
   - STV_INTERNAL: 处理器特定的隐藏类型；
   - STV_HIDDEN: 符号对其他模块不可见；本地模块中的引用，只能解析为当前模块中的符号；
   - STV_PROTECTED: 符号对其他模块可见，但本模块内的引用必须绑定到本模块中的定义，不可被预占；
-- st_shndx: 每个符号都是定义在某个section中的，比如变量名、函数名、常量名等，这里表示其从属的section header在节头表中的索引；
+- st_shndx: 符号所关联的 section header 在节头表中的索引。变量名、函数名等若定义在某个 section 中，这里是该节在节头表中的下标，readelf -s 的 Ndx 列直接显示这个数字。并非每个符号都定义在某个 section 中。不指向节头表的特殊值有：
+  - SHN_UNDEF：未定义。符号表第 0 项固定取此值；本模块未定义、留待链接器解析的符号也取此值。readelf 显示为 UND，即下文示例第 0 项；
+  - SHN_ABS：绝对值，不随重定位改变。readelf 显示为 ABS，下文示例中的文件名符号 go.go 即是；
+  - SHN_COMMON：公共符号，如尚未分配存储的未初始化外部变量，链接时才归入某个 section。readelf 显示为 COM。
+
+  实际节索引大到无法放进该字段时，记为 SHN_XINDEX，真正的索引在 SHT_SYMTAB_SHNDX 节中。
 
 ### 读取符号表
 
