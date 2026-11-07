@@ -95,9 +95,9 @@ typedef struct {
 - e_phnum: 段头表中的条目数量；
 - e_shentsize: 节头表中每个条目占用的空间大小；
 - e_shnum: 节头表中的条目数量；
-- e_shstrndx: 存储了节名字的节在节头表中的索引 (可能是.strtab或者.shstrtab)；
+- e_shstrndx: 存放节名的字符串表在节头表中的下标，惯例是.shstrtab；
 
-> ps：ELF文件头其他字段都比较容易懂，关于.shstrtab，它的数据存储与.strtab雷同，只是它用来存section名 (man手册显示.strtab除了可以存储符号名，也可以存储Section名)。
+> ps：ELF文件头其他字段都比较容易懂。.strtab存符号名，.shstrtab存节名；两者都是字符串表，存储方式相同。
 >
 > **String Table (.strtab section)**
 >
@@ -107,7 +107,7 @@ typedef struct {
 > | **10** | `i`  | `a`  | `b` | `l` | `e`  | `\0` | `a`  | `b` | `l` | `e` |
 > | **20** | `\0` | `\0` | `x` | `x` | `\0` | ` ` |        |       |       |       |
 >
-> 假定有上述.strtab，那么idx=0对应的字符串为none，idx=1的对应着字符串为“name.”，idx=7的对应的字符串为“Variable”。对于.shstrtab，它的存储方式与.strtab相同，但是存储的是所有节的名字，而节的名字在.shstrtab中的索引由Elf32/Elf64_Shdr.s_name来指定。
+> 假定有上述.strtab，那么idx=0对应的字符串为none，idx=1的对应着字符串为“name.”，idx=7的对应的字符串为“Variable”。对于.shstrtab，它的存储方式与.strtab相同，但是存储的是所有节的名字，而节的名字在.shstrtab中的字节偏移由Elf32/Elf64_Shdr.sh_name来指定。
 
 ### 段头表 (Program Header Table)
 
@@ -152,7 +152,7 @@ typedef struct {
   - PT_SHLIB: 该类型被保留，但语义未指定。包含这个类型的段表项的程序不符合ABI规范；
   - PT_PHDR: 该表项指定了段头表本身的位置和size；
   - PT_LOPROC, PT_HIPROC: 该表项指定了一个范围[PT_LOPROC, PTHIPROC]，这个范围内数据用来保存处理特定机制信息；
-  - PT_GNU_STACK: GNU扩展，Linux内核使用该字段来p_flags中设置的Stack的状态；TODO
+  - PT_GNU_STACK: GNU扩展，Linux内核用该段p_flags决定栈是否可执行；
 - p_offset: 表示该段相对于文件开头的偏移量；
 - p_vaddr: 表示该段数据加载到内存后的虚拟地址；
 - p_paddr: 表示该段在内存中加载的物理地址；
@@ -302,22 +302,22 @@ typedef struct {
 
 上面分别是32位、64位的定义，下面详细解释下每个字段的含义:
 
-- sh_name: section name的偏移量，即section的名字在.strtab中的偏移量；
+- sh_name: 节名在.shstrtab中的字节偏移；
 - sh_type: section类型
   - SHT_NULL: 空section，不包含任何数据；
   - SHT_PROGBITS: 代码段、数据段；
   - SHT_SYMTAB: 符号表；
   - SHT_STRTAB: 字符串表；
-  - SHT_RELAG: 重定位表；
+  - SHT_RELA: 带显式加数的重定位表；
   - SHT_HASH: 符号hash表；
   - SHT_DYNAMIC: 动态链接表；
   - SHT_NOTE: 符号注释；
   - SHT_NOBITS: 空section，不包含任何数据；
-  - SHT_REL: 重定位表；
+  - SHT_REL: 不带显式加数的重定位表；
   - SHT_SHLIB: 预留但是缺少明确定义；
   - SHT_DYNSYM: 动态符号表；
   - SHT_LOPROC, SHT_HIPROC: 定义了一个范围[SHT_LOPROC, SHT_HIPROC]用于处理器特定机制；
-  - SHT_LOUSER, SHT_HIUSER: 定义了一个范围[SHT_LOUSER, SHT_HIPROC]预留给给应用程序；
+  - SHT_LOUSER, SHT_HIUSER: 定义了一个范围[SHT_LOUSER, SHT_HIUSER]预留给应用程序；
 - sh_flags: section标志位
   - SHF_WRITE: 进程执行期间可写；
   - SHF_ALLOC: 进程执行期间需要分配并占据内存；
@@ -326,10 +326,10 @@ typedef struct {
 - sh_addr: 如果当前section需要被加载到内存中，表示在内存中的虚拟地址；
 - sh_offset: 表示当前section相对文件开头的偏移量；
 - sh_size: section大小；
-- sh_link: 表示要链接的下一个节头表的索引，用于section链接顺序；
+- sh_link: 节头表索引，含义随sh_type变化：符号表指向字符串表，重定位节指向符号表；
 - sh_info: section额外信息，具体解释依赖于sh_type；
 - sh_addralign: 对齐方式；
-- sh_entsize: 表示每个section的大小；
+- sh_entsize: 定长表项的单条字节数（如符号表），不是这类表时为0；节的大小是sh_size；
 
 #### 工具演示
 
@@ -389,7 +389,7 @@ ELF文件会包含很多的sections，前面给出的测试实例中就包含了
 - .bss：未经初始化的全局变量，在ELF文件中只是个占位符，不占用实际空间；
 - .symtab：符号表，每个可重定位文件都有一个符号表，存放程序中定义的全局函数和全局变量的信息，注意它不包含局部变量信息，局部非静态变量由栈来管理，它们对链接器符号解析、重定位没有帮助。
 - .debug_*: 调试信息，调试器读取该信息以支持符号级调试（如gcc -g生成，go build默认生成）；
-- .strtab：字符串表，包括.symtab和.[z]debug_*节引用的字符串值、section名；
+- .strtab：字符串表，包括.symtab和.[z]debug_*节引用的字符串值；节名在.shstrtab；
 - .rel.text：一个.text section中引用的位置及符号列表，当链接器尝试把这个目标文件和其他文件链接时，需要对其中符号进行解析、重定位成正确的地址；
 - .rel.data：引用的一些全局变量的位置及符号列表，和.rel.text有些类似，也需要符号解析、重定位成正确的地址；
 
