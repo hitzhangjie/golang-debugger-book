@@ -375,7 +375,9 @@ Key to Flags:
 
 ### 用 readelf 看 Go 产物的文件布局
 
-开头说 Go 内部链接常见的排布是节头表紧跟段头表、节数据在后。同一份 hello（go1.24.13，linux/amd64）可以把这句话对到文件偏移上。`readelf -h hello` 里和布局有关的是这几行：
+开头说 Go 内部链接常见的排布是节头表紧跟段头表、节数据在后。还是同一份 hello（go1.24.13，linux/amd64）。
+
+`readelf -h hello` 里和布局有关的是这几行：64 是 `e_phoff`，400 是 `e_shoff`。
 
 ```bash
 $ readelf -h hello
@@ -388,15 +390,54 @@ $ readelf -h hello
   Number of section headers:         25
 ```
 
-文件头 64 字节，占 [0, 0x40)。段头表从 64（`e_phoff`）起，6 项 × 56 字节 = 0x150，到 0x190 结束。`readelf -l` 的 “starting at offset 64” 和 PHDR 的 FileSiz `0x150` 就是这块。节头表从 400（`e_shoff`，即 0x190）起，25 项 × 64 字节 = 0x640，到 0x7d0 结束。`readelf -W -S` 的 “starting at offset 0x190” 就是这个 `e_shoff`。
+文件头占 [0, 0x40)。段头表 6 项 × 56 字节 = 0x150，到 0x190 结束，和 `readelf -l` 里 PHDR 的 FileSiz `0x150` 是同一块。节头表 25 项 × 64 字节 = 0x640，从 0x190 到 0x7d0。前部就是文件头、段头表、节头表。
 
-文件前部就是这三段：文件头，接着段头表，接着节头表。节数据在这三段之后。
+节数据看 `Off`。`[Nr]` 只是节头表下标。从前面那份 `readelf -W -S` 抽出这几行：节头表从 0x190 开始，`.note.go.buildid` 在 0xf78，`.note.gnu.build-id` 在 0xfdc，`.text` 在 0x1000。`[1]` 是 `.text`，note 排在 `[20]`、`[21]`，文件偏移更靠前。
 
-节数据按 `readelf -W -S` 的 `Off` 看。`[Nr]` 只是节头表下标。按 `Off` 排，节头表结束之后最先是 `.note.go.buildid`（0xf78，长度 0x64）和 `.note.gnu.build-id`（0xfdc，长度 0x24），`.text` 从 0x1000 起。0xfdc + 0x24 = 0x1000，两个 note 和 `.text` 首尾相接，都在 0x7d0 之后。
+```bash
+$ readelf -W -S hello
+There are 25 section headers, starting at offset 0x190:
 
-0x7d0 到 0xf78 没有节，是对齐留下的填充。文件偏移为 0 的那个 PT_LOAD，FileSiz 是 0xb1bb1，这段 0 写在文件里，一般不是文件系统上的稀疏空洞（sparse hole）。`hexdump -C -s 0x780 -n 0x200 hello` 从节头表末尾看 512 字节：0x7d0 之前还是最后几项节头，过了 0x7d0 就是 0。`hexdump -C -s 0xf70 -n 0x20 hello` 对着 note 的起点：0xf78 之前仍是 0，从 0xf78 起才是 `.note.go.buildid`。
+Section Headers:
+  [Nr] Name              Type            Address          Off    Size   ES Flg Lk Inf Al
+  [ 1] .text             PROGBITS        0000000000401000 001000 0b0bb1 00  AX  0   0 32
+  ...
+  [20] .note.gnu.build-id NOTE            0000000000400fdc 000fdc 000024 00   A  0   0  4
+  [21] .note.go.buildid  NOTE            0000000000400f78 000f78 000064 00   A  0   0  4
+```
 
-节头表里的先后也不是文件上的先后。`[1]` 是 `.text`，`Off` 是 0x1000；`.note.go.buildid` 在 `[21]`，`Off` 是 0xf78，比 `.text` 靠前。ELF 文件就是从偏移 0 起的连续字节，位置以 `e_phoff`、`e_shoff` 和各节的 `Off` 为准。
+0x7d0 到 0xf78 没有节。`hexdump -C -s 0x780 -n 0x200 hello` 从节头表末尾看 512 字节：0x7d0 之前是最后几项节头，之后的全 0 行被折成 `*`。
+
+```bash
+$ hexdump -C -s 0x780 -n 0x200 hello
+00000780  08 00 00 00 00 00 00 00  18 00 00 00 00 00 00 00  |................|
+00000790  b6 00 00 00 03 00 00 00  00 00 00 00 00 00 00 00  |................|
+000007a0  00 00 00 00 00 00 00 00  88 61 1f 00 00 00 00 00  |.........a......|
+000007b0  c6 59 01 00 00 00 00 00  00 00 00 00 00 00 00 00  |.Y..............|
+000007c0  01 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  |................|
+000007d0  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  |................|
+*
+00000980
+```
+
+`hexdump -C -s 0xf70 -n 0xa0 hello` 对着 note 和 `.text` 的交界：0xf78 之前仍是 0，接着是名字 `Go` 的 `.note.go.buildid`、名字 `GNU` 的 `.note.gnu.build-id`，0x1000 起是 `.text`。
+
+```bash
+$ hexdump -C -s 0xf70 -n 0xa0 hello
+00000f70  00 00 00 00 00 00 00 00  04 00 00 00 53 00 00 00  |............S...|
+00000f80  04 00 00 00 47 6f 00 00  30 5a 34 6b 68 5a 4c 56  |....Go..0Z4khZLV|
+00000f90  34 36 55 64 66 44 37 56  6e 43 75 4e 2f 4d 74 37  |46UdfD7VnCuN/Mt7|
+00000fa0  76 59 4f 46 69 70 37 43  39 55 37 44 56 46 72 4d  |vYOFip7C9U7DVFrM|
+00000fb0  47 2f 47 73 38 50 67 63  54 64 52 63 72 39 77 49  |G/Gs8PgcTdRcr9wI|
+00000fc0  35 37 55 59 50 47 2f 66  38 34 49 53 44 4c 53 59  |57UYPG/f84ISDLSY|
+00000fd0  63 5f 43 5a 4f 5f 79 4e  74 46 38 00 04 00 00 00  |c_CZO_yNtF8.....|
+00000fe0  14 00 00 00 03 00 00 00  47 4e 55 00 6d 8c fa 48  |........GNU.m..H|
+00000ff0  92 6d 82 67 18 92 36 22  17 df 13 86 12 44 95 9c  |.m.g..6".....D..|
+00001000  49 3b 66 10 76 53 55 48  89 e5 48 83 ec 10 48 83  |I;f.vSUH..H...H.|
+00001010
+```
+
+这些 0 写在文件偏移为 0 的那个 PT_LOAD 里（FileSiz `0xb1bb1`），是对齐填充，一般不是稀疏空洞。文件就是从偏移 0 起的连续字节，位置以 `e_phoff`、`e_shoff` 和 `Off` 为准。
 
 ### 节 (Sections)
 
