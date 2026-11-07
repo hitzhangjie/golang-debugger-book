@@ -15,7 +15,7 @@
 - 类型检查无误后开始执行函数编译（buildssa、代码优化、生成plist、转换为平台特定机器码），
 - 最后将结果输出到目标文件中。
 
-这里的*.o文件实际上是一个ar文件（通过 `file \*.o` 可以求证），并不是gcc生成\*.o文件时常用的ELF格式。这种实现思路是go团队借鉴plan9项目的目标文件格式。每个编译单元对应的\*.o文件中包括了两部分，一部分是compiler object file，一部分是linker object file（通过  `ar -t *.o `可以看到内部的 `__.PKGDEF `文件和 `__go__.o `文件）。`-linkobj=???`，分布式构建中为了加速也可以指定只输出compiler object file或者linker object file，比如bazel分布式构建来进行编译加速。
+这里的*.o文件实际上是一个ar文件（通过 `file \*.o` 可以求证），并不是gcc生成\*.o文件时常用的ELF格式。这种实现思路是go团队借鉴plan9项目的目标文件格式。每个编译单元对应的\*.o文件中包括了两部分，一部分是compiler object file，一部分是linker object file。`go tool compile` 默认把这两部分写进同一个 ar，`ar -t` 看到的成员是 `__.PKGDEF` 和 `_go_.o`。指定 `-linkobj` 才会拆成两个文件，`-o` 只写 compiler object file，linker object file 写到 `-linkobj` 给出的文件。分布式构建（比如 bazel）会这样拆开，后续编译只拿 compiler object file，链接时才用 linker object file。
 编译器还会在输出的目标文件中记录一些将来由Linker处理的符号信息，这些符号信息实际上就是一个LSym的列表，在前面进行类型检查过程中，编译器会维护这样一个列表，输出到目标文件中。
 
 ```go
@@ -395,7 +395,7 @@ func main() {
 
 > 在[how-go-build-works](./0-how-go-build-works.md)小节中我们介绍过importcfg.link，还记得吧？go程序构建时依赖了标准库、运行时，需要和这些一起链接才可以。
 
-之前我们提到，可重定位文件中，存在一些.rel.text、.rel.data sections来实现重定位，但我们也提到了，go目标文件是自定义的，它参考了plan9目标文件格式（当然现在又调整了 `go tool link --go115newobj`），Linux binutils提供的readelf工具是无法读取的，go提供了工具objdump来查看。
+之前我们提到，可重定位文件中，存在一些.rel.text、.rel.data sections来实现重定位，但我们也提到了，go目标文件是自定义的，它参考了plan9目标文件格式（`-go115newobj` 是 Go 1.15 的过渡选项，现在的链接器已经不再提供），Linux binutils提供的readelf工具是无法读取的，go提供了工具objdump来查看。
 
 ```bash
 $ go tool objdump main.o | grep R_
