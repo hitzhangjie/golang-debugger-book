@@ -354,7 +354,7 @@ $ go tool nm main.o
 
   "?" The symbol type is unknown, or object file format specific.
   ```
-- 第三列，symbol name，符号名在字符串表中索引，对应字符串是存储在字符串表中；
+- 第三列，symbol name，已经解码出来的符号名字符串。ELF 符号表项里的 `st_name` 才是符号名在字符串表中的索引，`nm` 输出时已经把它解成了这一列的名字；
 
 我们回头再看下我们的示例来加深下理解，OK，让我们关注下main函数本身，我们注意到nm输出显示符号 `%22%22.main`是定义在虚地址 `0x13ed`处，并且表示它是一个.text section中定义的符号，那只有一种可能要么是package main，要么是func main.main，其实是main.main。
 
