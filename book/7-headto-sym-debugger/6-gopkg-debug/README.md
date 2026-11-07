@@ -20,7 +20,7 @@ go标准库package `debug/*`，专门用来读取、解析go编译工具链生�
 
 -   `debug/elf`支持ELF文件的读取、解析，提供了方法来根据名称定位section；
 -   `debug/gosym`支持.gosymtab符号表、.gopclntab行号表的解析。设计上.gopclntab中通过pcsp记录了pc值对应的栈帧大小，所以很容易定位返回地址，可进一步确定caller，重复该过程可跟踪goroutine调用栈信息，如panic时打印的stacktrace信息；
--   `debug/dwarf`DWARF数据的读取、解析，数据压缩(.debug\_*)、不压缩(.zdebug_）两种格式均支持；
+-   `debug/dwarf`DWARF数据的读取、解析：`.debug_*` 为未压缩节，或 ELF 上带 `SHF_COMPRESSED` 的压缩节；`.zdebug_*` 为旧式 zlib 压缩节。ELF 自 Go 1.19 起用前者，PE 仍用 `.zdebug_*`，Mach-O 仍用 `__zdebug_*`；
 
 >   `debug`下几个与ELF无关的package说明：
 >
