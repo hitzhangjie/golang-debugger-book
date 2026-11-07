@@ -186,17 +186,49 @@ typedef struct {
 
 #### 工具演示
 
-下面这个示例，则展示了测试程序 golang-debugger-lessons/testdata/loop2 的完整段头表定义，运行 `readelf -l`查看其段头表，共有6个表项，每个段定义包含了类型、在虚拟内存中的地址、读写执行权限，以及引用的sections。通过 `Section to Segment mapping: Segment Sections...`部分可以看到：
+下面这个程序用来看完整段头表。`loop2.go`：
+
+```go
+package main
+
+import "fmt"
+import "os"
+import "time"
+
+func init() {
+	go func() {
+		for {
+			fmt.Println("main.func1 pid:", os.Getpid())
+			time.Sleep(time.Second)
+		}
+	}()
+}
+func main() {
+	pid := os.Getpid()
+	for {
+		fmt.Println("main.main pid:", pid)
+		time.Sleep(time.Second * 3)
+	}
+}
+```
+
+`go.mod` 写成 `module loop2`、`go 1.24`。构建：
+
+```bash
+$ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -gcflags='all=-N -l' -o loop2 loop2.go
+```
+
+运行 `readelf -l loop2` 查看其段头表，共有6个表项，每个段定义包含了类型、在虚拟内存中的地址、读写执行权限，以及引用的sections。通过 `Section to Segment mapping: Segment Sections...`部分可以看到：
 
 - 编号00是 PHDR，编号05是 GNU_STACK，这两项没有引用 section；
 - text segment（编号02的segment其Flags为R+E，表示可读可执行，这就是text segment）包含了如下sections `.text .note.gnu.build-id .note.go.buildid`；
 - rodata segment (编号03的segment其Flags为R，表示只读，就是rodata segment) 包含了 `.rodata .typelink .itablink .gosymtab .gopclntab` 这些go运行时需要的数据；
 - data segment (编号04的segment其Flags为RW，表示可读可写，就是data segment) 包含了 `.go.buildinfo .go.fipsinfo .noptrdata .data .bss .noptrbss`；
 
-> ps：本节 `readelf -l` 和 `readelf -W -S` 取自同一个 loop2。go1.24.13，linux/amd64。源文件同 golang-debugger-lessons/testdata/loop2.go，`go.mod` 写成 `module loop2`、`go 1.24`，构建命令是 `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -gcflags='all=-N -l' -o loop2 loop2.go`。不加 `-W` 时，超过 16 个字符的节名会被截断。
+> ps：下面的 `readelf -l` 和 `readelf -W -S` 是同一次构建的输出。go1.24.13，linux/amd64。不加 `-W` 时，超过 16 个字符的节名会被截断。
 
 ```bash
-$ readelf -l testdata/loop2
+$ readelf -l loop2
 
 Elf file type is EXEC (Executable file)
 Entry point 0x478120
@@ -315,10 +347,10 @@ typedef struct {
 
 #### 工具演示
 
-OK，以测试程序golang-debugger-lessons/testdata/loop2测试程序为例，我们来看下其链接器角度的视图，可以看到其包含了25个sections，每个section都有类型、偏移量、大小、链接顺序、对齐等信息，用以指导链接器完成链接操作。
+OK，还是这个 loop2，我们来看下其链接器角度的视图，可以看到其包含了25个sections，每个section都有类型、偏移量、大小、链接顺序、对齐等信息，用以指导链接器完成链接操作。
 
 ```bash
-$ readelf -W -S testdata/loop2
+$ readelf -W -S loop2
 There are 25 section headers, starting at offset 0x190:
 
 Section Headers:
