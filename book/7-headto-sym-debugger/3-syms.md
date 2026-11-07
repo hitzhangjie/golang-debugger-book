@@ -221,9 +221,7 @@ func main() {
 
 #### 列出所有的符号
 
-`readelf -s <prog>`，可以显示出程序prog中的所有符号列表，举个例子：
-
-> ps：下面是 `go build` 默认 `-buildmode=exe` 的输出。go1.24.13，linux/amd64。`.symtab` 条目数随运行时变化，这次是 2298。`runtime.text` 之后仍是 `cmpbody`、`memeqbody`，直到 `gcWriteBarrier`。
+`readelf -s <prog>`，可以显示出程序prog中的所有符号列表。下面是 go1.24.13、linux/amd64 下 `go build`（默认 `-buildmode=exe`）得到的一份示例，本机条目数与地址可能不同，以本机 `readelf -s` 为准。
 
 ```bash
 $ readelf -s main
