@@ -298,8 +298,9 @@ go标准库 `runtime/debug.PrintStack()`就是这么实现的，只是它考虑�
 **研究delve源码发现，在[go-delve/delve@913153e7](https://sourcegraph.com/github.com/go-delve/delve@913153e7ffb62512ccdf850bc37bf3abd3aecc2b/-/blob/pkg/proc/stack.go?subtree=true#L115)及之前的版本中是借助gosym.Table结合DWARF FDE实现的**：
 
 - dlv首先利用DWARF .debug_frame section来构建FDE列表；
-- dlv获得tracee的pc值，然后遍历FDE列表，找到FDE地址范围覆盖pc的FDE，这个FDE就是pc对应的函数栈帧了；
-- 然后再找caller，此时dlv再获取bp值，再计算出返回地址位置，再从该位置读取返回地址，然后再去遍历FDE列表找地址范围覆盖这个返回地址的FDE，这个FDE对应的就是caller；
+- dlv获得tracee的pc值，在 `frameInfo` 里用 `FDEForPC(pc)` 找到地址范围覆盖该pc的FDE，这个FDE就是pc对应的函数栈帧了；
+- 再找caller时，调用 `fde.ReturnAddressOffset(pc)` 得到 `spoffset`、`retoffset`，CFA（Canonical Frame Address）为 `sp+spoffset`（sp为tracee当前栈指针），返回地址槽在 `cfa+retoffset`，从该位置读出返回地址，再去 `FDEForPC` 找地址范围覆盖这个返回地址的FDE，这个FDE对应的就是caller；
+- 找不到覆盖该pc的FDE（`NoFDEForPCError`）时，若bp不为0，就用bp兜底，返回地址槽按bp加上一个指针宽度计算，再从该位置读出返回地址；
 - 重复以上过程即可，直到符合栈跟踪深度要求；
 
 **找caller-callee关系，dlv就是按上述过程处理的，至于callee当前pc以及caller调用当前函数处的pc，这些虚拟内存地址对应的函数名、源文件位置信息，还是通过gosym.Table来转换实现的。**
