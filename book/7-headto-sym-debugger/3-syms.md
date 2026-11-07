@@ -16,7 +16,7 @@
 - 最后将结果输出到目标文件中。
 
 这里的*.o文件实际上是一个ar文件（通过 `file \*.o` 可以求证），并不是gcc生成\*.o文件时常用的ELF格式。这种实现思路是go团队借鉴plan9项目的目标文件格式。每个编译单元对应的\*.o文件中包括了两部分，一部分是compiler object file，一部分是linker object file。`go tool compile` 默认把这两部分写进同一个 ar，`ar -t` 看到的成员是 `__.PKGDEF` 和 `_go_.o`。指定 `-linkobj` 才会拆成两个文件，`-o` 只写 compiler object file，linker object file 写到 `-linkobj` 给出的文件。分布式构建（比如 bazel）会这样拆开，后续编译只拿 compiler object file，链接时才用 linker object file。
-编译器还会在输出的目标文件中记录一些将来由Linker处理的符号信息，这些符号信息实际上就是一个LSym的列表，在前面进行类型检查过程中，编译器会维护这样一个列表，输出到目标文件中。
+编译器还会在输出的目标文件中记录一些将来由Linker处理的符号信息。这些信息就是一份LSym列表，在写出目标文件时生成，并写入这个文件。
 
 ```go
 // An LSym is the sort of symbol that is written to an object file.
