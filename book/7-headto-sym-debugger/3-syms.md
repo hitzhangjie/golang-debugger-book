@@ -245,22 +245,19 @@ Symbol table '.symtab' contains 1991 entries:
 
 “vim-go”算不算符号？其本身是一个只读数据，存储在.rodata section中，其本身算不上符号，但可以被符号引用，比如定义一个全局变量 `var s = "vim-go"` 则变量s有对应的符号，其符号名称为s，变量值引用自.rodata中的vim-go。
 
-我们可以通过 `readelf --hex-dump .rodata | grep vim-go`来验证。上述示例中其实会生成一个临时变量，该临时变量的值为"vim_go"，要想查看符号依赖图，可以通过 `go tool link --dumpdep main.o | grep main.main`验证，或者 `go build -ldflags "--dumpdep" main.go | grep main.main` 也可以。
+我们可以通过 `readelf --hex-dump .rodata | grep vim-go`来验证。上述示例里会生成一个临时变量，值就是 "vim-go"。符号依赖图用链接器的 `-dumpdep`（`--dumpdep` 相同）查看。go1.24 的模块模式下，`go tool link --dumpdep main.o` 打不出这份图：标准库的目标文件不在 `$GOROOT/pkg/linux_amd64`，链接器会找不到 fmt。把这个开关交给 `go build -ldflags`，importcfg 会由构建驱动备好。在放有 go.mod 的目录中：
 
 > ```bash
-> $ go build -ldflags "--dumpdep" main.go 2>&1 | grep main.main
+> $ go build -ldflags "--dumpdep" -o main main.go 2>&1 | grep -E '^main\.main ->| -> main\.main$'
 >
 > runtime.main_main·f -> main.main
 > main.main -> main..stmp_0
-> main.main -> go.itab.*os.File,io.Writer
+> main.main -> os.Stdout
+> main.main -> go:itab.*os.File,io.Writer
 > main.main -> fmt.Fprintln
-> main.main -> gclocals·8658ec02c587fb17d31955e2d572c2ff
-> main.main -> main.main.stkobj
-> main..stmp_0 -> go.string."vim-go"
-> main.main.stkobj -> type.[1]interface {}
 > ```
 
-可以看到生成了一个临时变量main..stmp_0，它引用了go.string."vim-go"，并作为fmt.Println的参数。
+可以看到生成了一个临时变量 `main..stmp_0`，它引用 `go:string."vim-go"`（同一份输出里有 `main..stmp_0 -> go:string."vim-go"`），并作为 `fmt.Println` 的参数。`main.main` 还会依赖 `os.Stdout` 和 `go:itab.*os.File,io.Writer`，调用落到 `fmt.Fprintln`。go1.24 里这些内部符号写成 `go:itab`、`go:string`。
 
 #### 查看符号表&符号
 
@@ -268,39 +265,43 @@ Symbol table '.symtab' contains 1991 entries:
 
 `go build -o main main.go` 编译成完整程序，然后可通过readelf、nm、objdump等分析程序main包含的符号列表，虽然我们的示例代码很简单，但是由于go运行时非常庞大，会引入非常多的符号。
 
-我们可以考虑只编译main.go这一个编译单元，`go tool compile main.go`会输出一个文件main.o，这里的main.o是一个可重定位目标文件，但是其文件格式却不能被readelf、nm分析，因为它是go自己设计的一种对象文件格式，在 [proposal: build a better linker](https://docs.google.com/document/d/1D13QhciikbdLtaI67U6Ble5d_1nsI4befEd6_k1z91U/view) 中有提及，要分析main.o只能通过go官方提供的工具。
-
-可以通过 `go tool nm`来查看main.o中定义的符号信息：
+我们可以考虑只编译 main.go 这一个编译单元。模块模式下，裸的 `go tool compile main.go` 不解析 import，源文件里有 `import "fmt"` 时会失败。`-p` 给出包导入路径，`-importcfg` 给出依赖包的目标文件，这两项通常从 `go build -x` 抄。加上 `-work`，临时目录会留到命令结束之后：
 
 ```bash
-$ go tool compile main.go
+$ go build -x -work -o main main.go
+```
+
+输出开头有一行 `WORK=/tmp/go-build...`。编译 main.go 的那条 `compile` 带着 `-p main`、`-importcfg $WORK/b001/importcfg` 和 `-pack`。照着其中的 `-p` 和 `-importcfg`，把 `$WORK` 换成这个临时目录，`b001` 换成该行里的实际编号，去掉 `-pack`，把目标文件写到当前目录：
+
+```bash
+$ go tool compile -p main -importcfg /tmp/go-build.../b001/importcfg -o main.o main.go
+```
+
+这里的 main.o 是一个可重定位目标文件，但是其文件格式却不能被 readelf、nm 分析，因为它是 go 自己设计的一种对象文件格式，在 [proposal: build a better linker](https://docs.google.com/document/d/1D13QhciikbdLtaI67U6Ble5d_1nsI4befEd6_k1z91U/view) 中有提及，要分析 main.o 只能通过 go 官方提供的工具。
+
+可以通过 `go tool nm` 来查看 main.o 中定义的符号信息。完整列表很长，下面只摘和本例相关的几行，地址取自 go1.24：
+
+```bash
 $ go tool nm main.o
 
-         U 
-         U ""..stmp_0
-    1477 ? %22%22..inittask
-    1497 R %22%22..stmp_0
-    13ed T %22%22.main
-    14a7 R %22%22.main.stkobj
          U fmt..inittask
          U fmt.Fprintln
-    17af R gclocals·33cdeccccebe80329f1fdbee7f5874cb
-    17a6 R gclocals·d4dc2f11db048877dbc0f60a22b4adb3
-    17b7 R gclocals·f207267fbf96a0178e8758c6e3e0ce28
-    1585 ? go.cuinfo.packagename.
-         U go.info.[]interface {}
-         U go.info.error
-    1589 ? go.info.fmt.Println$abstract
-         U go.info.int
-    1778 R go.itab.*os.File,io.Writer
-    1798 R go.itablink.*os.File,io.Writer
-    15b3 R go.string."vim-go"
+    3a3d R gclocals·FzY36IO2mY0y4dZ1+Izd/w==
+    3a8d ? go:cuinfo.packagename.main
+    3a87 ? go:cuinfo.producer.main
+    3a91 ? go:info.fmt.Println$abstract
+    3837 R go:itab.*os.File,io.Writer
+    37e2 R go:string."vim-go"
+    35fc D main..inittask
+    3a1b r main..stmp_0<1>
+    35a9 T main.main
+    3a4e r main.main.stkobj<1>
          U os.(*File).Write
-    156b T os.(*File).close
-         U os.(*file).close
          U os.Stdout
 	....
 ```
+
+包路径直接写在符号名里，所以函数是 `main.main`，临时变量在 nm 里是 `main..stmp_0<1>`（dumpdep 略去尖括号后缀，印成 `main..stmp_0`）。更早的 nm 把空的包前缀 `""` 做 URL 编码，印成 `%22%22.main`；go1.24 直接打印包路径。编译器自己的符号则是 `go:cuinfo`、`go:string`、`go:itab`。
 
 `go tool nm`和Linux下binutils提供的nm，虽然支持的对象文件格式不同，但是其输出格式还是相同的，查看man手册，我们了解到：
 
@@ -356,38 +357,30 @@ $ go tool nm main.o
   ```
 - 第三列，symbol name，符号名在字符串表中索引，对应字符串是存储在字符串表中；
 
-我们回头再看下我们的示例来加深下理解，OK，让我们关注下main函数本身，我们注意到nm输出显示符号 `%22%22.main`是定义在虚地址 `0x13ed`处，并且表示它是一个.text section中定义的符号，那只有一种可能要么是package main，要么是func main.main，其实是main.main。
+我们回头再看下我们的示例。关注 main 函数：nm 里符号名就是 `main.main`，类型 `T`，表示它定义在 .text 中，第一列是入口地址。`go tool objdump -S main.o` 里 `TEXT main.main` 的入口与这一列相同。下面仍是 go1.24 的一份输出，行尾路径是源文件位置，地址以本机 nm 为准。
 
 ```bash
 $ go tool nm main.o
 
-         U 
-         U ""..stmp_0
-    1477 ? %22%22..inittask
-    1497 R %22%22..stmp_0
-    13ed T %22%22.main
-    14a7 R %22%22.main.stkobj
-         U fmt..inittask
-         U fmt.Fprintln
+    37e2 R go:string."vim-go"
+    3a1b r main..stmp_0<1>
+    35a9 T main.main
     ....
 ```
 
-我们可以通过 `go tool objdump -S main.o`反汇编main.o查看虚地址处对应的信息来求证，我们注意到虚地址 `0x13ed`处恰为func main.main的入口地址。
-
 ```bash
 $ go tool objdump -S main.o
-TEXT %22%22.main(SB) gofile../root/debugger101/testdata/xxxx/main.go
+TEXT main.main(SB) /path/to/main.go
 func main() {
-  0x13ed		64488b0c2500000000	MOVQ FS:0, CX		[5:9]R_TLS_LE
-  0x13f6		483b6110		CMPQ 0x10(CX), SP
-  0x13fa		7671			JBE 0x146d
-  0x13fc		4883ec58		SUBQ $0x58, SP
-  0x1400		48896c2450		MOVQ BP, 0x50(SP)
-  0x1405		488d6c2450		LEAQ 0x50(SP), BP
+  0x35a9		493b6610		CMPQ SP, 0x10(R14)	[2:2]R_USEIFACE:type:string [2:2]R_USEIFACE:type:*os.File
+  0x35ad		7646			JBE 0x35f5
+  0x35af		55			PUSHQ BP
+  0x35b0		4889e5			MOVQ SP, BP
+  0x35b3		4883ec38		SUBQ $0x38, SP
 	fmt.Println("vim-go")
-  0x140a		0f57c0			XORPS X0, X0
-  0x140d		0f11442440		MOVUPS X0, 0x40(SP)
-  0x1412		488d0500000000		LEAQ 0(IP), AX		[3:7]R_PCREL:type.string
+  0x35b7		488d1500000000		LEAQ 0(IP), DX		[3:7]R_PCREL:type:string
+  0x35be		4889542428		MOVQ DX, 0x28(SP)
+  0x35c3		488d1500000000		LEAQ 0(IP), DX		[3:7]R_PCREL:main..stmp_0<1>
   ......
 ```
 
@@ -399,27 +392,24 @@ func main() {
 
 ```bash
 $ go tool objdump main.o | grep R_
-  main.go:5     0x13ed  64488b0c2500000000  MOVQ FS:0, CX  [5:9]R_TLS_LE
-  main.go:6     0x1412  488d0500000000      LEAQ 0(IP), AX  [3:7]R_PCREL:type.string
-  main.go:6     0x141e  488d0500000000      LEAQ 0(IP), AX  [3:7]R_PCREL:""..stmp_0
-  print.go:274  0x142a  488b0500000000      MOVQ 0(IP), AX  [3:7]R_PCREL:os.Stdout
-  print.go:274  0x1431  488d0d00000000      LEAQ 0(IP), CX  [3:7]R_PCREL:go.itab.*os.File,io.Writer
-  print.go:274  0x145d  e800000000          CALL 0x1462  [1:5]R_CALL:fmt.Fprintln
-  main.go:5     0x146d  e800000000          CALL 0x1472  [1:5]R_CALL:runtime.morestack_noctxt
-  gofile..<autogenerated>:1  0x1580  e900000000  JMP 0x1585  [1:5]R_CALL:os.(*file).close
+  main.go:5		0x35a9		493b6610		CMPQ SP, 0x10(R14)	[2:2]R_USEIFACE:type:string [2:2]R_USEIFACE:type:*os.File
+  main.go:6		0x35b7		488d1500000000		LEAQ 0(IP), DX		[3:7]R_PCREL:type:string
+  main.go:6		0x35c3		488d1500000000		LEAQ 0(IP), DX		[3:7]R_PCREL:main..stmp_0<1>
+  print.go:314		0x35cf		488b1d00000000		MOVQ 0(IP), BX		[3:7]R_PCREL:os.Stdout
+  print.go:314		0x35d6		488d0500000000		LEAQ 0(IP), AX		[3:7]R_PCREL:go:itab.*os.File,io.Writer
+  print.go:314		0x35ea		e800000000		CALL 0x35ef		[1:5]R_CALL:fmt.Fprintln
+  main.go:5		0x35f5		e800000000		CALL 0x35fa		[1:5]R_CALL:runtime.morestack_noctxt
 ```
 
-我们使用 `grep R_`来过滤objdump的输出，现在我们看到的这些操作指令，其中都涉及了一些需要进行重定位的符号，比如类型定义type.string，比如全局变量os.Stdout，比如全局函数fmt.Fprintln、os.(*file).close。
+我们使用 `grep R_` 来过滤 objdump 的输出。这些指令都带着待重定位的符号，比如类型 `type:string`，临时变量 `main..stmp_0<1>`，全局变量 `os.Stdout`，`go:itab.*os.File,io.Writer`，以及函数 `fmt.Fprintln`、`runtime.morestack_noctxt`。
 
 > ps: plan9中汇编指令R_PCREL, R_CALL，表示这里需要进行重定位，后面会介绍。
 
-这些符号将在后续 `go tool link`时进行解析并完成重定位，最终构建出一个完全链接的可执行程序，可以尝试运行 `go tool link main.o`，会生成一个a.out文件，这就是链接完全的可执行程序了。
+这些符号要等链接时才会解析并完成重定位。平时直接 `go build -o main main.go` 就能得到可执行程序。若自己调用 `go tool link`，需要前面 `go build -x -work` 留下的 `importcfg.link`，里面记录了这一趟构建的标准库和运行时。单独 `go tool link main.o` 链不出来：链接器会去 `$GOROOT/pkg/linux_amd64/fmt.o` 找 fmt，这个文件并不存在。路径换成刚才那条 compile 命令里的临时目录：
 
 ```bash
-$ go tool link main.o
-$ ls
-./a.out main.o main.go
-$ ./a.out
+$ go tool link -importcfg /tmp/go-build.../b001/importcfg.link -o main main.o
+$ ./main
 vim-go
 ```
 
