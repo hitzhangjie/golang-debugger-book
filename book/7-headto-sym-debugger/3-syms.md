@@ -73,7 +73,7 @@ OK，前面介绍了编译器、链接器之间的协作，最终在可执行程
 
 2）符号symbol，符号表.symtab中的每一个表项都描述了一个符号，符号的名字最终记录在字符串表.strtab中。符号除了有名字还有一些其他属性，下面继续介绍。
 
-3）字符串表.strtab和.shstrtab 存储的是字符串信息，.shstrtab和.strtab 首尾各有1-byte '\0'，其他数据就是 '\0' 结尾的c_string。区别只是，.strtab存储符号名，.shstrtab存储节名。
+3）字符串表.strtab和.shstrtab 存储的是字符串信息，.shstrtab和.strtab 第 0 字节固定是 NUL（空名字）；其余是 NUL 结尾的字符串，因此整个表也以 NUL 结束。区别只是，.strtab存储符号名，.shstrtab存储节名。
 
 如果深究设计实现的话，就是go编译器在编译过程中构建了AST，它知道源码中任意一个符号package.name的相关信息。在此基础上它记录了一个LSym列表，并输出到了目标文件中进一步交给链接器处理。链接器读取并处理后会针对调试类型的LSym生成DWARF调试信息，DWARF调试信息我们将在第八章介绍，其他用于符号解析、重定位后的一些全局符号被记录到最终可执行程序或者共享库的.symtab中，用于后续链接过程。这个.symtab就是一系列 `debug/elf.Sym32 or Sym64`，而 `debug/elf.Symbol`是解析成功之后更容易使用的方式，比如符号名已经从Sym32/64中的字符串索引值转换为了string类型。
 
