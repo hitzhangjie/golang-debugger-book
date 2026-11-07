@@ -6,7 +6,7 @@ ELF ([Executable and Linkable Format](https://en.wikipedia.org/wiki/Executable_a
 
 ### ELF文件结构
 
-ELF文件结构如下图所示，包括ELF文件头 (ELF Header)、段头表 (Program Header Table)、节头表 (Section Header Table)、Sections。Sections位于段头表和节头表之间，并被段头表和节头表引用。
+ELF文件结构如下图所示，包括ELF文件头 (ELF Header)、段头表 (Program Header Table)、节头表 (Section Header Table)、Sections。节头表的文件偏移由文件头字段 `e_shoff` 指定。图中节头表在文件末尾，这是经典排布。Go 内部链接常见的是节头表紧跟程序头表、位于文件前部，节数据排在后面。Sections 由段头表和节头表引用。
 
 ![img](assets/elf.png)
 
@@ -15,7 +15,7 @@ ELF文件结构如下图所示，包括ELF文件头 (ELF Header)、段头表 (Pr
   举个例子，.text section隶属于一个Type=PT_LOAD的段，意味着会被加载到内存；并且该段的权限为RE（Read+Execute），意味着指令部分加载到内存后，进程对这部分区域的访问权限为“读+可执行”。加载器 (loader /lib64/ld-linux-x86-64.so) 应按照段定义好的虚拟地址范围、权限，将引用的sections加载到进程地址空间中指定位置，并设置好对应的读、写、执行权限（vm_area_struct.vm_flags)。
 * **节头表**：节头表定义了程序的“**链接时视图**”，描述了二进制可执行文件中包含的每个section的位置、大小、类型、链接顺序，等等，主要目的是为了指导链接器进行链接。
   举个例子，项目包含多个源文件，每个源文件是一个编译单元，每个编译单元最终会生成一个目标文件(*.o)，每个目标文件都是一个ELF文件，都包含自己的sections。链接器是将依赖的目标文件和库文件的相同section进行合并（如所有*.o文件的.text合并到一起），然后将符号引用解析成正确的偏移量或者地址。
-* **Sections**：ELF文件中的sections数据，夹在段头表、节头表之间，由段头表、节头表引用。不同程序中包含的sections数量是不固定的：有些编程语言会有特殊的sections来支持对应的语言运行时层面的功能，如go .gopclntab, gosymtab；程序采用静态链接、动态链接生成的sections也会不同，如动态链接往往会生成.got, .plt, .rel.text。
+* **Sections**：ELF文件中的sections数据，由段头表、节头表引用。不同程序中包含的sections数量是不固定的：有些编程语言会有特殊的sections来支持对应的语言运行时层面的功能，如go .gopclntab, gosymtab；程序采用静态链接、动态链接生成的sections也会不同，如动态链接往往会生成.got, .plt, .rel.text。
 
 下面，我们我们对每个部分进行详细介绍。
 
