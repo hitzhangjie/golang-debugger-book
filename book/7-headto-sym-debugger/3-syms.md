@@ -54,9 +54,19 @@ OK，这里我们就先不发散太多……前面编译器将LSym列表写入�
 
 > go团队设计实现的时候为了更好地进行优化，并没有直接使用ELF格式作为目标文件的格式，而是采用了一种借鉴自plan9目标文件格式的自定义格式。因此go tool compile生成的目标文件，是没法像gcc编译生成的目标文件一样被readelf、nm、objdump等之类的工具直接读取的。尽管go团队并没有公开详细的文档来描述这种目标文件格式，但是go编译工具链提供了go tool nm, go tool objdump等工具来查看这些目标文件中的数据。
 
-为了方便大家理解，我画了下面这张流程图，包括了 `go tool compile` 的工作过程，以及与生成符号信息相关的 `go tool link` 的关键步骤。大家如果想查看源码，可以参考此流程来阅读。
+为了方便大家理解，我画了下面这张简图，包括了 `go tool compile` 的工作过程，以及与生成符号信息相关的 `go tool link` 的关键步骤。大家如果想查看源码，可以参考此流程来阅读。
 
-<img alt="how_objfile_created" src="./assets/how_objfile_created.svg" width="768"/>
+<img alt="how_objfile_created_simple" src="./assets/how_objfile_created_simple.svg" width="768"/>
+
+*图 7-3-1 go 编译与链接流程总览（细节见下表）*
+
+| 阶段 | 关键点 |
+| --- | --- |
+| 前端 | lexer / parser / typecheck（types、unused import & vars） |
+| IR | devirtualize + inline（PGO 参与）、escape analysis；都在 buildssa 之前 |
+| 后端 | buildssa → SSA 优化（deadcode / CSE / loop）→ genssa / plist → machine code |
+| 输出 | dumpdata（gc data / plugin table / embed data）→ dumpobj（__.PKGDEF + _go_.o） |
+| 链接 | 合并 section / 符号解析 / 重定位 / deadcode → .gopclntab → .debug_*、.symtab → 可执行文件 / 共享库 |
 
 OK，前面介绍了编译器、链接器之间的协作，最终在可执行程序或者共享库中生成符号表、DWARF调试信息的过程。这里以go编译工具链为例，也是为了让大家多认识下go的方方面面。其他语言编译工具链的处理流程、目标文件的格式等等存在不同之处，但是整体来看是相近的，我们就不再继续发散了。感兴趣的读者可以带着这些框架去搜索下对应的资料。OK，接下来我们再来介绍下符号表、符号的相关内容，读者认识就更全面了。
 
