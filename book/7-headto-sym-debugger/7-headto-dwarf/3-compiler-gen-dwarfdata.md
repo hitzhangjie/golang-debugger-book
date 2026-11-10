@@ -4,25 +4,9 @@
 
 **记录当前构建信息到dwarf调试信息中去，方便调试器调试时查看tracee的构建细节**
 
-```go
-这个函数的主要目的是将编译器的命令行参数记录到 DWARF 调试信息中。DWARF 是一种调试信息格式，用于帮助调试器理解程序的内部结构。具体来说：
-1. 函数接收一系列标志名称作为参数，这些标志是编译器命令行参数
-2. 对于每个标志，函数会：
-    - 检查标志是否存在
-    - 检查标志值是否与默认值不同（如果相同则跳过）
-    - 根据标志类型（布尔型、计数型或普通型）以不同格式记录到缓冲区中
-3. 特殊处理：
-    - 对于布尔型标志（如 -race），如果值为 true，只记录标志名
-    - 对于计数型标志（如 -v），如果值为 1，只记录标志名
-    - 对于其他标志，记录标志名和值（如 -gcflags="-N -l"）
-4. 最后，这些参数会被存储在一个特殊的符号中：
-    - 符号名格式为 dwarf.CUInfoPrefix + "producer." + base.Ctxt.Pkgpath
-    - 符号类型设置为 objabi.SDWARFCUINFO（表示这是编译单元信息）
-    - 允许重复（因为测试时可能会链接多个 main 包）
-    - 将参数信息存储在符号的数据中
-这样做的目的是让调试器能够知道程序是如何被编译的，这对于调试和问题诊断很有帮助。比如，如果程序是用 -race 编译的，调试器就能知道这是一个竞态检测版本的程序。
-这个信息会被写入到最终的可执行文件中，作为 DWARF 调试信息的一部分。当使用调试器（如 GDB）时，这些信息可以帮助开发者更好地理解程序的编译环境和配置。
-```
+`dwarfgen.RecordFlags`（`cmd/compile/internal/dwarfgen/dwarf.go`，go1.24）按 flag 名记录和默认值不同的编译参数。flag 不存在，或当前值等于默认值，就跳过。布尔型为 true 时只记名字，比如 `-race`；计数型值为 1 时也只记名字，比如 `-v`；其余记成 `-name=value`。
+
+记到符号 `dwarf.CUInfoPrefix + "producer." + base.Ctxt.Pkgpath`，类型 `objabi.SDWARFCUINFO`，数据放在符号的 `P`。测试构建可能链进多个 main 包，所以置 `AttrDuplicateOK`。
 
 ### gc.Main()→dwarf flags设置
 
@@ -154,15 +138,15 @@ gc.Main()
    \-> enqueueFunc 
          \-> compileFunctions 
                \-> compile 
-                     \-> (*Progs).FLush
+                     \-> (*Progs).Flush
                              \-> (*Progs).Flushplist
                                    \-> (*Link).populateDWARF
 ```
 
-OK，详细展开看看：
+OK，详细展开看看。`Main` 摘自 `cmd/compile/internal/gc/main.go`（go1.24，package gc）：
 
 ```go
-func gc.Main(...) {
+func Main(archInit func(*ssagen.ArchInfo)) {
     ...
     for nextFunc, nextExtern := 0, 0; ; {
         if nextFunc < len(typecheck.Target.Funcs) {
@@ -265,7 +249,6 @@ func Flushplist(ctxt *Link, plist *Plist, newprog ProgAlloc) {
 // TEXT symbol 's'. The various DWARF symbols must already have been
 // initialized in InitTextSym.
 func (ctxt *Link) populateDWARF(curfn Func, s *LSym) {
-    // see more details below
     ...
 }
 ```
