@@ -47,55 +47,108 @@ OK，那我们看下 `debug/dwarf` 的支持程度和局限性，`debug/dwarf`�
 - 所有.debug_ .zdebug_ sections，dwarf.Data里面统一转换为.debug_ sections；
 - 所有的DWARF sections都会被正常读取！
 
+file: src/debug/elf/file.go（go1.24，`(*File).DWARF`）
+
 ```go
 func (f *File) DWARF() (*dwarf.Data, error) {
-    // 获取 .[z]debug_ sections后面的后缀，其他section返回空:w
-    dwarfSuffix := func(s *Section) string { ... }
-    // 获取 .[z]debug_ sections的数据，并按需解压缩，按需重定位
-    sectionData := func(i int, s *Section) ([]byte, error) { ... }
+	dwarfSuffix := func(s *Section) string {
+		switch {
+		case strings.HasPrefix(s.Name, ".debug_"):
+			return s.Name[7:]
+		case strings.HasPrefix(s.Name, ".zdebug_"):
+			return s.Name[8:]
+		default:
+			return ""
+		}
 
-    // DWARFv4 有非常多的.[z]debug_ sections，最开始 debug/dwarf 主要处理下面这些 sections
-    var dat = map[string][]byte{"abbrev": nil, "info": nil, "str": nil, "line": nil, "ranges": nil}
-    for i, s := range f.Sections {
-        suffix := dwarfSuffix(s)
-        if suffix == "" {
-            continue
-        }
-        if _, ok := dat[suffix]; !ok {
-            continue
-        }
-        b, _ := sectionData(i, s)
-        dat[suffix] = b
-    }
+	}
+	// sectionData gets the data for s, checks its size, and
+	// applies any applicable relations.
+	sectionData := func(i int, s *Section) ([]byte, error) {
+		b, err := s.Data()
+		if err != nil && uint64(len(b)) < s.Size {
+			return nil, err
+		}
 
-    // 创建dwarf.Data，只包含了已经处理的.[z]debug_ sections
-    d, _ := dwarf.New(dat["abbrev"], nil, nil, dat["info"], dat["line"], nil, dat["ranges"], dat["str"])
+		if f.Type == ET_EXEC {
+			// Do not apply relocations to DWARF sections for ET_EXEC binaries.
+			// Relocations should already be applied, and .rela sections may
+			// contain incorrect data.
+			return b, nil
+		}
 
-    // 继续处理 multiple .debug_types sections and other DWARFv4/v5 sections.
-    for i, s := range f.Sections {
-        suffix := dwarfSuffix(s)
-        if suffix == "" {
-            continue
-        }
-        if _, ok := dat[suffix]; ok {
-            // Already handled.
-            continue
-        }
+		for _, r := range f.Sections {
+			if r.Type != SHT_RELA && r.Type != SHT_REL {
+				continue
+			}
+			if int(r.Info) != i {
+				continue
+			}
+			rd, err := r.Data()
+			if err != nil {
+				return nil, err
+			}
+			err = f.applyRelocations(b, rd)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return b, nil
+	}
 
-        b, _ := sectionData(i, s)
-        // 如果有多个.debug_types sections，dwarf.Data里的section名加上编号，方便定位问题
-        if suffix == "types" {
-            _ = d.AddTypes(fmt.Sprintf("types-%d", i), b); err != nil {
-        } else {
-            // 其他DWARF sections
-            _ = d.AddSection(".debug_"+suffix, b); err != nil {
-        }
-    }
+	// There are many DWARf sections, but these are the ones
+	// the debug/dwarf package started with.
+	var dat = map[string][]byte{"abbrev": nil, "info": nil, "str": nil, "line": nil, "ranges": nil}
+	for i, s := range f.Sections {
+		suffix := dwarfSuffix(s)
+		if suffix == "" {
+			continue
+		}
+		if _, ok := dat[suffix]; !ok {
+			continue
+		}
+		b, err := sectionData(i, s)
+		if err != nil {
+			return nil, err
+		}
+		dat[suffix] = b
+	}
 
-    return d, nil
+	d, err := dwarf.New(dat["abbrev"], nil, nil, dat["info"], dat["line"], nil, dat["ranges"], dat["str"])
+	if err != nil {
+		return nil, err
+	}
+
+	// Look for DWARF4 .debug_types sections and DWARF5 sections.
+	for i, s := range f.Sections {
+		suffix := dwarfSuffix(s)
+		if suffix == "" {
+			continue
+		}
+		if _, ok := dat[suffix]; ok {
+			// Already handled.
+			continue
+		}
+
+		b, err := sectionData(i, s)
+		if err != nil {
+			return nil, err
+		}
+
+		if suffix == "types" {
+			if err := d.AddTypes(fmt.Sprintf("types-%d", i), b); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := d.AddSection(".debug_"+suffix, b); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return d, nil
 }
 ```
-
 `debug/dwarf` 确实有读取所有的DWARF数据，但是这不够！读取、解析并提供了合适的API后，对我们才真正的有用。调试器要实现常规的调试能力，需要：
 
 - 支持类型、变量、常量的查看或者修改，需要读取解析.debug_info中的DIEs -- debug/dwarf支持
