@@ -157,3 +157,4 @@
   * [12.15 More: 为什么GDB使用符号表+DWARF](12-appendix/92-why-gdb-uses-symtab.md)
   * [12.16 More: ELF core文件格式剖析](12-appendix/93-anatomy-of-elf-core-file.md)
   * [12.17 More: PIE可执行文件为什么有.interp/.dynsym/.dynamic](12-appendix/94-why-pie-has-dyn-sections.md)
+  * [12.18 More: dlv为什么要从.symtab读取TLS符号](12-appendix/95-why-dlv-reads-tls-symbols-from-symtab.md)
