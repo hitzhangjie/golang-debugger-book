@@ -23,12 +23,12 @@ DWARF调试信息根据描述对象的不同，在最终存储的时候也进行
 
 <img alt="dwarfv4-sections" src="assets/dwarfv4-sections.jpg" width="480px"/>
 
-新版本的编译器、链接器在生成DWARF调试信息时，会希望压缩二进制文件的尺寸，有可能会针对性地开启数据压缩，如Go新版本支持对调试信息做压缩，如 `-ldflags='-dwarfcompress=true'`，默认是true。最初，压缩后的debug sections会被写入.zdebug_前缀的sections中，而非.debug_前缀的sections，现在Go新版本也已经做了调整，默认会开压缩，压缩后也写入.debug_前缀的sections，是否开启压缩以及具体的压缩算法以Section Flags的方式来进行设置。
+新版本的编译器、链接器在生成DWARF调试信息时，会希望压缩二进制文件的尺寸，有可能会针对性地开启数据压缩，如Go新版本支持对调试信息做压缩，如 `-ldflags='-compressdwarf=true'`，默认是true。最初，压缩后的debug sections会被写入.zdebug_前缀的sections中，而非.debug_前缀的sections，现在Go新版本也已经做了调整，默认会开压缩，压缩后也写入.debug_前缀的sections，是否开启压缩以及具体的压缩算法以Section Flags的方式来进行设置。
 
 为了能和不支持解压缩的调试器进行更好的兼容：
 
 - Go旧版本：压缩后的DWARF数据会写入 `.zdebug_`为前缀的sections中，如 `.zdebug_info`，不会再将数据写入 `.debug_`为前缀的sections，以免解析DWARF数据异常、调试异常；
-- Go新版本：一般会提供选项来关闭压缩，如指定链接器选项 `-ldflags=-dwarfcompress=false`来阻止对调试信息进行压缩；
+- Go新版本：一般会提供选项来关闭压缩，如指定链接器选项 `-ldflags=-compressdwarf=false`来阻止对调试信息进行压缩；
 
 为了更好地学习掌握DWARF（或者ELF），掌握一些常用的工具是必不可少的，如 `readelf --debug-dump=<section>`、`objdump --dwarf=<section>`、dwarfdump、nm。另外，我亲手写了一个可视化工具：[hitzhangjie/dwarfviewer](https://github.com/hitzhangjie/dwarfviewer)，目前支持导航式浏览DIE信息，也支持查看编译单元的行号信息表等，推荐作者使用该工具来辅助学习。
 
