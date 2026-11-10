@@ -21,7 +21,7 @@
 
 这里的*.o文件实际上是一个ar文件（通过 `file *.o` 可以求证），并不是大家熟悉的gcc生成的ELF *.o 文件。这种实现思路是go团队借鉴plan9项目的目标文件格式。每个编译单元对应的 *.o 文件包括了两部分数据：一部分是compiler object file，一部分是linker object file。`go tool compile` 默认把这两部分写进同一个 ar，`ar -t` 看到的成员是 `__.PKGDEF` 和 `_go_.o`。只指定编译选项 `-o` 只写 compiler object file，指定了选项 `-linkobj` 后才会拆成两个文件，它指定了 linker object file 要写到的文件。
 
->ps: 分布式构建（比如 bazel）会这样拆开，后续编译只拿 compiler object file，链接时才用 linker object file。
+> ps: 分布式构建（比如 bazel）会这样拆开，后续编译只拿 compiler object file，链接时才用 linker object file。
 
 跟符号处理相关的一部分任务，编译器compiler还会在输出的目标文件 *.o 中记录一些将来由链接器linker处理的符号信息，这些信息就是一份LSym列表。内存里的LSym列表，经 `WriteObjFile` 写成goobj格式的符号表（从单独一行`!`之后开始，魔数是`\x00go120ld`）。最终落盘的是这张符号表。`go tool nm` 读的就是这份goobj格式的符号表。而ar文件中的 `__.PKGDEF` 是包导出数据，给后面编译别的包用。
 
@@ -52,12 +52,12 @@ type LSym struct {
 
 - 除了合并来自多个目标文件中的同名 section（如 .text、.rodata、.data、.bss）之外，
 - 还需要完成符号解析、重定位（输入可能还包含其他共享库，这里暂时不做发散），
-- 在内部逐渐建立起一个全局符号表，并基于它完成本次链接的符号解析与重定位，以及死代码消除（dead code elimination，见 [Dead Code Elimination: A Linker's Perspective](https://medium.com/p/d098f4b8c6dc)）这类全局优化，
-- 把符号名和地址写入可执行程序（ET_EXEC，`-buildmode=pie` 构建时是 ET_DYN）或共享库的 .symtab，主要留给 nm、readelf 和调试器，可以用 strip 去掉；最终链接时再把动态链接要用的符号筛选出来写入 .dynsym，共享库被再链接时依赖方用的就是它，
+- 在内部逐渐建立起一个全局符号表，并基于它完成本次链接的符号解析与重定位，以及死代码消除（dead code elimination，见 [Dead Code Elimination: A Linker&#39;s Perspective](https://medium.com/p/d098f4b8c6dc)）这类全局优化，
+- 把符号名和地址写入可执行程序（ET_EXEC，`-buildmode=pie` 构建时是 ET_DYN）或共享库的 .symtab，并把动态链接要用的符号筛选出来写入 .dynsym，
 - 生成 .gopclntab 等运行时需要的元数据，以及 DWARF 调试信息，
 - 生成最终的可执行程序或者共享库，
 
-OK，这里我们就先不发散太多……前面编译器将LSym列表写入到目标文件之后，Linker就需要读取出来，利用它完成符号解析、重定位相关的工作。跨编译单元的符号引用（函数、全局变量、类型、itab 等）由这次链接建立的全局符号表完成解析；记入最终产物 .symtab 的是符号名和地址，留给 nm、readelf 和调试器；供动态链接使用的符号在最终链接时筛选后记入 .dynsym，共享库被再链接时依赖方用的就是它（PIE 产物也带 .dynsym，但其中可能只有一个 0 号空符号，只供加载器重定位用，见附录 12.17）。另外，对那些调试类符号（`LSym.Type` 为 `SDWARF*`，在 goobj 里通常表现为 `go:info.*`、`go:cuinfo.*` 这类名字），编译器先写入目标文件的只是中间形式，linker 需要按 DWARF 标准合并各编译单元的内容、补全类型描述并完成重定位，最终落到 .debug_info、.debug_line、.debug_frame 等 section 中，方便后续调试器读取。
+OK，这里我们就先不发散太多……前面编译器将LSym列表写入到目标文件之后，Linker就需要读取出来，利用它完成符号解析、重定位相关的工作。跨编译单元的符号引用（函数、全局变量、类型、itab 等）由这次链接建立的全局符号表完成解析。另外，对那些调试类符号（`LSym.Type` 为 `SDWARF*`，在 goobj 里通常表现为 `go:info.*`、`go:cuinfo.*` 这类名字），编译器先写入目标文件的只是中间形式，linker 需要按 DWARF 标准合并各编译单元的内容、补全类型描述并完成重定位，最终落到 .debug_info、.debug_line、.debug_frame 等 section 中，方便后续调试器读取。
 
 OK，前面介绍了编译器、链接器之间的协作，最终在可执行程序或者共享库中生成符号表、DWARF调试信息的过程。这里以go编译工具链为例，也是为了让大家多认识下go的方方面面。其他语言编译工具链的处理流程、目标文件的格式等等存在不同之处，但是整体来看是相近的，我们就不再继续发散了。感兴趣的读者可以带着这些框架去搜索下对应的资料。OK，接下来我们再来介绍下符号表、符号的相关内容，读者认识就更全面了。
 
@@ -65,31 +65,17 @@ OK，前面介绍了编译器、链接器之间的协作，最终在可执行程
 
 ### 认识符号表
 
-1）符号表存储的是一系列符号，每个表项都描述了符号的名字、值（地址或节内偏移）、大小、类型、绑定属性（binding）和可见性（visibility）等信息。ELF 中常见的符号表 section 有 .symtab 和 .dynsym：.symtab 用于静态链接时的符号解析、重定位，前面也提到调试器也可以使用它；.dynsym 供动态链接使用，加载时的动态链接器（ld-linux 之类）读的也是它。未 strip 时，共享库和动态链接的可执行文件通常两张都有；.o、.a 以及普通的静态链接可执行文件一般只有 .symtab。
+上一节我们跟着编译、链接的流程走了一遍，知道最终产物里有符号表。这一节把镜头拉近：先看清一个符号是什么，再看哪些名字会成为符号，最后看这些符号分别存在哪张表里、不同文件类型里又是怎么分布的。
 
->需要说明的是，这里有两个容易混淆的点：
->- 一是“静态链接”并不等于“一定是 ET_EXEC”，PIE 可执行程序的 `e_type` 是 ET_DYN，加载基址由 ld.so 随机选择，即使它一个共享库都不依赖（`ldd` 显示 statically linked），也要在加载阶段补上基址完成重定位，所以照样会带 .interp、.dynamic、.dynsym 和重定位表 .rela（GNU ld 产物里通常是 .rela.dyn；static-pie 自带自举代码，可以不带 .interp）；
->- 二是这种 PIE 的 .dynsym 里往往只有 0 号空符号，没有需要跨模块解析的符号，它存在只是为了满足动态 ELF 的结构要求，真正驱动重定位的是 .rela。详见后文和附录 [12.17 PIE可执行文件为什么有.interp/.dynsym/.dynamic](../12-appendix/94-why-pie-has-dyn-sections.md)。
+#### 符号与字符串表
 
-常见文件类型及其符号表情况如下：
+符号表存储的是一系列符号，每个表项描述一个符号，通常是程序中的函数、全局变量等对象。表项记录了符号的名字、值（地址或节内偏移）、大小、类型、绑定属性（binding）和可见性（visibility）等信息。各字段的确切含义，留到后面“符号定义”再展开。
 
-- ELF 可重定位目标文件（`e_type` 为 ET_REL）有符号表 .symtab，常见的 ELF \*.o 就是这种文件；
-- Go 默认的 \*.o 与 ELF \*.o 只是后缀相同，文件格式完全不同：它是一个 ar（archive），成员是 `__.PKGDEF`（编译器导出数据，供后续编译别的包使用）和 `_go_.o`（链接器数据，goobj 格式）。符号记在 goobj 里，不是 ELF 的 .symtab，只能用 `go tool nm` 这类工具查看；
-- \*.a 是静态库，也就是 archive。每个成员各自带一张符号表，静态链接时链接器抽出被引用的成员参与链接，再合并这些符号表；
-- \*.so 是共享库，`e_type` 为 ET_DYN。未 strip 时通常同时有 .symtab 和 .dynsym：依赖方在链接时使用 .dynsym，加载时的动态链接器也使用它，动态段中的 DT_SYMTAB 指向这张表。.dynsym 只收录动态链接需要的符号，.symtab 收录的范围更广，主要供 nm 和部分调试器读取。\*.so 里不再像静态库那样保留独立的 \*.o：链接器把多个 \*.o 合成 \*.so 时合并的是 section，而不是把 \*.o 本身留在里面，即 Merging, not Inclusion；
-- 其他不常见的文件类型，不继续展开；
+符号表项里并不直接存名字，名字集中放在字符串表中，表项只记录一个偏移，指向名字在字符串表中的位置。.symtab 的符号名放在 .strtab，.dynsym 的符号名放在 .dynstr，符号表通过所在 section header 的 `sh_link` 字段指向对应的字符串表。除此之外，.shstrtab 存放各 section 的名字。这几张字符串表第 0 字节固定是 NUL（空名字），其余是 NUL 结尾的字符串，因此整个表也以 NUL 结束。
 
-2）符号symbol：.symtab与.dynsym中的每一个表项都描述了一个符号。.symtab中符号的名字记录在字符串表.strtab中，.dynsym中符号的名字记录在.dynstr中，两张表通过所在 section header 的 `sh_link` 字段关联。符号除了名字，还有一些其他属性，下面继续介绍。
+#### 哪些名字会成为符号
 
-3）字符串表.strtab、.dynstr和.shstrtab 存储的是字符串信息：这几张表第 0 字节固定是 NUL（空名字），其余是 NUL 结尾的字符串，因此整个表也以 NUL 结束。区别只是，.strtab存储.symtab的符号名，.dynstr存储.dynsym的符号名，.shstrtab存储节名。
-
-4）.dynsym 由链接器在最终链接阶段生成，目标文件里没有，只有共享库和动态链接的可执行文件（含 PIE）才有；其中只放动态链接要用的导出符号和未定义符号，0 号是空符号。纯 Go 程序默认 `-buildmode=exe` 不生成，用 `-buildmode=pie` 构建时才有，且只有 0 号空符号。
-
-OK，再系统性串一遍整个编译工具链的流程：就是go编译器在编译过程中构建了AST，它知道源码中任意一个符号package.name的相关信息。在此基础上它记录了一个LSym列表，并输出到了目标文件中进一步交给链接器处理。链接器读取并处理时，会把调试类LSym（`SDWARF*`，即 `go:info.*`、`go:cuinfo.*` 这类符号）的内容合并、补全并完成重定位，最终生成DWARF调试信息，这部分我们将在第八章介绍；其他全局符号在完成本次符号解析、重定位之后，被写入最终可执行程序或者共享库的.symtab中，留给nm、readelf和调试器。共享库再被链接时，依赖方用的是.dynsym。这个.symtab在go里就是一系列 `debug/elf.Sym32`/`Sym64`，而 `debug/elf.Symbol`是解析成功之后更容易使用的方式，比如符号名已经从Sym32/64中的字符串索引值转换为了string类型。
-
-### 认识符号
-
-符号表.symtab包含了一系列符号，每个符号描述了程序中的函数、全局变量等对象，以及链接器所需要的相关信息，如符号的地址和类型。至于哪些东西会进这张表，可以借 C语言 来对照：自动变量（栈上的局部变量）通常不进 .symtab；函数内的 static 局部变量虽然是块作用域、无链接（no linkage），但它有独立的存储，编译器会改名后把它作为局部符号（如 `x.1`）写进 .symtab，绑定为 STB_LOCAL——同一编译单元内靠这个局部符号就够了；文件级 static 才是文件作用域。Go 没有 C 那种函数内 static：局部变量只出现在 DWARF 调试信息里，包级名字才会进 .symtab/goobj。
+至于哪些名字会进这张表，可以借 C 语言来对照：自动变量（栈上的局部变量）通常不进 .symtab；函数内的 static 局部变量虽然是块作用域、无链接（no linkage），但它有独立的存储，编译器会改名后把它作为局部符号（如 `x.1`）写进 .symtab，绑定为 STB_LOCAL——同一编译单元内靠这个局部符号就够了；文件级 static 才是文件作用域。Go 没有 C 那种函数内 static：局部变量只出现在 DWARF 调试信息里，包级名字才会进 .symtab/goobj。
 
 ELF 符号表主要记录的是具有外部作用范围的对象，包括：
 
@@ -97,25 +83,38 @@ ELF 符号表主要记录的是具有外部作用范围的对象，包括：
 - 静态函数和静态变量（仅对当前源文件或编译单元可见）
 - 以及其他需要跨文件或模块访问的符号
 
-我们这里所说的符号，是指 .symtab 中的表项，并不是 DWARF 调试信息，它主要是为了方便链接器进行符号解析和重定位而记录的。但它也确实会被某些调试器使用。dlv 的符号级调试主路径是靠 DWARF，但是读取 `runtime.tlsg` or `runtime.tls_g` 计算 g 指针相对于线程 TLS 的偏移时依然要靠读取 .symtab。
+需要强调，我们这里所说的符号，是指 .symtab 中的表项，它与 DWARF 调试信息是两回事：前者主要服务于链接，后者才服务于调试。但 .symtab 也确实会被某些调试器使用：dlv 的符号级调试主路径是靠 DWARF，但是读取 `runtime.tlsg` 或 `runtime.tls_g` 计算 g 指针相对于线程 TLS 的偏移时依然要靠读取 .symtab。
 
->至于为什么这个偏移必须从 .symtab 取、DWARF 为什么给不出来，见附录 [12.18 dlv为什么从.symtab读取TLS符号](../12-appendix/95-why-dlv-reads-tls-symbols-from-symtab.md)。gdb 对 .symtab 的使用，见 [GDB为什么同时使用.symtab和DWARF](../12-appendix/92-why-gdb-uses-symtab.md)。
+> 至于为什么这个偏移必须从 .symtab 取、DWARF 为什么给不出来，见附录 [12.18 dlv为什么从.symtab读取TLS符号](../12-appendix/95-why-dlv-reads-tls-symbols-from-symtab.md)。gdb 对 .symtab 的使用，见 [GDB为什么同时使用.symtab和DWARF](../12-appendix/92-why-gdb-uses-symtab.md)。
 
-还记得我们的初衷吗，“让大家认识到那些高屋建瓴的设计是如何协调compiler、linker、loader、debugger工作的”，读者不妨大胆多问几个为什么？没多少人能不做一番调研就说他精通这些。
+#### .symtab 与 .dynsym
 
-- 编译构建过程中.symtab是如何生成的？本文已介绍
-- 编译构建过程中.dynsym是如何生成的？最终链接时由链接器筛选动态链接需要的符号写入，见上文“认识符号表”第 4 点
-- 链接、加载过程中.symtab有什么作用？链接时符号解析、重定位
-- 构建产物中的.symtab为什么要保留？留给nm、readelf和调试器查看符号名与地址，可用strip去掉；共享库再被链接时依赖方用.dynsym
-- 删掉它对gdb、dlv之类调试器有没有影响？对gdb有影响；dlv 的符号级调试主路径是 DWARF，.symtab 主要影响 TLS 偏移计算和反汇编时的符号名，strip 后核心调试能力不受影响
-- 从共享库中删掉.symtab，对依赖它的程序的构建有没有影响？依赖方链接使用.dynsym，删掉.symtab不必然导致链接失败
-- 从共享库中删掉.symtab，对依赖它的程序的运行有没有影响？动态链接器同样使用.dynsym，删掉.symtab不必然导致加载时动态链接失败，主要影响 nm 和部分调试器
-- 从共享库中删掉.dynsym，对依赖它的程序的构建有没有影响？依赖方链接使用.dynsym，删掉后通常导致链接失败，比删掉.symtab更致命
-- 从共享库中删掉.dynsym，对依赖它的程序的运行有没有影响？加载时的动态链接器同样使用.dynsym，删掉后通常导致加载时动态链接失败，比删掉.symtab更致命
-- gdb早期实现可以借助.symtab实现，为什么还需要DWARF？DWARF标准更胜一筹，但是成为业界标准较晚
-- gdb现在为什么不弃用.symtab而完全借助DWARF？兼容老的二进制和工具链
+ELF 中存储符号表的 section 常见的有 .symtab 和 .dynsym，二者分工不同：
 
-我们的学习过程不应该是快餐式的，而应该是脚踏实地的。正视自己内心疑问的每个瞬间，无疑都是一剂帮助我们自我突破、走向更远方的强心剂。
+- .symtab 用于静态链接时的符号解析、重定位，记录了链接器需要的全部符号，范围较广；它并非运行时必需，未 strip 时保留下来，供 nm、readelf 和调试器查看符号名与地址，可以用 strip 去掉。
+- .dynsym 供动态链接使用，由链接器在最终链接阶段生成，目标文件里没有。加载时的动态链接器（ld-linux 之类）读的就是它，动态段中的 DT_SYMTAB 指向这张表。其中只放动态链接要用的导出符号和未定义符号，0 号是空符号。
+
+纯 Go 程序默认 `-buildmode=exe` 不生成 .dynsym，用 `-buildmode=pie` 构建时才会出现。
+
+> 需要说明的是，这里有两个容易混淆的点：
+>
+> - 一是“静态链接”并不等于“一定是 ET_EXEC”，PIE 可执行程序的 `e_type` 是 ET_DYN，加载基址由 ld.so 随机选择，即使它一个共享库都不依赖（`ldd` 显示 statically linked），也要在加载阶段补上基址完成重定位，所以照样会带 .interp、.dynamic、.dynsym 和重定位表 .rela（GNU ld 产物里通常是 .rela.dyn；static-pie 自带自举代码，可以不带 .interp）；
+> - 二是这种 PIE 的 .dynsym 里往往只有 0 号空符号，没有需要跨模块解析的符号，它存在只是为了满足动态 ELF 的结构要求，真正驱动重定位的是 .rela。详见后文和附录 [12.17 PIE可执行文件为什么有.interp/.dynsym/.dynamic](../12-appendix/94-why-pie-has-dyn-sections.md)。
+
+分清了谁在用哪张表，删表的后果也就不难推出来：
+
+- 从共享库中删掉 .symtab：依赖方链接和加载都不看它，构建和运行不会失败，主要影响 nm 和部分调试器；gdb 会受影响，dlv 的符号级调试主路径是 DWARF，核心调试能力不受影响（读取 TLS 符号计算 g 偏移、反汇编时的符号名除外，见上文）。
+- 从共享库中删掉 .dynsym：依赖方链接和加载时的动态链接都要用它，通常直接导致链接失败或加载时动态链接失败，比删掉 .symtab 更致命。
+
+#### 不同文件类型中的符号表
+
+概括来说，未 strip 时共享库和动态链接的可执行文件通常两张都有；.o、.a 以及普通的静态链接可执行文件一般只有 .symtab。下面逐类来看：
+
+- ELF 可重定位目标文件（`e_type` 为 ET_REL）有符号表 .symtab，常见的 ELF \*.o 就是这种文件；
+- Go 默认的 \*.o 与 ELF \*.o 只是后缀相同，文件格式完全不同：它是 ar 包着的 goobj（细节见上文“生成过程”），符号不在 ELF 的 .symtab 里，只能用 `go tool nm` 这类工具查看；
+- \*.a 是静态库，也就是 archive。每个成员各自带一张符号表，静态链接时链接器抽出被引用的成员参与链接，再合并这些符号表；
+- \*.so 是共享库，`e_type` 为 ET_DYN。\*.so 里不再像静态库那样保留独立的 \*.o：链接器把多个 \*.o 合成 \*.so 时合并的是 section，而不是把 \*.o 本身留在里面，即 Merging, not Inclusion；
+- 其他不常见的文件类型，不继续展开；
 
 #### 符号定义
 
@@ -147,6 +146,7 @@ typedef struct {
 - st_value: 符号的值。在可重定位目标文件（e_type 为 ET_REL）中，符号已定义且 st_shndx 指向普通节时，st_value 是节内偏移。st_shndx 为 SHN_ABS 时，st_value 是绝对值。st_shndx 为 SHN_COMMON 时，st_value 是对齐约束。st_shndx 为 SHN_UNDEF 时，符号没有定义位置。在可执行文件与共享目标文件（e_type 为 ET_EXEC 或 ET_DYN）中，普通已定义符号的 st_value 是虚拟地址。符号类型为 STT_TLS 时，st_value 是相对 TLS 模板或线程指针的偏移。
 - st_size: 符号指向的对象大小，如果大小未知或者无需指定大小就为0。如符号对应的int变量的字节数；
 - st_info: 符号的类型和绑定属性(binding attributes)
+
   - 类型(type, STT_*)
     - STT_NOTYPE: 未指定类型
     - STT_OBJECT: 该符号关联的是一个数据对象
@@ -161,16 +161,26 @@ typedef struct {
     - STB_WEAK: 弱绑定(weak binding)，链接作用域与全局符号相同，但其定义的优先级更低
     - STB_LOPROC, STB_HIPROC：范围[STB_LOPROC, STB_HIPROC]预留给处理器相关的机制
 - st_other: 定义了符号的可见性 (visibility)
+
   - STV_DEFAULT: 默认可见性规则；全局符号和弱符号对其他模块可见；本地模块中的引用，可以解析为其他模块中的定义；
   - STV_INTERNAL: 处理器特定的隐藏类型；
   - STV_HIDDEN: 符号对其他模块不可见；本地模块中的引用，只能解析为当前模块中的符号；
   - STV_PROTECTED: 符号对其他模块可见，但本模块内的引用必须绑定到本模块中的定义，不可被预占；
 - st_shndx: 符号所关联的 section header 在节头表中的索引。变量名、函数名等若定义在某个 section 中，这里是该节在节头表中的下标，readelf -s 的 Ndx 列直接显示这个数字。并非每个符号都定义在某个 section 中。不指向节头表的特殊值有：
+
   - SHN_UNDEF：未定义。符号表第 0 项固定取此值；本模块未定义、留待链接器解析的符号也取此值。readelf 显示为 UND，即下文示例第 0 项；
   - SHN_ABS：绝对值，不随重定位改变。readelf 显示为 ABS，下文示例中的文件名符号 go.go 即是；
   - SHN_COMMON：公共符号，如尚未分配存储的未初始化外部变量，链接时才归入某个 section。readelf 显示为 COM。
 
   实际节索引大到无法放进该字段时，记为 SHN_XINDEX，真正的索引在 SHT_SYMTAB_SHNDX 节中。
+
+到这里，符号表的“表”和“符号”都认识过了。还记得我们的初衷吗，“让大家认识到那些高屋建瓴的设计是如何协调compiler、linker、loader、debugger工作的”，读者不妨大胆多问几个为什么？没多少人能不做一番调研就说他精通这些。
+
+- 多个目标文件中出现同名符号，链接器如何取舍？这是符号解析要处理的问题，留到“符号解析 & 重定位”一节展开；
+- gdb 早期实现可以借助 .symtab 实现，为什么还需要 DWARF？DWARF 标准更胜一筹，但是成为业界标准较晚；
+- gdb 现在为什么不弃用 .symtab 而完全借助 DWARF？兼容老的二进制和工具链。
+
+我们的学习过程不应该是快餐式的，而应该是脚踏实地的。正视自己内心疑问的每个瞬间，无疑都是一剂帮助我们自我突破、走向更远方的强心剂。
 
 ### 读取符号表
 
