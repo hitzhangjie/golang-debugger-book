@@ -181,12 +181,12 @@ go标准库中对ELF32 Symbol的定义 `debug/elf.Sym32/64` 如下。go没有位
 ```go
 // ELF32 Symbol.
 type Sym32 struct {
-	Name  uint32
-	Value uint32
-	Size  uint32
-    	Info  uint8	// binding:4+type:4
-	Other uint8	// low 2 bits: visibility
-	Shndx uint16	// section
+    Name  uint32
+    Value uint32
+    Size  uint32
+    Info  uint8  // binding:4+type:4
+    Other uint8  // low 2 bits: visibility
+    Shndx uint16 // section
 }
 ```
 
