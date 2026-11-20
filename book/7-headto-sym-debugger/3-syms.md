@@ -197,7 +197,7 @@ type Sym32 struct {
 - 如果是编译链接完成的可执行程序，通过readelf -s、nm、objdump都可以；
 - 但是如果是go目标文件，由于go是自定义的目标文件格式，则只能借助go tool nm、go tool objdump来查看。
 
-可能使用这个类型 `debug/elf.Symbol`会更方便，而且还支持读取动态符号表.dynsym。
+go标准库 `debug/elf` 用 `Symbol` 表示解析后的符号信息，定义如下。
 
 ```go
 // A Symbol represents an entry in an ELF symbol table section.
@@ -350,7 +350,7 @@ $ go tool nm main.o
 
 `go tool nm`和Linux下binutils提供的nm，虽然支持的对象文件格式不同，但是其输出格式还是相同的，查看man手册，我们了解到：
 
-- 第一列，symbol value，符号值。.o 里多半是节内偏移，已链接的可执行文件里是虚拟地址；
+- 第一列，symbol value，符号值。ELF 里这一列是 `st_value`：`e_type` 为 ET_REL、符号已定义且 `st_shndx` 指向普通节的普通符号，值是相对节起点的偏移；`e_type` 为 ET_EXEC 或 ET_DYN 的对应普通符号，值是虚拟地址。STT_TLS，以及 `st_shndx` 为 SHN_ABS、SHN_COMMON、SHN_UNDEF 时，取值见上文 `st_value`。Go 的 goobj 不是 ELF，`go tool nm` 对已定义符号打印的是符号数据在目标文件中的偏移；
 - 第二列，symbol type，用小写字母表示局部符号，大写则为全局符号（uvw例外）；
 
   运行命令 `man nm`查看nm输出信息：
@@ -441,7 +441,7 @@ func main() {
 
 > 在[how-go-build-works](./1-how-go-build-works.md)小节中我们介绍过importcfg.link，还记得吧？go程序构建时依赖了标准库、运行时，需要和这些一起链接才可以。
 
-之前我们提到，可重定位文件中，存在一些.rel.text、.rel.data sections来实现重定位，但我们也提到了，go目标文件是自定义的，它参考了plan9目标文件格式（`-go115newobj` 是 Go 1.15 的过渡选项，现在的链接器已经不再提供），Linux binutils提供的readelf工具是无法读取的，go提供了工具objdump来查看。
+之前我们提到，可重定位文件中，存在一些.rel.text、.rel.data sections来实现重定位，但我们也提到了，go目标文件是自定义的，它参考了plan9目标文件格式（`-go115newobj` 是 Go 1.15 的过渡选项，现在的链接器已经不再提供），Linux binutils提供的readelf工具是无法读取的，go提供了工具 `go tool objdump` 来查看。
 
 ```bash
 $ go tool objdump main.o | grep R_
