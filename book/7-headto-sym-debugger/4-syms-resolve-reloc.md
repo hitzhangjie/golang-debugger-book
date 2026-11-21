@@ -286,9 +286,7 @@ L1: 	        popl %ebx		; ebx contains the current pc
 
 与前面方法相比，**延迟绑定（lazy binding）** 更聪明地解决了这里的调用开销问题。**将过程地址的绑定推迟到第一次调用该过程时，第一次调用过程的运行时开销较大，但是其后的每次调用都只会花费一条指令和一个间接的内存引用的开销。**
 
-延迟绑定是通过两个数据结构之间简洁但又有些复杂的交互来实现的，这两个数据结构是**GOT**和**过程链接表（PLT，Procedure Linkage Table）**。如果一个目标文件中有调用定义在共享库中的函数，那么它就会有自己的GOT和PLT，GOT是.data section的一部分，PLT是.text section中的一部分。
-
-> 注意：也有的编译工具链在组织的时候，会将其组织在独立的sections中，如ELF section **.got .got.plt**。
+延迟绑定是通过两个数据结构之间简洁但又有些复杂的交互来实现的，这两个数据结构是**GOT**和**过程链接表（PLT，Procedure Linkage Table）**。如果一个目标文件中有调用定义在共享库中的函数，那么它就会有自己的GOT和PLT。在 GNU ld、gold、lld 链接的 x86-64 和 IA32 ELF 里，GOT 放在单独的 .got 节，延迟绑定用的条目放在 .got.plt，这两节属于可写数据段，PLT是.text section中的一部分。启用 RELRO（`-z relro`）后，.got 在重定位完成时被映射为只读；再启用立即绑定（`-z now`）时，gold 和 lld 的 .got.plt 也在重定位完成后被映射为只读，GNU ld 把 .got.plt 并进 .got，这些条目随 .got 一起被映射为只读。
 
 下图是示例程序main2.o的GOT的格式，头三条GOT条目比较特殊：GOT[0]包含.dynamic段的地址，这个段包含了动态链接器用来绑定过程地址的信息，比如符号表的位置和重定位信息。GOT[1]包含定义这个模块的一些信息。GOT[2]包含动态链接器的延迟绑定代码的入口点。
 
