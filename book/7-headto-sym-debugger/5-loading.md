@@ -70,7 +70,7 @@ $ /path-to/p
 
 以C程序为例，这里的启动代码通常就是符号_start的地址。在\_start地址处的启动代码（startup code）是在目标文件ctrl.o中定义的，对所有的C程序都一样。下图展示了启动代码中的关键函数调用序列。
 
-启动代码先用 __cxa_atexit 把结束时要跑的函数登记下来，再去调用初始化例程。x86 上的 glibc 会调用 .init 里的 _init（动态段 DT_INIT），并调用 .init_array 里的函数。然后启动代码调用应用程序的 main。main 返回之后调用的是 exit：exit 跑完登记过的函数，再通过系统调用 _exit 把控制交回操作系统。
+在从.text和.init section中调用了初始化例程（.init里的_init由动态段DT_INIT指出，.init_array里的函数也会被调用）之后，启动代码调用atexit例程，这个程序附加了一系列在应用程序正常终止时应该调用的程序（exit函数在运行atexit注册的函数，然后通过系统调用\_exit将控制返回给操作系统）。接着，启动代码将调用应用程序的main函数，它会开始执行我们的C代码。在应用程序返回之后，启动代码调用exit，exit运行atexit注册的函数，再通过系统调用\_exit将控制权返回给操作系统。
 
 <img alt="image-20201201095355536" src="assets/image-20201201095355536.png" width="680px"/>
 
