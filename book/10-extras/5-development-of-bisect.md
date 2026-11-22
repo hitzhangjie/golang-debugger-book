@@ -1,6 +1,8 @@
-## Go编译器+运行时DEBUG：基于哈希的二分调试技术
+## 二分调试技术(Bisect)的发展历程
 
-【注】本文翻译自 Russ Cox 于2024-07-18 发表的一篇文章[《Hash-Based Bisect Debugging in Compilers and Runtimes》](https://research.swtch.com/bisect)。为了本章bisect reduce调试技术的内容完整性，特别引用并翻译该文章来介绍bisect reduce的算法逻辑。
+【注】本文主体翻译自 Russ Cox 于2024-07-18 发表的一篇文章[《Hash-Based Bisect Debugging in Compilers and Runtimes》](https://research.swtch.com/bisect)。为了本章bisect reduce调试技术的内容完整性，特别引用并翻译该文章来介绍bisect reduce的算法逻辑。
+
+> 阅读提示：`git bisect` 的基础用法见[附录 12.3](../12-appendix/3-git-bisect.md)，VS Code 扩展二分见[附录 12.4](../12-appendix/4-vscode-extension-bisect.md)。本节重点不在重复这些基础操作，而在于其后发展出的 bisect-reduce 算法，以及它如何把二分从"提交历史"推进到"程序内部位置"。
 
 ### [背景介绍](https://research.swtch.com/bisect#setting_the_stage)
 
@@ -112,91 +114,17 @@ Bisecting: a merge base must be tested
 
 编写正确的`git bisect`调用需要一些注意，但一旦配置正确，你就可以放手让它自动运行，让`git bisect`施展它的魔法。在这种情况下，我们传递给`git bisect run`的脚本会清理任何过时的文件，然后构建Go工具链（`./make.bash`）。如果那一步失败，它以代码125退出，这是`git bisect`的特殊不确定答案：这个提交有其他问题，我们不能确定我们正在寻找的错误是否存在。否则它切换到失败测试的目录。如果`go list`失败，这在bisect使用太旧的Go版本时会发生，脚本成功退出，表示错误不存在。否则脚本运行`go test`并以该命令的状态退出。`-count=5`在那里是因为这是一个不稳定的失败，不总是发生：运行五次足以确保我们观察到错误（如果它存在的话）。
 
-当我们运行这个命令时，`git bisect`打印大量输出，以及我们测试脚本的输出，以确保我们可以看到进度：
+当我们运行这个命令时，`git bisect` 会打印每次测试的进度，并在约 10 步后锁定第一个坏提交：
 
 ```bash
 % git bisect run ...
 ...
-go: download go1.23 for darwin/arm64: toolchain not available
-Bisecting: 1360 revisions left to test after this (roughly 10 steps)
-[752379113b7c3e2170f790ec8b26d590defc71d1]
-    runtime/race: update race syso for PPC64LE
-...
-go: download go1.23 for darwin/arm64: toolchain not available
-Bisecting: 680 revisions left to test after this (roughly 9 steps)
-[ff8a2c0ad982ed96aeac42f0c825219752e5d2f6]
-    go/types: generate mono.go from types2 source
-...
-ok      rsc.io/tmp/timertest/retry  10.142s
-Bisecting: 340 revisions left to test after this (roughly 8 steps)
-[97f1b76b4ba3072ab50d0d248fdce56e73b45baf]
-    runtime: optimize timers.cleanHead
-...
-FAIL    rsc.io/tmp/timertest/retry  22.136s
-Bisecting: 169 revisions left to test after this (roughly 7 steps)
-[80157f4cff014abb418004c0892f4fe48ee8db2e]
-    io: close PipeReader in test
-...
-ok      rsc.io/tmp/timertest/retry  10.145s
-Bisecting: 84 revisions left to test after this (roughly 6 steps)
-[8f7df2256e271c8d8d170791c6cd90ba9cc69f5e]
-    internal/asan: match runtime.asan{read,write} len parameter type
-...
-FAIL    rsc.io/tmp/timertest/retry  20.148s
-Bisecting: 42 revisions left to test after this (roughly 5 steps)
-[c9ed561db438ba413ba8cfac0c292a615bda45a8]
-    debug/elf: avoid using binary.Read() in NewFile()
-...
-FAIL    rsc.io/tmp/timertest/retry  14.146s
-Bisecting: 20 revisions left to test after this (roughly 4 steps)
-[2965dc989530e1f52d80408503be24ad2582871b]
-    runtime: fix lost sleep causing TestZeroTimer flakes
-...
-FAIL    rsc.io/tmp/timertest/retry  18.152s
-Bisecting: 10 revisions left to test after this (roughly 3 steps)
-[b2e9221089f37400f309637b205f21af7dcb063b]
-    runtime: fix another lock ordering problem
-...
-ok      rsc.io/tmp/timertest/retry  10.142s
-Bisecting: 5 revisions left to test after this (roughly 3 steps)
-[418e6d559e80e9d53e4a4c94656e8fb4bf72b343]
-    os,internal/godebugs: add missing IncNonDefault calls
-...
-ok      rsc.io/tmp/timertest/retry  10.163s
-Bisecting: 2 revisions left to test after this (roughly 2 steps)
-[6133c1e4e202af2b2a6d4873d5a28ea3438e5554]
-    internal/trace/v2: support old trace format
-...
-FAIL    rsc.io/tmp/timertest/retry  22.164s
-Bisecting: 0 revisions left to test after this (roughly 1 step)
-[508bb17edd04479622fad263cd702deac1c49157]
-    time: garbage collect unstopped Tickers and Timers
-...
-FAIL    rsc.io/tmp/timertest/retry  16.159s
-Bisecting: 0 revisions left to test after this (roughly 0 steps)
-[74a0e3160d969fac27a65cd79a76214f6d1abbf5]
-    time: clean up benchmarks
-...
-ok      rsc.io/tmp/timertest/retry  10.147s
 508bb17edd04479622fad263cd702deac1c49157 is the first bad commit
-commit 508bb17edd04479622fad263cd702deac1c49157
-Author:     Russ Cox <rsc@golang.org>
-AuthorDate: Wed Feb 14 20:36:47 2024 -0500
-Commit:     Russ Cox <rsc@golang.org>
-CommitDate: Wed Mar 13 21:36:04 2024 +0000
-
-    time: garbage collect unstopped Tickers and Timers
-    ...
-    This CL adds an undocumented GODEBUG asynctimerchan=1
-    that will disable the change. The documentation happens in
-    the CL 568341.
-    ...
-
 bisect found first bad commit
 %
 ```
 
-这个错误似乎是由我的新的垃圾回收友好的定时器实现引起的，它将在Go 1.23中发布。*变魔术！*[](https://research.swtch.com/bisect#new_trick)
+完整的 `git bisect` 操作步骤见[附录 12.3](../12-appendix/3-git-bisect.md)。本例定位到的提交是 `508bb17`（`time: garbage collect unstopped Tickers and Timers`），这个错误似乎是由新的垃圾回收友好的定时器实现引起的，它将在 Go 1.23 中发布。*变魔术！*[](https://research.swtch.com/bisect#new_trick)
 
 ### [基于程序位置的二分搜索](https://research.swtch.com/bisect#new_trick)
 
@@ -510,7 +438,7 @@ func bisect(suffix string, forced []string) []string {
     // Otherwise need parts of both halves.
     leftReduced := bisect("0"+suffix, slices.Concat([]string{"1"+suffix}, forced))
     rightReduced := bisect("1"+suffix, slices.Concat(leftReduced, forced))
-    return slices.Concat(leftReduce, rightReduce)
+    return slices.Concat(leftReduced, rightReduced)
 }
 ```
 
@@ -655,5 +583,5 @@ exit 1
 ### 参考内容
 
 1. hash-based bisect debugging in compilers and runtimes, https://research.swtch.com/bisect
-2. vscode extension bisect, https://code.visualstudio.com/blogs/2021/02/16/extension-bisect
-3. git bisect, https://git-scm.com/docs/git-bisect
+2. vscode extension bisect, https://code.visualstudio.com/blogs/2021/02/16/extension-bisect （本书附录 12.4 为其译文）
+3. git bisect, https://git-scm.com/docs/git-bisect （本书附录 12.3 为使用示例）

@@ -40,7 +40,7 @@
 
 > 早期的opentracing往往聚焦在tracing领域，和metrics、logging的结合比较少，这意味着当你看到一个耗时比较久的span时，如果缺少日志系统的支持，你可能还是不知道当时的问题详情是什么，缺少日志嘛。如果没有关联metrics，你也不知道特定的某个请求触发了什么监控打点。
 >
-> 这就是早期opentracing、opencencus等存在的不足，现在opentelemetry意识到了这点，将logging、metrics、tracing整合到了一起，形成了新的行业的可观测性标准。[opentelemetry](https://opentelemetry.io/) 可以在框架层实现，也可以借助eBPF的强大能力作为平台化能力来实现。
+> 这就是早期 OpenTracing、OpenCensus 等存在的不足，现在 OpenTelemetry 意识到了这点，将 logging、metrics、tracing 整合到了一起，形成了新的行业的可观测性标准。[opentelemetry](https://opentelemetry.io/) 可以在框架层实现，也可以借助eBPF的强大能力作为平台化能力来实现。
 
 #### 5. 二分定位法
 
@@ -118,7 +118,7 @@ $ sudo ftrace -u 'main.*' -u 'fmt.Print*' ./main 'main.(*Student).String(s.name=
 
 总而言之，如果用调试器的思路去尝试解决这个问题，是真的比较难。我们一般会通过Logging、Metrics、Tracing系统来解决微服务架构下的这类问题，生产环境下实践看来也还不错。但是你要说这种方案完美，那也很不现实，比如开发、测试环境中，我们更希望快速定位问题，但是实际情况是：1）你可能要等待一段时间才能观察到日志、监控上报、链路跟踪信息，有一定延迟。2）而且你可能要反复修改代码（补充下日志、监控、创建新的trace或者span），编译，构建，部署测试 …… 然后才能观察到。
 
-本来调试器可能只需要几秒钟就能搞定的事情，只是因为对多机多个进程attach、添加断点时机这块比较难协调，难道就认为调试器搞不定这种情景了？SquashIO提供了完整的云原生情景下的解决方案：Squash Debugger，支持Kubernetes、Openshift、Istio等容器编排平台，实时注入调试容器，并自动关联对应版本的源码，并且能在RPC调用触发后自动触发对Callee特定接口处理函数的断点设置、UI上也支持自动切换到目标服务，支持常见的VSCode等IDE。
+本来调试器可能只需要几秒钟就能搞定的事情，只是因为对多机多个进程attach、添加断点时机这块比较难协调，难道就认为调试器搞不定这种情景了？SquashIO 曾给出过一个云原生情景下的方案：Squash Debugger，支持 Kubernetes、OpenShift、Istio 等容器编排平台，实时注入调试容器，并自动关联对应版本的源码，还能在 RPC 调用触发后自动对 Callee 的接口处理函数设置断点，UI 上也支持自动切换到目标服务以及常见的 VSCode 等 IDE。需要说明的是，Squash Debugger 在 2019 年后基本停止演进（仓库最后一次代码提交在 2022 年 6 月），如今更常见的选择是 Telepresence、Rookout 等工具。
 
 ### 调试技术选择哲学
 
