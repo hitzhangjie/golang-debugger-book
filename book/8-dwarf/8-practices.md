@@ -1,6 +1,6 @@
 ## DWARF解析与应用
 
-8.8 我们比较了标准库和 delve 的 DWARF 实现，说明了为什么最终选择 delve 的 `pkg/dwarf`。这一节进入实践：先看 delve `pkg/dwarf` 的目录和 package 分工，再写几个测试用例，验证 DWARF 能帮我们拿到哪些信息。
+8.7 我们比较了标准库和 delve 的 DWARF 实现，说明了为什么最终选择 delve 的 `pkg/dwarf`。这一节进入实践：先看 delve `pkg/dwarf` 的目录和 package 分工，再写几个测试用例，验证 DWARF 能帮我们拿到哪些信息。
 
 ### DWARF解析
 

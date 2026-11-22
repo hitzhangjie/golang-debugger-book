@@ -2,7 +2,9 @@
 
 ### 为什么要看生成过程
 
-前面 8.1–8.5 我们讲的是“DWARF 长什么样”：DIE 怎么描述类型、变量、函数，行号表怎么把源码位置映射成指令地址，CFI 怎么描述栈帧。接下来自然要问：这些数据是谁、在什么时候、按照什么规则写进二进制的？
+前面 7.1–7.7 我们把程序从源码送到了进程：构建、ELF、符号表、重定位、加载、地址换算，也用标准库把 ELF 和符号表读了出来。接下来自然要问：调试信息是谁、在什么时候、按照什么规则写进二进制的？
+
+这一节会涉及一些 DWARF 术语，比如 DIE、Tag、Attribute、行号表、CFI。第8章会系统解释这些概念；如果你现在还不熟，第一遍先抓“编译器产出符号、链接器合并输出”的主干，不要被代码细节卡住。
 
 答案的一半在编译器，一半在链接器：
 
@@ -17,9 +19,9 @@
 
 ### 本节安排
 
-- **8.6.1 如何跟踪 DWARF 生成过程**：走读代码、调试跟踪、eBPF 跟踪等几种办法，以及怎么构建一个带 DWARF 的 Go 工具链。这一节是方法论，第一遍可以跳过。
-- **8.6.2 编译器生成 DWARF 数据**：跟着 `gc.Main()` 看 `dwarfgen.RecordFlags()`、`RecordPackageName()`、`dumpGlobal()`、`populateDWARF()` 等关键步骤。
-- **8.6.3 链接器生成 DWARF 数据**：跟着 `ld.Main()` 看 `dwarfGenerateDebugInfo()`、`dwarfGenerateDebugSyms()`、`dwarfcompress()` 的分工。
+- **7.8.1 如何跟踪 DWARF 生成过程**：走读代码、调试跟踪、eBPF 跟踪等几种办法，以及怎么构建一个带 DWARF 的 Go 工具链。这一节是方法论，第一遍可以跳过。
+- **7.8.2 编译器生成 DWARF 数据**：跟着 `gc.Main()` 看 `dwarfgen.RecordFlags()`、`RecordPackageName()`、`dumpGlobal()`、`populateDWARF()` 等关键步骤。
+- **7.8.3 链接器生成 DWARF 数据**：跟着 `ld.Main()` 看 `dwarfGenerateDebugInfo()`、`dwarfGenerateDebugSyms()`、`dwarfcompress()` 的分工。
 
 ### 阅读提示
 
