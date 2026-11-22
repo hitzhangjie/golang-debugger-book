@@ -216,26 +216,7 @@ func (f *File) DWARF() (*dwarf.Data, error) {
 
 #### understand delve pkg/dwarf
 
-go-delve/delve里面dwarf操作相关的部分主要是在package `pkg/dwarf`中，简单罗列下主要实现了什么。
-
-- pkg/dwarf/util: 该package下有些代码是从go标准库里面copy过来修改的，比如 `pkg/dwarf/util/buf.go`大部分是标准库代码，只做了一点微调，增加了几个工具函数来读取变长编码的数值、读取字符串和编译单元开头的DWARF信息。
-
-- pkg/dwarf/dwarfbuilder: 该package提供了一些工具类、工具函数来快速对DWARF信息进行编码，比如向.debug_info中增加编译单元、增加函数、增加变量、增加类型。还有就是往.debug_loc中增加LocEntry信息。
-  go-delve/delve为什么要提供这样的package实现呢？我认为一方面go标准库没有提供这方面信息（工具链cmd/internal/dwarf虽有，前面讲了未纳入标准库、且难copy&paste后复用），对如何使用DWARF调试信息来完善地描述go程序构造等也没有那么高投入，go-delve/delve这里应该也是做了一部分这方面的探索，然后和go开发团队来协作共建的方式。所以这里维护这部分DWARF数据生成逻辑也就理解了。
-
-- pkg/dwarf/frame: 这个package下提供了对.debug_frame、.zdebug_frame的解析，每个编译单元都有自己的.debug_frame，最后链接器将其合并成一个。对每个编译单元cu来说，都是先编码对应的CIE信息，然后再跟着编译单元cu中包含的FDE信息。然后再是下一个编译单元的CIE、FDEs……如此反复。对这部分信息，可以使用一个状态机来解析。
-
-- pkg/dwarf/line: 这个package下提供了对.debug_line的解析，之所以自己实现，不用go标准库中的debug/gosym，前面已经提过很多次了，标准库实现只支持纯go代码，cgo代码不支持，缺失了这部分行表数据。之所以也不用标准库debug/dwarf，我认为也是delve的一种实现策略，相对来说，保证了delve实现DWARF解析、调试功能的完备性。
-
-- pkg/dwarf/godwarf: 这里的代码，和go标准库debug/dwarf对比，有很多相似的地方，应该是在标准库基础上修改的。它主要是实现了DWARF信息的读取，并且支持ZLIB解压缩。以及为了支持DWARF v5中新增的.debug_addr增加的代码，.debug_addr有助于简化现有的重定位操作。还提供了对DWARF标准中规定的一些类型信息的读取。也支持.debug_info中DIE的读取解析，为了更方便使用，它将其组织成一棵DIE Tree的形式。
-
-- pkg/dwarf/loclist: 同一个对象在其生命周期内，其位置有可能是会发生变化的，位置列表信息就是用来描述这种情况的。DWARF v2~v4都有这方面的描述，DWARF v5也有改进。
-
-- pkg/dwarf/op: DWARF中定义了很多的操作指令，这个package主要是实现这些指令的操作。
-
-- pkg/dwarf/reader: 在标准库dwarf.Reader上的进一步封装，以实现更加方便的DWARF信息访问。
-
-- pkg/dwarf/util: 提供了一些DWARF数据解析需要用到的buffer实现，以及读取LEB128编解码、读取字符串表中字符串（以null结尾）的工具函数。
+delve `pkg/dwarf` 下各 package 的职责、用法，以及本书为什么要复用它，统一放在 8.6 介绍，避免在 7.7 和第8章各讲一遍。这里只需要知道：标准库 `debug/dwarf` 不够用，delve 在它基础上补齐了 `.debug_frame`、行号表、类型解析等能力。
 
 ## 本节小结
 

@@ -1,5 +1,7 @@
 ## pkg debug/dwarf 应用
 
+> 阅读提示：本节是 `debug/dwarf` 的导览，会用到 DIE、Tag、Attribute、LineReader 等概念。第8章会系统解释这些概念；第一遍可以先跑通示例，读不懂的地方先跳过，等第8章后再回读。
+
 ### DWARF数据存储
 
 标准库提供了package `debug/dwarf` 来读取go编译工具链生成的DWARF数据，比如.debug_info、.debug_line等。
