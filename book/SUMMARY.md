@@ -47,7 +47,7 @@
   * [7.3 符号&符号表](7-headto-sym-debugger/3-syms.md)
   * [7.4 符号解析&重定位](7-headto-sym-debugger/4-syms-resolve-reloc.md)
   * [7.5 加载](7-headto-sym-debugger/5-loading.md)
-  * [7.6 go标准库debug/\*](7-headto-sym-debugger/6-gopkg-debug/README.md)
+  * [7.6 go标准库debug/*](7-headto-sym-debugger/6-gopkg-debug/README.md)
     * [7.6.1 debug/elf](7-headto-sym-debugger/6-gopkg-debug/1-elf.md)
     * [7.6.2 debug/gosym](7-headto-sym-debugger/6-gopkg-debug/2-gosym.md)
     * [7.6.3 debug/dwarf](7-headto-sym-debugger/6-gopkg-debug/3-dwarf.md)
