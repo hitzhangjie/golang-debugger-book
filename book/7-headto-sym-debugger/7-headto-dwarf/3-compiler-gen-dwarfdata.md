@@ -4,7 +4,6 @@
 
 **记录当前构建信息到dwarf调试信息中去，方便调试器调试时查看tracee的构建细节**
 
-```go
 这个函数的主要目的是将编译器的命令行参数记录到 DWARF 调试信息中。DWARF 是一种调试信息格式，用于帮助调试器理解程序的内部结构。具体来说：
 1. 函数接收一系列标志名称作为参数，这些标志是编译器命令行参数
 2. 对于每个标志，函数会：
@@ -22,7 +21,8 @@
     - 将参数信息存储在符号的数据中
 这样做的目的是让调试器能够知道程序是如何被编译的，这对于调试和问题诊断很有帮助。比如，如果程序是用 -race 编译的，调试器就能知道这是一个竞态检测版本的程序。
 这个信息会被写入到最终的可执行文件中，作为 DWARF 调试信息的一部分。当使用调试器（如 GDB）时，这些信息可以帮助开发者更好地理解程序的编译环境和配置。
-```
+
+> `RecordFlags` 的源码见 `cmd/compile/internal/dwarfgen/dwarf.go`（go1.24）。
 
 ### gc.Main()→dwarf flags设置
 
@@ -154,12 +154,12 @@ gc.Main()
    \-> enqueueFunc 
          \-> compileFunctions 
                \-> compile 
-                     \-> (*Progs).FLush
+                     \-> (*Progs).Flush
                              \-> (*Progs).Flushplist
                                    \-> (*Link).populateDWARF
 ```
 
-OK，详细展开看看：
+OK，详细展开看看。`Main` 摘自 `cmd/compile/internal/gc/main.go`（go1.24，package gc），真实签名是 `func Main(archInit func(*ssagen.ArchInfo))`；下面只摘核心调度循环：
 
 ```go
 func gc.Main(...) {
