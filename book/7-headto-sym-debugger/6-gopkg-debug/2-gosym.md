@@ -295,7 +295,7 @@ go标准库 `runtime/debug.PrintStack()`就是这么实现的，只是它考虑�
 
 **那调试器应该如何做呢？**
 
-**研究delve源码发现，在[go-delve/delve@6d405179](https://sourcegraph.com/github.com/go-delve/delve@6d405179/-/blob/pkg/proc/stack.go?subtree=true#L113)之前，其父提交上的[pkg/proc/stack.go](https://sourcegraph.com/github.com/go-delve/delve@6d405179~1/-/blob/pkg/proc/stack.go?subtree=true#L115)是借助gosym.Table结合DWARF FDE实现的**：
+**研究delve源码发现，在[go-delve/delve@6d405179](https://github.com/go-delve/delve/blob/6d40517944d40113469b385784f47efa4a25080d/pkg/proc/stack.go#L113)之前，其父提交上的[pkg/proc/stack.go](https://github.com/go-delve/delve/blob/913153e7ffb62512ccdf850bc37bf3abd3aecc2b/pkg/proc/stack.go#L115)是借助gosym.Table结合DWARF FDE实现的**：
 
 - dlv首先利用DWARF .debug_frame section来构建FDE列表；
 - dlv获得tracee的pc值，然后遍历FDE列表，找到FDE地址范围覆盖pc的FDE，这个FDE就是pc对应的函数栈帧了；
@@ -308,7 +308,7 @@ go标准库 `runtime/debug.PrintStack()`就是这么实现的，只是它考虑�
 
 这里需要明确的是，**.gopclntab只记录了纯go程序的pc、源文件位置映射信息，对于cgo程序的部分是不包含的，因为c编译器都不理解有这些东西的，因此有一定的局限性。**但是生成.[z]debug_line、.[z]debug_frame信息，常见编译器都是支持的，是可以更好地解决这里的局限性问题的。
 
-[go-delve/delve@6d405179](https://sourcegraph.com/github.com/go-delve/delve@6d405179/-/blob/pkg/proc/stack.go?subtree=true#L113)，项目核心开发aarzilli解决了这个问题，并在提交记录里特别强调了用.[z]debug_line来代替.gosymtab、.gopclntab这个问题：
+[go-delve/delve@6d405179](https://github.com/go-delve/delve/blob/6d40517944d40113469b385784f47efa4a25080d/pkg/proc/stack.go#L113)，项目核心开发aarzilli解决了这个问题，并在提交记录里特别强调了用.[z]debug_line来代替.gosymtab、.gopclntab这个问题：
 
 ```bash
 commit 6d40517944d40113469b385784f47efa4a25080d
