@@ -1,6 +1,8 @@
-## Go编译器+运行时DEBUG：基于哈希的二分调试技术
+## 二分调试技术(Bisect)的发展历程
 
-【注】本文翻译自 Russ Cox 于2024-07-18 发表的一篇文章[《Hash-Based Bisect Debugging in Compilers and Runtimes》](https://research.swtch.com/bisect)。为了本章bisect reduce调试技术的内容完整性，特别引用并翻译该文章来介绍bisect reduce的算法逻辑。
+【注】本文主体翻译自 Russ Cox 于2024-07-18 发表的一篇文章[《Hash-Based Bisect Debugging in Compilers and Runtimes》](https://research.swtch.com/bisect)。为了本章bisect reduce调试技术的内容完整性，特别引用并翻译该文章来介绍bisect reduce的算法逻辑。
+
+> 阅读提示：`git bisect` 的基础用法见[附录 12.3](../12-appendix/3-git-bisect.md)，VS Code 扩展二分见[附录 12.4](../12-appendix/4-vscode-extension-bisect.md)。本节保留原文完整的 `git bisect` 实操过程，随后重点展开其后的 bisect-reduce 算法，以及它如何把二分从"提交历史"推进到"程序内部位置"。
 
 ### [背景介绍](https://research.swtch.com/bisect#setting_the_stage)
 
@@ -510,7 +512,7 @@ func bisect(suffix string, forced []string) []string {
     // Otherwise need parts of both halves.
     leftReduced := bisect("0"+suffix, slices.Concat([]string{"1"+suffix}, forced))
     rightReduced := bisect("1"+suffix, slices.Concat(leftReduced, forced))
-    return slices.Concat(leftReduce, rightReduce)
+    return slices.Concat(leftReduced, rightReduced)
 }
 ```
 
@@ -655,5 +657,5 @@ exit 1
 ### 参考内容
 
 1. hash-based bisect debugging in compilers and runtimes, https://research.swtch.com/bisect
-2. vscode extension bisect, https://code.visualstudio.com/blogs/2021/02/16/extension-bisect
-3. git bisect, https://git-scm.com/docs/git-bisect
+2. vscode extension bisect, https://code.visualstudio.com/blogs/2021/02/16/extension-bisect （本书附录 12.4 为其译文）
+3. git bisect, https://git-scm.com/docs/git-bisect （本书附录 12.3 为使用示例）

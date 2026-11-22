@@ -98,7 +98,7 @@ import "fmt"
 func main() {
 	a := []int{1, 2, 3, 4, 5}
 	sum := 0
-	for i := 0; i <= len(a); i++ {  // Bug: loop condition should be i < len(a)
+	for i := 0; i <= len(a); i++ {  // Bug: loop condition should be i < len(a) to avoid index out of range
 		sum += a[i]
 	}
 	fmt.Println("Sum:", sum)
@@ -112,7 +112,7 @@ func main() {
 #### 2. 编译与调试准备
 
 ```bash
-cd /home/zhangjie/debugger101/tinydbg/examples/llm_debug2
+cd tinydbg/examples/llm_debug2
 
 # 使用Go 1.24.6编译，禁用优化
 go1.24.6 build -gcflags 'all=-N -l' -o main main.go
@@ -152,7 +152,7 @@ continue
 =>   5:	func main() {
      6:		a := []int{1, 2, 3, 4, 5}
      7:		sum := 0
-     8:		for i := 0; i <= len(a); i++ {  // Bug: loop condition should be i < len(a)
+     8:		for i := 0; i <= len(a); i++ {  // Bug: loop condition should be i < len(a) to avoid index out of range
      9:		    sum += a[i]
     10:	    }
 ```
@@ -235,9 +235,9 @@ print i
 
 ```
 (tinydbg) > main.main() ./main.go:8 (PC: 0x4b1b7e)
-=>   8:	    for i := 0; i <= len(a); i++ {  // Bug: loop condition should be i < len(a)
+=>   8:	    for i := 0; i <= len(a); i++ {  // Bug: loop condition should be i < len(a) to avoid index out of range
      9:	        sum += a[i]
-(tinydbg) (tinydbg) > main.main() ./main.go:9 (PC: 0x4b1b9c)
+(tinydbg) > main.main() ./main.go:9 (PC: 0x4b1b9c)
 =>   9:	        sum += a[i]
 (tinydbg) 0
 ```
@@ -290,7 +290,7 @@ continue
 **执行结果** (stdout关键片段)：
 
 ```
-(tinydbg) > [unrecovered-panic] runtime.fatalpanic() /home/zhangjie/.goenv/sdk/go1.24.6/src/runtime/panic.go:1301 
+(tinydbg) > [unrecovered-panic] runtime.fatalpanic() /usr/local/go/src/runtime/panic.go:1301
 (hits goroutine(1):1 total:1) (PC: 0x43da84)
 Warning: debugging optimized function
 	runtime.curg._panic.arg: interface {}(string) "runtime error: index out of range [5] with length 5"
@@ -369,7 +369,7 @@ Type 'help' for list of commands.
      8:		for i := 0; i <= len(a); i++ {  // Bug: loop condition should be i < len(a) to avoid index out of range
      9:			sum += a[i]
     10:		}
-(tinydbg) (tinydbg) > main.main() ./main.go:6 (PC: 0x4b1afa)
+(tinydbg) > main.main() ./main.go:6 (PC: 0x4b1afa)
      1:	package main
      2:
      3:	import "fmt"
@@ -381,7 +381,7 @@ Type 'help' for list of commands.
      9:			sum += a[i]
     10:		}
     11:		fmt.Println("Sum:", sum)
-(tinydbg) (tinydbg) > main.main() ./main.go:7 (PC: 0x4b1b75)
+(tinydbg) > main.main() ./main.go:7 (PC: 0x4b1b75)
      2:
      3:	import "fmt"
      4:
@@ -405,7 +405,7 @@ Type 'help' for list of commands.
     10:		}
      11:		fmt.Println("Sum:", sum)
      12:	}
-(tinydbg) (tinydbg) > main.main() ./main.go:9 (PC: 0x4b1b9c)
+(tinydbg) > main.main() ./main.go:9 (PC: 0x4b1b9c)
      4:
      5:	func main() {
      6:		a := []int{1, 2, 3, 4, 5}
@@ -427,7 +427,7 @@ Type 'help' for list of commands.
     10:		}
      11:		fmt.Println("Sum:", sum)
      12:	}
-(tinydbg) (tinydbg) > main.main() ./main.go:9 (PC: 0x4b1b9c)
+(tinydbg) > main.main() ./main.go:9 (PC: 0x4b1b9c)
      4:
      5:	func main() {
      6:		a := []int{1, 2, 3, 4, 5}
@@ -449,7 +449,7 @@ Type 'help' for list of commands.
     10:		}
      11:		fmt.Println("Sum:", sum)
      12:	}
-(tinydbg) (tinydbg) > main.main() ./main.go:9 (PC: 0x4b1b9c)
+(tinydbg) > main.main() ./main.go:9 (PC: 0x4b1b9c)
      4:
      5:	func main() {
      6:		a := []int{1, 2, 3, 4, 5}
@@ -471,7 +471,7 @@ Type 'help' for list of commands.
     10:		}
      11:		fmt.Println("Sum:", sum)
      12:	}
-(tinydbg) (tinydbg) > main.main() ./main.go:9 (PC: 0x4b1b9c)
+(tinydbg) > main.main() ./main.go:9 (PC: 0x4b1b9c)
      4:
      5:	func main() {
      6:		a := []int{1, 2, 3, 4, 5}
@@ -493,7 +493,7 @@ Type 'help' for list of commands.
      10:		}
      11:		fmt.Println("Sum:", sum)
      12:	}
-(tinydbg) (tinydbg) > [unrecovered-panic] runtime.fatalpanic() /home/zhangjie/.goenv/sdk/go1.24.6/src/runtime/panic.go:1301 (hits goroutine(1):1 total:1) (PC: 0x43da84)
+(tinydbg) > [unrecovered-panic] runtime.fatalpanic() /usr/local/go/src/runtime/panic.go:1301 (hits goroutine(1):1 total:1) (PC: 0x43da84)
 Warning: debugging optimized function
 	runtime.curg._panic.arg: interface {}(string) "runtime error: index out of range [5] with length 5"
   1296:	// fatalpanic implements an unrecoverable panic. It is like fatalthrow, except
