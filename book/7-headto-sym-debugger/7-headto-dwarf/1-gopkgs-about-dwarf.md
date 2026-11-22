@@ -47,14 +47,29 @@ OK，那我们看下 `debug/dwarf` 的支持程度和局限性，`debug/dwarf`�
 - 所有.debug_ .zdebug_ sections，dwarf.Data里面统一转换为.debug_ sections；
 - 所有的DWARF sections都会被正常读取！
 
+file: src/debug/elf/file.go（go1.24，`(*File).DWARF`）
+
+下面是简化后的结构示意：省略了错误处理，重定位循环也只保留要点。
+
 ```go
 func (f *File) DWARF() (*dwarf.Data, error) {
-    // 获取 .[z]debug_ sections后面的后缀，其他section返回空:w
+    // 获取 .[z]debug_ sections 后面的后缀，其他 section 返回 ""
     dwarfSuffix := func(s *Section) string { ... }
-    // 获取 .[z]debug_ sections的数据，并按需解压缩，按需重定位
-    sectionData := func(i int, s *Section) ([]byte, error) { ... }
 
-    // DWARFv4 有非常多的.[z]debug_ sections，最开始 debug/dwarf 主要处理下面这些 sections
+    // 取 section 数据：Section.Data() 内部按需解压缩，这里再按需重定位
+    sectionData := func(i int, s *Section) ([]byte, error) {
+        b, _ := s.Data()
+        if f.Type == ET_EXEC {
+            // ET_EXEC 的重定位在链接期已完成，.rela 里的数据可能是错的
+            return b, nil
+        }
+        // 非 ET_EXEC：找出 Info 指向本节 s 的 SHT_REL/SHT_RELA，
+        // 把重定位应用到 b 上，即 f.applyRelocations(b, rd)
+        ...
+        return b, nil
+    }
+
+    // 第一轮：只处理 debug/dwarf 最早支持的那几个 section
     var dat = map[string][]byte{"abbrev": nil, "info": nil, "str": nil, "line": nil, "ranges": nil}
     for i, s := range f.Sections {
         suffix := dwarfSuffix(s)
@@ -68,27 +83,24 @@ func (f *File) DWARF() (*dwarf.Data, error) {
         dat[suffix] = b
     }
 
-    // 创建dwarf.Data，只包含了已经处理的.[z]debug_ sections
+    // 先只用第一轮的结果构造 dwarf.Data
     d, _ := dwarf.New(dat["abbrev"], nil, nil, dat["info"], dat["line"], nil, dat["ranges"], dat["str"])
 
-    // 继续处理 multiple .debug_types sections and other DWARFv4/v5 sections.
+    // 第二轮：收下 .debug_types 和其他 DWARFv4/v5 sections
     for i, s := range f.Sections {
         suffix := dwarfSuffix(s)
         if suffix == "" {
             continue
         }
         if _, ok := dat[suffix]; ok {
-            // Already handled.
-            continue
+            continue // 第一轮已处理
         }
-
         b, _ := sectionData(i, s)
-        // 如果有多个.debug_types sections，dwarf.Data里的section名加上编号，方便定位问题
         if suffix == "types" {
-            _ = d.AddTypes(fmt.Sprintf("types-%d", i), b); err != nil {
+            // 多个 .debug_types 时，section 名带上编号，方便定位问题
+            d.AddTypes(fmt.Sprintf("types-%d", i), b)
         } else {
-            // 其他DWARF sections
-            _ = d.AddSection(".debug_"+suffix, b); err != nil {
+            d.AddSection(".debug_"+suffix, b)
         }
     }
 
