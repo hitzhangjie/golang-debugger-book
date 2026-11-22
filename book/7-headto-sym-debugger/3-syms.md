@@ -190,7 +190,7 @@ type Sym32 struct {
 }
 ```
 
-关于如何读取符号表，可以参考go源码 `src/debug/elf/file.go`：https://sourcegraph.com/github.com/golang/go/-/blob/src/debug/elf/file.go。
+关于如何读取符号表，可以参考go源码 `src/debug/elf/file.go`：https://github.com/golang/go/blob/go1.24.6/src/debug/elf/file.go。
 
 现在go工具链已经支持读取符号表，推荐大家优先使用go工具链。Linux binutils也提供了一些类似工具，但是对于go程序而言，有点特殊之处：
 

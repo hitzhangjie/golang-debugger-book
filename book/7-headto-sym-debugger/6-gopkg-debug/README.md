@@ -28,7 +28,7 @@ go标准库package `debug/*`，专门用来读取、解析go编译工具链生�
 >   -   windows可执行程序、目标文件的格式有采用pe这种格式，`debug/pe`是用来解析pe格式；
 >   -   plan9obj这种格式比较特殊，它源于plan9分布式操作系统项目，`debug/plan9obj`用来解析这种plan9obj这种格式；
 >
->   需要说明的是，在Linux下，go最终输出的文件格式虽然是ELF格式，但是在中途生成的目标文件*.o却不是采用的ELF格式，而是借鉴了plan9obj的格式，但是也有些变化。如果读者想查看go输出的目标文件格式，可以在这里找到其定义以及解析相关的package实现 "[cmd/internal/goobj/objfile.go](https://sourcegraph.com/github.com/golang/go@f5978a09589badb927d3aa96998fc785524cae02/-/blob/src/cmd/internal/goobj/objfile.go#L33)"。
+>   需要说明的是，在Linux下，go最终输出的文件格式虽然是ELF格式，但是在中途生成的目标文件*.o却不是采用的ELF格式，而是借鉴了plan9obj的格式，但是也有些变化。如果读者想查看go输出的目标文件格式，可以在这里找到其定义以及解析相关的package实现 "[cmd/internal/goobj/objfile.go](https://github.com/golang/go/blob/f5978a09589badb927d3aa96998fc785524cae02/src/cmd/internal/goobj/objfile.go#L33)"。
 >   但是由于该package为internal目录下，只允许在cmd/下的package引用，如果要正确读取go生成的\*.o目标文件格式的话，需要自己写工具。github上有类似项目可供借鉴，see [hitzhangjie/codemaster/debug](https://github.com/hitzhangjie/codemaster/tree/master/debug)。
 
 接下来各个小节，我们将介绍下上述package的使用，了解它们对开发符号级调试器提供了哪些帮助。
