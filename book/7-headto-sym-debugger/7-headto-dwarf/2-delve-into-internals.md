@@ -49,17 +49,14 @@ SUM:                            853          31297          72194         457621
 一个解决办法是，从源码重新构建编译工具链：
 
 ```bash
-# 下载go源码并切换到go1.24分支
+# 下载go源码并检出标签go1.24.0
 git clone https://github.com/golang/go
 cd go
-git checkout v1.24
+git checkout go1.24.0
 
-# 修改VERSION文件，在go1.24.0前面加上 'tests/'字样
-# 此时go工具链构建流程就不会去掉DWARF生成的编译器、链接器选项了
-cat >>VERSION<<EOF
-tests/go1.24.0
-time 2025-02-10T23:33:55Z
-EOF
+# 改写VERSION首行，time行保留。首行不能以go或release.开头，
+# 否则cmd/dist按发行版构建，会加上-w和-dwarf=false，compile、link里就没有DWARF。
+sed -i '1s|.*|notes/go1.24.0|' VERSION
 
 # 编译构建，构建产物会输出到 path-to/go/bin 以及 path-to/go/pkg/tool/ 目录下
 cd src
