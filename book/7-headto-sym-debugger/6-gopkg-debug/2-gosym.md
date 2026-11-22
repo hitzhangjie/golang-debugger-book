@@ -299,9 +299,11 @@ go标准库 `runtime/debug.PrintStack()`就是这么实现的，只是它考虑�
 
 - dlv首先利用DWARF .debug_frame section来构建FDE列表；
 - dlv获得tracee的pc值，在 `frameInfo` 里用 `FDEForPC(pc)` 找到地址范围覆盖该pc的FDE，这个FDE就是pc对应的函数栈帧了；
-- 再找caller时，调用 `fde.ReturnAddressOffset(pc)` 得到 `spoffset`、`retoffset`，CFA（Canonical Frame Address）为 `sp+spoffset`（sp为tracee当前栈指针），返回地址槽在 `cfa+retoffset`，从该位置读出返回地址，再去 `FDEForPC` 找地址范围覆盖这个返回地址的FDE，这个FDE对应的就是caller；
-- 找不到覆盖该pc的FDE（`NoFDEForPCError`）时，若bp不为0，就用bp兜底，返回地址槽按bp加上一个指针宽度计算，再从该位置读出返回地址；
+- 再找caller时，dlv不再像go runtime那样直接取bp，而是由当前FDE根据pc给出这一帧的基址以及返回地址存放在栈上的位置，从该位置读出返回地址；再把这个返回地址当作新的pc，去 `FDEForPC` 找覆盖它的FDE，那个FDE对应的就是caller；
+- 找不到覆盖该pc的FDE（`NoFDEForPCError`）时，若bp不为0，才退回按bp计算返回地址位置的做法；
 - 重复以上过程即可，直到符合栈跟踪深度要求；
+
+> FDE 之所以能根据pc算出帧基址和返回地址位置，靠的是 .debug_frame 中记录的调用帧信息（CFI），第 8.5.3 节会专门介绍，这里先知道调试器是用FDE来展开调用栈即可。
 
 **找caller-callee关系，dlv就是按上述过程处理的，至于callee当前pc以及caller调用当前函数处的pc，这些虚拟内存地址对应的函数名、源文件位置信息，还是通过gosym.Table来转换实现的。**
 
