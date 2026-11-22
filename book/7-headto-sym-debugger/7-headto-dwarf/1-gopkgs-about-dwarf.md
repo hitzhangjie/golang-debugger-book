@@ -49,106 +49,65 @@ OK，那我们看下 `debug/dwarf` 的支持程度和局限性，`debug/dwarf`�
 
 file: src/debug/elf/file.go（go1.24，`(*File).DWARF`）
 
+下面是简化后的结构示意：省略了错误处理，重定位循环也只保留要点。
+
 ```go
 func (f *File) DWARF() (*dwarf.Data, error) {
-	dwarfSuffix := func(s *Section) string {
-		switch {
-		case strings.HasPrefix(s.Name, ".debug_"):
-			return s.Name[7:]
-		case strings.HasPrefix(s.Name, ".zdebug_"):
-			return s.Name[8:]
-		default:
-			return ""
-		}
+    // 获取 .[z]debug_ sections 后面的后缀，其他 section 返回 ""
+    dwarfSuffix := func(s *Section) string { ... }
 
-	}
-	// sectionData gets the data for s, checks its size, and
-	// applies any applicable relations.
-	sectionData := func(i int, s *Section) ([]byte, error) {
-		b, err := s.Data()
-		if err != nil && uint64(len(b)) < s.Size {
-			return nil, err
-		}
+    // 取 section 数据：Section.Data() 内部按需解压缩，这里再按需重定位
+    sectionData := func(i int, s *Section) ([]byte, error) {
+        b, _ := s.Data()
+        if f.Type == ET_EXEC {
+            // ET_EXEC 的重定位在链接期已完成，.rela 里的数据可能是错的
+            return b, nil
+        }
+        // 非 ET_EXEC：找出 Info 指向本节 s 的 SHT_REL/SHT_RELA，
+        // 把重定位应用到 b 上，即 f.applyRelocations(b, rd)
+        ...
+        return b, nil
+    }
 
-		if f.Type == ET_EXEC {
-			// Do not apply relocations to DWARF sections for ET_EXEC binaries.
-			// Relocations should already be applied, and .rela sections may
-			// contain incorrect data.
-			return b, nil
-		}
+    // 第一轮：只处理 debug/dwarf 最早支持的那几个 section
+    var dat = map[string][]byte{"abbrev": nil, "info": nil, "str": nil, "line": nil, "ranges": nil}
+    for i, s := range f.Sections {
+        suffix := dwarfSuffix(s)
+        if suffix == "" {
+            continue
+        }
+        if _, ok := dat[suffix]; !ok {
+            continue
+        }
+        b, _ := sectionData(i, s)
+        dat[suffix] = b
+    }
 
-		for _, r := range f.Sections {
-			if r.Type != SHT_RELA && r.Type != SHT_REL {
-				continue
-			}
-			if int(r.Info) != i {
-				continue
-			}
-			rd, err := r.Data()
-			if err != nil {
-				return nil, err
-			}
-			err = f.applyRelocations(b, rd)
-			if err != nil {
-				return nil, err
-			}
-		}
-		return b, nil
-	}
+    // 先只用第一轮的结果构造 dwarf.Data
+    d, _ := dwarf.New(dat["abbrev"], nil, nil, dat["info"], dat["line"], nil, dat["ranges"], dat["str"])
 
-	// There are many DWARf sections, but these are the ones
-	// the debug/dwarf package started with.
-	var dat = map[string][]byte{"abbrev": nil, "info": nil, "str": nil, "line": nil, "ranges": nil}
-	for i, s := range f.Sections {
-		suffix := dwarfSuffix(s)
-		if suffix == "" {
-			continue
-		}
-		if _, ok := dat[suffix]; !ok {
-			continue
-		}
-		b, err := sectionData(i, s)
-		if err != nil {
-			return nil, err
-		}
-		dat[suffix] = b
-	}
+    // 第二轮：收下 .debug_types 和其他 DWARFv4/v5 sections
+    for i, s := range f.Sections {
+        suffix := dwarfSuffix(s)
+        if suffix == "" {
+            continue
+        }
+        if _, ok := dat[suffix]; ok {
+            continue // 第一轮已处理
+        }
+        b, _ := sectionData(i, s)
+        if suffix == "types" {
+            // 多个 .debug_types 时，section 名带上编号，方便定位问题
+            d.AddTypes(fmt.Sprintf("types-%d", i), b)
+        } else {
+            d.AddSection(".debug_"+suffix, b)
+        }
+    }
 
-	d, err := dwarf.New(dat["abbrev"], nil, nil, dat["info"], dat["line"], nil, dat["ranges"], dat["str"])
-	if err != nil {
-		return nil, err
-	}
-
-	// Look for DWARF4 .debug_types sections and DWARF5 sections.
-	for i, s := range f.Sections {
-		suffix := dwarfSuffix(s)
-		if suffix == "" {
-			continue
-		}
-		if _, ok := dat[suffix]; ok {
-			// Already handled.
-			continue
-		}
-
-		b, err := sectionData(i, s)
-		if err != nil {
-			return nil, err
-		}
-
-		if suffix == "types" {
-			if err := d.AddTypes(fmt.Sprintf("types-%d", i), b); err != nil {
-				return nil, err
-			}
-		} else {
-			if err := d.AddSection(".debug_"+suffix, b); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	return d, nil
+    return d, nil
 }
 ```
+
 `debug/dwarf` 确实有读取所有的DWARF数据，但是这不够！读取、解析并提供了合适的API后，对我们才真正的有用。调试器要实现常规的调试能力，需要：
 
 - 支持类型、变量、常量的查看或者修改，需要读取解析.debug_info中的DIEs -- debug/dwarf支持
