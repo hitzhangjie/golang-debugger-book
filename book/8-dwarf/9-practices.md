@@ -1,8 +1,8 @@
-## DWARF解析与应用
+## DWARF解析与对照实验
 
-8.8 我们比较了标准库和 delve 的 DWARF 实现，说明了为什么最终选择 delve 的 `pkg/dwarf`。这一节进入实践：先看 delve `pkg/dwarf` 的目录和 package 分工，再写几个测试用例，验证 DWARF 能帮我们拿到哪些信息。
+8.8 我们比较了标准库和 delve 的 DWARF 实现，说明了 godbgv2 为什么要自研 `pkg/dwarf`、delve 只是参考实现。这一节用 delve 的包做几个对照实验：先看它的目录和 package 分工，再写测试用例，验证 DWARF 能帮我们拿到哪些信息；这些实验不是 godbgv2 的最终实现。
 
-### DWARF解析
+### 参考实现：delve pkg/dwarf
 
 介绍下[go-delve/delve](https://github.com/go-delve/delve)中的DWARF解析相关的代码，这里简单介绍下相关package的作用和使用方法，在后续小节中将有更详细的使用。
 
@@ -85,11 +85,11 @@ ${path-to-delve}/pkg/dwarf/
 | leb128       | 实现了几个工具函数：从一个sleb128编码的reader中读取一个int64；从一个uleb128编码的reader中读取一个uint64；对一个int64按sleb128编码后写入writer；对一个uint64按uleb128编码后写入writer。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | dwarf        | 实现了几个工具函数：从DWARF数据中读取基本信息（长度、dwarf64、dwarf版本、字节序），读取包含的编译单元列表及对应的版本信息，从buffer中读取DWARF string，从buffer中按指定字节序读取Uint16、Uint32、Uint64，按指定字节序编码一个Uint32、Uint64并写入buffer。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
-`github.com/go-delve/delve/pkg/dwarf`，沉淀了delve对DWARF数据读写操作的支持。手写一个完备的DWARF解析库，要精通DWARF调试信息标准，还要了解go编译工具链在从DWARF v4演变到DWARF v5的过程中所做的各种调整，工作量还是很大的。为了避免大家学习过程过于枯燥，我们不会再手写一个新的DWARF支持库，而是复用go-delve/delve中的实现（可能会适当裁剪，并在必要时进行强调）。
+`github.com/go-delve/delve/pkg/dwarf` 沉淀了 delve 对 DWARF 数据读写操作的支持。手写一个完备的 DWARF 解析库，要精通 DWARF 调试信息标准，还要了解 Go 编译工具链在从 DWARF v4 演变到 DWARF v5 的过程中所做的各种调整，工作量还是很大的。本书会参考它的设计，在 godbgv2 中自研我们需要的 API；本节先用它做对照实验，验证每个 API 背后的数据，而不是把整个库搬进 godbgv2。
 
 ### DWARF应用
 
-本小节相关代码您可以从这里获取：https://github.com/hitzhangjie/codemaster/tree/master/dwarf/test。
+本小节的示例代码计划统一收敛到 godbgv2 的 ch8 tag；在 tag 发布前，先以文中的代码片段为准。
 
 #### ELF读取DWARF
 
@@ -651,4 +651,4 @@ func Test_DWARFReadCFITable(t *testing.T) {
 
 ### 本节小结
 
-本小节我们介绍了 `github.com/go-delve/delve/pkg/dwarf` 的一些DWARF支持，然后使用这些包编写了一些测试用例，分别测试了读取数据类型定义、读取变量、读取函数定义、读取行号表、读取调用栈信息表，通过编写这些测试用例，我们加深了对DWARF解析以及应用的理解。
+本小节我们用 delve 的 `pkg/dwarf` 做对照实验，编写了一些测试用例，分别验证了读取数据类型定义、变量、函数定义、行号表、调用栈信息表的过程。这些测试用例帮助我们理解 DWARF 的语义，也验证了 delve 的实现；godbgv2 的自研 `pkg/dwarf` 会按第9章的需要实现对应的 API，而不是直接复用这些包。
