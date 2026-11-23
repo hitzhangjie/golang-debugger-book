@@ -218,6 +218,8 @@ func (f *File) DWARF() (*dwarf.Data, error) {
 
 #### understand delve pkg/dwarf
 
+> 下面是 delve 的参考实现。godbgv2 的 `pkg/dwarf` 会按类似职责自研，不直接依赖这些包；列在这里是为了对照职责划分和实现取舍。
+
 go-delve/delve里面dwarf操作相关的部分主要是在package `pkg/dwarf`中，简单罗列下主要实现了什么。
 
 - pkg/dwarf/util: 该package下有些代码是从go标准库里面copy过来修改的，比如 `pkg/dwarf/util/buf.go`大部分是标准库代码，只做了一点微调，增加了几个工具函数来读取变长编码的数值、读取字符串和编译单元开头的DWARF信息。
