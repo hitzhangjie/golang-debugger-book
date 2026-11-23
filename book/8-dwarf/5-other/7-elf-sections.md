@@ -7,7 +7,7 @@ DWARF调试信息根据描述对象的不同，在最终存储的时候也进行
 常见的ELF sections及其存储的内容如下:
 
 1. .debug_abbrev, 存储.debug_info中使用的缩写信息；
-2. .debug_arranges, 存储一个加速访问的查询表，通过内存地址查询对应编译单元信息；
+2. .debug_aranges, 存储一个加速访问的查询表，通过内存地址查询对应编译单元信息；
 3. .debug_frame, 存储调用栈帧信息；
 4. .debug_info, 存储核心DWARF数据，包含了描述变量、代码等的DIEs；
 5. .debug_line, 存储行号表程序 (程序指令由行号表状态机执行，执行后构建出完整的行号表)
