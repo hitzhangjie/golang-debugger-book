@@ -266,7 +266,7 @@ Program Headers:
 
 在此基础上，节头表 (Section Header Table)，定义了程序的链接视图（the linkable point of view），用来指导linker如何对多个编译单元中的sections进行链接（合并相同sections、符号解析、重定位）。
 
-这里就不得不提共享库类型：静态共享库（俗称静态链接库）、动态共享库（俗称动态链接库）。静态共享库，可以理解成包含了多个*.o文件；动态共享库，相当于把相同sections合并，merging not including \*.o 文件。链接生成最终的可执行程序的时候也是要将相同sections进行合并。至于更多的一些细节，此处先不展开。
+这里就不得不提两种库：静态库（static library，俗称静态链接库）和共享库（shared library，口语里也常说动态库、动态链接库）。静态库可以理解成把多个 `*.o` 打包成一个归档文件（`*.a`）；共享库（`*.so`）则是把相同 sections 合并成一个整体（Merging, not Inclusion），不再保留独立的 `*.o`。链接生成最终的可执行程序时，也要对用到的 sections 做同样的合并。至于更多细节，7.4 再展开。
 
 #### 类型定义
 
