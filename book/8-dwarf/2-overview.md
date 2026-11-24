@@ -115,6 +115,11 @@ readelf --debug-dump=info greet | less
 ├─<1><1a1dd>  DW_TAG_subprogram  DW_AT_name: main.main
 │  └─<2><1a200>  DW_TAG_variable  DW_AT_name: g
 └─<1><1a21e>  DW_TAG_variable  DW_AT_name: main.greeting  DW_AT_location: DW_OP_addr: 0x57e1b0
+
+（以下两个 DIE 不在 main 这个 CU 里，是上面 g 的 DW_AT_type: <0xb8669> 指过去的地方）
+<1><b8669>  DW_TAG_typedef  DW_AT_name: main.Greeter  DW_AT_type: <0xb8644>
+└─<2><b8644>  DW_TAG_structure_type  DW_AT_name: main.Greeter  DW_AT_byte_size: 16
+   └─<3><b865c>  DW_TAG_member  DW_AT_name: name  DW_AT_data_member_location: 0  DW_AT_type: <0x9ad1e>
 ```
 
 > 本节输出来自 go1.26.7，用 `GOEXPERIMENT=nodwarf5` 强制生成 DWARF v4（与本书基线一致）。换个编译器版本，偏移量和地址都会变，但树的结构不变。
