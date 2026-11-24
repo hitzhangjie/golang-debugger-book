@@ -2,730 +2,684 @@
 
 ### 实现目标
 
-后面的attach、exec、debug、core、connect，这几个命令本质上都是启动一个debugger backend，然后让debugger frontend和debugger backend建立连接的操作。
+在命令行敲下 `godbg exec ./prog`（或 `attach`、`debug`、`connect`）之后，调试器进程里其实做了两件互相独立的事：先把"要调试谁"确定下来——启动一个进程并跟踪它，或者 attach 到一个已经在跑的进程；然后进入一个循环，读一行命令、执行、打印结果、再读下一行。后者就是调试会话（debug session），也就是我们从第5章起一直在用的 `godbg> ` 提示符。
 
-在建立连接之后，debugger frontend就需要建立一个调试会话了，调试会话中我们可以键入调试命令 `godbg> COMMAND [flags] [args]` 进行调试。
+本节要回答三个问题：
 
-在第5.7节搭建调试器骨架时，我们已经介绍过如何实现一个交互式调试会话了（第6.5节在此基础上补充了 --init 脚本回放能力）。这里，其实大同小异，尤其是我们对 go-delve/delve 进行了大幅简化之后：
+1. 会话是怎么装配起来的——谁创建后端（`debugger.Debugger`）、谁把客户端注入给命令层、本地模式与 headless 模式到底差在哪儿；
+2. 一行命令是怎么被分发的——`liner` 读入字符串、`cobra` 找到命令、命令的 `RunE` 调到 `api.Client` 的某个方法上；
+3. 这一次方法调用如何跨过 RPC 边界、在后端被执行、再把结果原路带回来。
 
-- 移除了分页输出操作，尽管它在输出大量数据时比较有用（比如print一个数据比较多的变量、bt打印一个比较深的调用栈、goroutines显示所有goroutines列表等）；
-- 移除了starlark支持，尽管repl的方式交互式执行starlark命令、或者source执行starlark脚本很酷、能进一步增强调试器能力；
-- 移除了语法高亮支持，尽管list展示源码时、bt打印堆栈时、whatis查看类型定义时可以让可读性更好；
+先把结论摆出来：能进入会话的四个进程级命令（attach、exec、debug、connect）最终都收敛到 `cmd/session.go` 的 `startDebugSession`，差别只在"进入会话之前，后端手上有没有目标进程"：
 
-OK，你们肯定知道我们移除的原因，我们想最大程度简化我们的demo tinydbg。其实对于上述每个特性，我们都在 “9.3 高级功能扩展中” 章节进行了介绍，但是不希望tinydbg中保留相关的代码，因为代码很复杂、读者容易淹没在代码洪流中。
+| 命令 | 进入会话前做了什么 | 会话入口 |
+| --- | --- | --- |
+| `godbg attach <pid>` | `Client.Attach(pid)`，跟踪运行中进程及其全部线程 | `PostRun` → `startDebugSession` |
+| `godbg exec <prog>` | `Client.Launch(api.KindExec, prog, args, opts)` | 同上 |
+| `godbg debug [dir\|file]` | 先 `go build`，再 `Client.Launch(api.KindDebug, "./"+BuildExecName, …)` | 同上 |
+| `godbg connect <addr>` | `service.WireRemote(addr)`，不创建目标进程 | 同上 |
+| `godbg core <core> <exe>` | 仍是桩：`cmd/core.go` 直接返回"core 调试尚未实现" | — |
 
-这里简化后的调试会话，与第6章中的调试会话对比，有哪些区别呢？主要是实现了前后端分离式架构，然后前后端基于JSON-RPC进行通信，当我们在调试会话中执行一个调试命令时，调试会话会解析调试命令、选项、参数，然后会转换为对应的client方法调用，client本地方法桩代码会转化为对debugger backend的接口方法调用，debugger backend再执行对tracee的控制。我们主要是介绍这个部分的实现细节。
+因此真正能走到会话的入口是 attach、exec、debug、connect 四条（core 待第 9.2.15 节补齐）。
+
+需要说明的是：本书早期版本的这一节以 tinydbg（delve 的裁剪版）为示范，新版统一改成 `godbgv2`，后文所有代码、调用链与结论都以 `godbgv2` 为准。
+
+本节与相邻小节有明确分工，避免重复：目标进程的启动与跟踪细节在 9.2.11（attach）、9.2.13（exec）、9.2.14（debug）里讲；`break` 命令背后的 locspec 解析与断点管理在 9.2.19、9.2.21、9.2.22 里讲；`funcs` 的符号层实现见 9.2.32 与 9.2.100。本节只讲"会话本身"：装配、分发、一次 RPC 往返，以及 headless 模式在装配上的差异（服务端部分留给 9.2.16）。
 
 ### 基础知识
 
-下图展示了 `godbg attach <pid>` 启动一个一个调试器backend，以及在调试会话中执行命令 `godbg> COMMAND [flags] [args]` 过程中的详细交互过程、关键处理逻辑。
+前几章我们一直用"前后端分离"来描述调试器：前端负责命令解析与结果展示，后端负责真正操作 tracee。`godbgv2` 对这句话有一个更严格的落地方式——**前后端分离的边界在传输层，而不在进程边界**（`main.go` 的注释原话）。也就是说，即使本地调试、即使前后端在同一个进程里，命令也不是"直接调用后端对象"，而要走一次完整的 RPC 请求-响应：客户端把方法名和参数编码成字节，服务端解码、执行、把结果编码成字节送回来。
 
-<img alt="how debugsession works" src="./assets/how_debugsession_works.png" width="720px" />
+为什么本地也要绕这一圈？因为这样做换来了四件事：
 
-这个时序图介绍了调试期间的两个重要步骤：
-- 第1部分启动一个调试器backend的操作，这部分将在介绍attach操作的实现时进行介绍，本节先不展开；
-- 第2部分调试会话中执行调试命令的操作，这是本小节我们要介绍的重点内容；
+1. 命令层的代码只依赖 `api.Client` 契约，不依赖 `debugger.Debugger`，所以"本地进程内"与"远程 headless"可以共用同一套命令实现；
+2. 切换到 headless 模式时，`cmd/` 目录一行都不用改——差异全部收敛到 `main.go` 的装配处；
+3. 契约的约束是硬性的：`docs/ARCH-RULES.md` 的铁律 1（后端不打印）、铁律 2（只传值/可序列化结构）、铁律 3（一次性返回快照、不做流式）、铁律 4（`cmd/` 的 import 白名单）——它们共同保证"换一个 `api.Client` 实现"这件事是可行的；
+4. 代价是一次进程内序列化，用 `net.Pipe` 时收发是同步的，但相对 ptrace 系统调用的开销可以忽略。
 
-简单讲调试会话就是一个交互式调试窗口，允许你输入调试命令，并展示调试结果，如此反复直到结束调试。默认情况下调试会话就是一个交互式的命令行窗口，从stdin读取调试命令，然后在stdout、stderr输出调试结果。除非你想以非交互式的方式进行调试，如 `tinydbg debug --allow-non-terminal-interactive` 显示声明非交互式方式并设置正确的IO重定向。
+会话的整个生命周期可以画成下图。上半部分是进程启动时的一次性装配，下半部分才是每敲一行命令重复发生的事：
 
-```bash
-tinydbg help debug
-Compiles your program with optimizations disabled, starts and attaches to it.
-
-By default, with no arguments, Delve will compile the 'main' package in the
-current directory, and begin to debug it. Alternatively you can specify a
-package name and Delve will compile that package instead, and begin a new debug
-session.
-
-Usage:
-  tinydbg debug [package] [flags]
-...
-
-Global Flags:
-    --allow-non-terminal-interactive   Allows interactive sessions of Delve that don't have a terminal as stdin, stdout and stderr
--r, --redirect stringArray             Specifies redirect rules for target process (see 'dlv help redirect')
-    ...
+```
+[进程启动，一次性装配]
+main.main
+ ├─ debugger.New()                        后端门面（此刻还没有目标进程）
+ ├─ service.WireLocal(dbg)                本地模式：进程内 RPC
+ │   ├─ NewListenerPipe()                 net.Pipe() → (srv, cli)
+ │   ├─ go rpc2.NewServer(dbg).Accept(ln)
+ │   └─ rpc.NewClient(cli) → rpc2.Client ──► cmd.Client（api.Client 契约）
+ ├─ cmd.ServeHeadless = func(listen)      只有 --headless 分支才会用到
+ └─ cmd.Execute() → rootCmd.Execute()
+      ├─ RunE:    attach/exec/debug/connect ──► Client.Attach / Launch / …（也是 RPC）
+      └─ PostRun: startDebugSession(cmd)
+            ├─ --headless → ServeHeadless(listen)：只当服务端，不开会话
+            └─ 否则     → debug.Client = Client
+                          CurrentSession = NewDebugSession().AtExit(Cleanup)
+                          CurrentSession.Start()
 ```
 
-OK，下面我们介绍下这块的调试会话初始化、输入调试命令进行调试的主流程。
+注意两个容易看漏的点：
+
+- `WireLocal` 发生在 `cmd.Execute()` **之前**。也就是说，本地模式下"连接"是进程启动时就建好的，而不是像早期实现那样"等 attach 成功后再建"。`attach` 命令自己发的那次 `Client.Attach(pid)` 同样是一次 RPC，走的就是这条已经建好的管道。
+- headless 模式并不是"另一套代码"，它只是把 `WireLocal` 的 `net.Pipe` 换成 `net.Listen("tcp", …)` 并把 `Accept` 交给 `net/rpc` 的服务端循环。客户端一侧则由 `godbg connect` 用 `service.WireRemote(addr)` 建连，然后同样进入 `startDebugSession`。
+
+前后端之间传递的东西是两类结构体：**请求参数对**与**响应消息对**。`api.Client` 有 41 个方法，每个方法在 `pkg/service/rpc2` 里都有对应的 `XxxArgs` / `XxxReply`（个别方法复用同形状的响应结构），服务端方法的形式固定为 `func (s *serverImpl) Xxx(args *XxxArgs, reply *XxxReply) error`。这三个要素（方法名、请求结构、响应结构）就是 `net/rpc` 需要的全部信息：
+
+- 传输协议是标准库 `net/rpc` 的默认编码，即 `encoding/gob`；
+- 调用是全同步的：`Call` 一直阻塞到收到响应，没有回调、没有事件通道；
+- 跨连接的请求/响应靠 `Request.Seq`（序号）配对，客户端用 `map[seq]*Call` 记录在途请求。
+
+`api.Client` 的三条设计原则（`pkg/service/api/client.go` 的包注释）正是为这种传输准备的：**只搬数据不打印**（后端返回数据快照，格式化由 UI 层做）、**只传值/可序列化结构**（便于 gob 编码）、**请求-响应快照语义**（不做流式/迭代器）。
+
+本地与 headless 两种模式的差异，汇总成一张表就清楚了：
+
+| 维度 | 本地模式（默认） | headless 模式 |
+| --- | --- | --- |
+| 服务端装配点 | `main.main` → `service.WireLocal` | `main.main` 注入的 `cmd.ServeHeadless` |
+| 客户端装配点 | 同一次 `WireLocal` | `godbg connect` → `service.WireRemote` |
+| 监听器 | `NewListenerPipe`（`net.Pipe`） | `net.Listen("tcp", listen)` |
+| 连接建立时机 | 进程启动时 | 客户端执行 `connect` 时 `rpc.Dial` |
+| 命令发往哪里 | 同进程内的服务端协程 | 另一个进程的服务端 |
+| 编码 | gob | gob |
 
 ### 代码实现
 
-#### 调试器前端初始化调试会话
+#### 装配：main 把服务端接进前端
 
-什么情况下会启动一个调试会话呢？
-- 本地调试时总是会创建一个调试会话，不管是执行attach、debug、exec、core，此时调试器前端、后端位于同一个调试器进程中，它们通过net.Pipe进行通信；
-- 远程调试时调试器前后端分离，后端单独一个进程且没有控制终端，调试器前端通过connect命令连接到调试器后端，前后端通过net.TCPConn或者net.UnixConn进行通信。调试器前端会初始化一个调试会话，用户通过这个调试会话进行交互。
+`main` 函数只有 20 多行，但它是整个架构的装配点（`main.go`）：
 
-如果咱们是本地调试，执行的是attach命令，那么建立调试会话的代码路径是：
+```go
+func main() {
+	go processSignals()
+
+	// ch9.2.16：本地模式也经进程内 RPC 与服务端通信——
+	// 前后端分离的架构边界在传输层，而非进程边界
+	dbg := debugger.New()
+	client, err := service.WireLocal(dbg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "wire local: %v\n", err)
+		os.Exit(1)
+	}
+	cmd.Client = client
+
+	// headless 模式的服务端装配（由会话层触发）
+	cmd.ServeHeadless = func(listenAddr string) error {
+		ln, err := net.Listen("tcp", listenAddr)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("godbg headless server listening on %s\n", ln.Addr())
+		rpc2.NewServer(dbg).Accept(ln)
+		return nil
+	}
+
+	cmd.Execute()
+}
+```
+
+这段代码里有三个"注入点"，各自解决一个问题：
+
+- `cmd.Client = client`：把 `api.Client` 的具体实现交给 `cmd` 包。`cmd/client.go` 里只有一个包级变量 `var Client api.Client`，没有构造函数、没有单例，谁装配谁负责；
+- `cmd.ServeHeadless`：headless 的服务端要用 `rpc2.NewServer` 和 `net.Listen`，而铁律 4 禁止 `cmd/` import `pkg/service/rpc2` 与 `pkg/service/debugger`，所以 `cmd` 只声明一个函数变量，由 `main` 把实现填进去；
+- `debugger.New()`：先创建门面实例，再把它交给 RPC 服务端。门面是"后端"的入口，但创建时它还没有目标进程——目标进程是后续 `Launch` / `Attach` 才产生的。
+
+`WireLocal` 本身只有 10 行（`pkg/service/wire.go`）：
+
+```go
+func WireLocal(dbg *debugger.Debugger) (api.Client, error) {
+	ln, cli, err := NewListenerPipe()
+	if err != nil {
+		return nil, err
+	}
+
+	server := rpc2.NewServer(dbg)
+	go server.Accept(ln)
+
+	return rpc2.NewClientFrom(rpc.NewClient(cli)), nil
+}
+```
+
+它做的三件事，正好对应"一次装配"的三步：拿到一对已经连好的管道、在服务端协程里跑 `Accept`、用管道另一端创建 `rpc.Client` 并包装成实现了 41 个方法的 `rpc2.Client`。管道来自 `pkg/service/listenerpipe.go`：
+
+```go
+func NewListenerPipe() (net.Listener, net.Conn, error) {
+	srv, cli := net.Pipe()
+	l := &listenerPipe{
+		ch:   make(chan net.Conn, 1),
+		once: make(chan struct{}),
+	}
+	l.ch <- srv
+	return l, cli, nil
+}
+```
+
+`listenerPipe` 是一个"只有一条连接"的 `net.Listener`：`Accept` 从带缓冲的 channel 里取那唯一一条连接，取完就阻塞；`Addr()` 返回占位地址 `pipeAddr`（`Network()` 与 `String()` 都是 `"pipe"`）。这里不需要地址，因为客户端根本不用拨号——它拿到的 `cli` 就是管道的另一端。
+
+headless 分支的唯一区别是 `main.go` 里的那个闭包：`net.Listen` 拿到 TCP 监听器，`rpc2.NewServer(dbg).Accept(ln)` 阻塞地服务所有入连接。这一段值得留到 9.2.16 展开，本节只需要知道它复用了同一个 `dbg` 门面、同一套 `serverImpl` 方法与同一份消息对。
+
+#### 入口命令：先建目标，再开会话
+
+`cmd/` 下的进程级命令都遵循同一个模式：`RunE` 负责建立目标（或连接），`PostRun` 负责进入会话。以 attach 为例（`cmd/attach.go`）：
+
+```go
+RunE: func(cmd *cobra.Command, args []string) error {
+	if len(args) != 1 {
+		return errors.New("参数错误")
+	}
+	pid, err := strconv.Atoi(args[0])
+	if err != nil {
+		return fmt.Errorf("invalid pid %q: %v", args[0], err)
+	}
+
+	// attach 到运行中的进程及其全部线程，等待其因 SIGSTOP 而停止
+	tids, err := Client.Attach(pid)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("process %d attached, stopped by SIGSTOP\n", pid)
+	for _, tid := range tids {
+		fmt.Printf("thread %d attached\n", tid)
+	}
+	return nil
+},
+PostRun: func(cmd *cobra.Command, args []string) {
+	startDebugSession(cmd)
+},
+```
+
+exec 与 debug 只换了 `Launch` 的参数：exec 用 `Client.Launch(api.KindExec, args[0], args[1:], opts)`；debug 先 `go build -gcflags=all=-N -l -ldflags=-compressdwarf=false -o __debug_bin__`，再 `Client.Launch(api.KindDebug, "./"+BuildExecName, traceeArgs, opts)`。connect 则根本不碰目标进程，只在 `RunE` 里把 `Client` 换成远程客户端：
+
+```go
+client, err := service.WireRemote(args[0])
+if err != nil {
+	return err
+}
+Client = client
+```
+
+于是四条命令的处理链可以并排写出来，格式一致、只是中间那一跳不同：
 
 ```bash
-main.go:main.main
-    \--> cmds.New(false).Execute()
-            \--> attachCommand.Run()
-                    \--> attachCmd(...)
-                            \--> execute(pid, args, conf, "", debugger.ExecutingOther, args, buildFlags)
+godbg attach <pid>
+  main.go:main.main
+    \--> cmd.Execute()                         rootCmd.Execute()
+          \--> attachCmd.RunE                  cmd/attach.go
+                \--> Client.Attach(pid)        rpc2.Client.Attach → Debugger.Attach（RPC）
+                      \--> debugger.Debugger.Attach
+                            \--> target.AttachTargetProcess(pid) → proc.NewTarget(dbp)
+          \--> attachCmd.PostRun → startDebugSession(cmd)
+
+godbg exec <prog>
+  …--> execCmd.RunE --> Client.Launch(api.KindExec,…) --> debugger.Launch --> target.NewDebuggedProcess
+  …--> PostRun → startDebugSession
+
+godbg debug [dir|file]
+  …--> debugCmd.RunE --> go build --> Client.Launch(api.KindDebug,…)
+  …--> PostRun → startDebugSession（退出后删除 __debug_bin__）
+
+godbg connect <addr>
+  …--> connectCmd.RunE --> service.WireRemote(addr) --> Client = client
+  …--> PostRun → startDebugSession
 ```
 
-在execute函数中，会根据是本地调试还是远程调试，来用不同的方法初始化RPC服务层：
-
-- 本地调试(未指定--headless)：setup client/server communicate via preConnectedListener+net.Pipe
-- 远程调试(指定了--headless): setup client/server communicate via net.TCPListener+net.TCPConn or net.UnixListener+net.UnixConn
-
-如果执行的是exec命令，那么建立调试会话的代码路径是：
-
-```bash
-main.go:main.main
-    \--> cmds.New(false).Execute()
-            \--> execCommand.Run()
-                    \--> execute(0, args, conf, "", debugger.ExecutingExistingFile, args, buildFlags)
-```
-
-如果执行的是debug命令，那么建立调试会话的代码路径是：
-
-```bash
-main.go:main.main
-    \--> cmds.New(false).Execute()
-            \--> debugCommand.Run()
-                    \--> debugCmd(...)
-                            \--> execute(0, processArgs, conf, "", debugger.ExecutingGeneratedFile, dlvArgs, buildFlags)
-```
-
-如果执行的是core命令，那么建立调试会话的代码路径是：
-
-```bash
-main.go:main.main
-    \--> cmds.New(false).Execute()
-            \--> coreCommand.Run()
-                    \--> coreCmd(...)
-                            \--> execute(0, []string{args[0]}, conf, args[1], debugger.ExecutingOther, args, buildFlags)
-```
-
-如果咱们很明确就是远程调试，执行的是connect命令，那么建立调试会话的代码路径是：
-
-```bash
-main.go:main.main
-    \--> cmds.New(false).Execute()
-            \--> connectCommand.Run()
-                    \--> connectCmd(...)
-                            \--> connect(addr, nil, conf)
-```
-
-这里讲的是调试器前后端如何连接起来，我们还需要看看调试前端如何输出 "godbg> " 以及如何解析命令、解析为本地client方法调用。
-
-本地调试过程中的execute方法，和这里远程调试中的connect方法，都涉及到初始化调试会话的动作。
-
-本地调试中execute方法最终会调用connect方法，只不过 `listener.Addr().String()=="" && clientConn != nil`，此时client就使用clientConn与net.Pipe另一端的server进行通信。而远程模式时, `listener.Addr().String() != "" && clientConn == nil`，此时client就会使用netDial(listener.Addr().String())新建连接并与server端通信。最后在connect最后，会完成调试会话的建立，并运行调试会话。
+四条链在 `startDebugSession` 处汇合。这个函数只有十几行，却包含了会话的全部三种去向（`cmd/session.go`）：
 
 ```go
-func execute(attachPid int, processArgs []string, ...) int {
-    ...
+func startDebugSession(cmd *cobra.Command) {
+	if headless, _ := cmd.Flags().GetBool("headless"); headless {
+		listen, _ := cmd.Flags().GetString("listen")
+		if err := ServeHeadless(listen); err != nil {
+			fmt.Fprintf(os.Stderr, "headless serve error: %v\n", err)
+		}
+		return
+	}
+	initFile, _ := cmd.Flags().GetString("init")
 
-    var listener net.Listener
-    var clientConn net.Conn
-
-    // Make a TCP listener
-    if headless {
-        listener, _ = netListen(addr)
-    } else {
-        listener, clientConn = service.ListenerPipe()
-    }
-    defer listener.Close()
-
-    ...
-
-    return connect(listener.Addr().String(), clientConn, conf)
-}
-
-// 如果远程调试模式，则addr有效、clientConn无效，net.Dial即可
-// 如果本地调试模式，则addr无效、clientConn有效，直接使用net.Pipe的一端clientConn即可
-func connect(addr string, clientConn net.Conn, conf *config.Config) int {
-    // Create and start a terminal - attach to running instance
-    var client *rpc2.RPCClient
-    if clientConn == nil {
-        if clientConn = netDial(addr); clientConn == nil {
-            return 1 // already logged
-        }
-    }
-    client = rpc2.NewClientFromConn(clientConn)
-    ...
-
-    // 初始化调试会话
-    session := debug.New(client, conf)
-    session.InitFile = initFile
-    status, err := session.Run()
-    if err != nil {
-        fmt.Println(err)
-    }
-    return status
+	debug.Client = Client
+	// 会话退出（含 --init 批量回放结束）时，统一清理被调试进程
+	debug.CurrentSession = debug.NewDebugSession().AtExit(debug.Cleanup)
+	if initFile != "" {
+		debug.CurrentSession.SetInitFile(initFile)
+	}
+	debug.CurrentSession.Start()
 }
 ```
 
-可以看到，在connect最后完成了调试会话的创建、运行：
+三个去向分别是：
+
+1. **headless**：只当服务端，阻塞在 `ServeHeadless` 里，不创建会话——此时用户应该另开一个终端执行 `godbg connect`；
+2. **批量回放**：带 `--init <file>` 时创建会话但走 `replay`，脚本执行完就退出，供脚本化调试与冒烟测试使用；
+3. **交互**：默认情况，`Start()` 里创建 `liner` 进入 REPL。
+
+`debug.Client = Client` 这一行也值得解释：`cmd` 与 `cmd/debug` 是两个包，命令实现里用的是 `debug.Client`（`cmd/debug/shell.go` 的包级变量），而装配发生在 `cmd` 包。两边都只认 `api.Client` 这个契约类型，所以注入是安全的；`cmd` 包也不需要知道具体实现是 `rpc2.Client`。
+
+会话退出时要善后，善后动作注册在 `AtExit` 上，实现是 `debug.Cleanup`（`cmd/debug/exit.go`）：
 
 ```go
-session := debug.New(client, conf)
-status, err := session.Run()
+func Cleanup() {
+	if Client == nil {
+		return
+	}
+
+	// 还原全部断点
+	if err := Client.ClearAll(); err != nil {
+		fmt.Fprintf(os.Stderr, "clearall failed err: %v\n", err)
+	}
+
+	st, err := Client.State()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "get state error: %v\n", err)
+		return
+	}
+
+	switch st.Kind {
+	case api.KindDebug:
+		fmt.Println("tracee is built and run by tracer, remove binary and kill it")
+		if err := Client.Kill(); err != nil {
+			fmt.Fprintf(os.Stderr, "kill tracee: %d, err: %v\n", st.PID, err)
+		}
+	case api.KindExec:
+		fmt.Println("tracee is run by tracer, kill it")
+		if err := Client.Kill(); err != nil {
+			fmt.Fprintf(os.Stderr, "kill tracee: %d, err: %v\n", st.PID, err)
+		}
+	case api.KindAttach:
+		fmt.Println("tracee is an attached process, leave it running")
+		if err := Client.Detach(); err != nil {
+			fmt.Fprintf(os.Stderr, "detach tracee: %d, err: %v\n", st.PID, err)
+		}
+	}
+}
 ```
 
-那调试会话是如何Run的呢？我们来看看session.Run()的更多细节。
+这里体现了"谁创建、谁负责"的语义：`debug`/`exec` 的目标进程是调试器自己启动的，调试结束就 `Kill`；`attach` 的目标进程本来就在跑，调试结束只能 `Detach` 让它继续运行。清理动作也是 RPC 调用，也就是说会话退出的最后一步仍然是跨传输层的往返。
 
-ps: 篇幅原因，这里不介绍trace命令的执行流程，实际上跟其他几个也没多大区别，后面专门介绍trace命令时再介绍。
+#### 会话循环：liner、cobra 与 flag 复位
 
-#### 调试会话如何运行的
-
-这个方法 `debug.(*Session).Run()` 函数有点长，但是逻辑相对比较清晰：
-- 记录target定义的函数列表，方便后续在函数位置添加断点、执行到函数、创建tracepoint时，能够自动补全函数名；
-- 记录当前调试器支持的调试命令和别名，方便后续在输入命令时自动补全，并且输入命令参数时，能够做到自动补全参数
-    - 如果输入命令是break、continue、trace，则自动补全函数名
-    - 如果输入命令是nullcmd、nocmd，无特殊操作，此时是复用上一条调试命令；
-    - 如果输入是print、whatis，则自动补全局部变量名；
-- 记录上一条执行的命令lastCmd；
-- 进入调试会话主循环，输入调试命令、执行调试命令，重点关注执行调试命令 `t.cmds.Call(cmdstr, t)`；
-
-
-先来看看上述调试会话的函数：
+会话对象是 `cmd/debug/shell.go` 里的 `DebugSession`：
 
 ```go
-// Run begins running the debugging session in the terminal.
-func (t *Session) Run() (int, error) {
-    defer t.Close()
+type DebugSession struct {
+	done   chan bool
+	prefix string
+	root   *cobra.Command
+	liner  *liner.State
+	last   string
 
-    multiClient := t.client.IsMulticlient()
+	initFile string // 会话启动时要回放的脚本文件（非交互模式）
+	stopped  bool   // 会话是否已请求结束
 
-    // Send the debugger a halt command on SIGINT
-    ch := make(chan os.Signal, 1)
-    signal.Notify(ch, syscall.SIGINT)
-    go t.sigintGuard(ch, multiClient)
-
-    // Record which functions are defined in the target
-    fns := trie.New()
-    // Record which debug commands and command aliases are supported by the current debugger
-    cmds := trie.New()
-
-    funcs, _ := t.client.ListFunctions("", 0)
-    for _, fn := range funcs {
-        fns.Add(fn, nil)
-    }
-    for _, cmd := range t.cmds.cmds {
-        for _, alias := range cmd.aliases {
-            cmds.Add(alias, nil)
-        }
-    }
-
-    var locs *trie.Trie
-
-    // Read current input, auto-complete command parameters based on input debug commands and incomplete command parameters
-    t.line.SetCompleter(func(line string) (c []string) {
-        cmd := t.cmds.Find(strings.Split(line, " ")[0], noPrefix)
-        switch cmd.aliases[0] {
-        // For breakpoint-related operations, complete function names
-        case "break", "trace", "continue":
-            if spc := strings.LastIndex(line, " "); spc > 0 {
-                prefix := line[:spc] + " "
-                funcs := fns.FuzzySearch(line[spc+1:])
-                for _, f := range funcs {
-                    c = append(c, prefix+f)
-                }
-            }
-        // If no command is entered
-        case "nullcmd", "nocmd":
-            commands := cmds.FuzzySearch(strings.ToLower(line))
-            c = append(c, commands...)
-        // If it's print or whatis, complete variable names
-        case "print", "whatis":
-            if locs == nil {
-                localVars, err := t.client.ListLocalVariables(
-                    api.EvalScope{GoroutineID: -1, Frame: t.cmds.frame, DeferredCall: 0},
-                    api.LoadConfig{},
-                )
-                if err != nil {
-                    fmt.Fprintf(os.Stderr, "Unable to get local variables: %s\n", err)
-                    break
-                }
-
-                locs = trie.New()
-                for _, loc := range localVars {
-                    locs.Add(loc.Name, nil)
-                }
-            }
-
-            if spc := strings.LastIndex(line, " "); spc > 0 {
-                prefix := line[:spc] + " "
-                locals := locs.FuzzySearch(line[spc+1:])
-                for _, l := range locals {
-                    c = append(c, prefix+l)
-                }
-            }
-        }
-        return
-    })
-
-    // Read historical debug commands to quickly execute the previous command or repeat the last command via up/enter
-    fullHistoryFile, err := config.GetConfigFilePath(historyFile)
-    if err != nil {
-        fmt.Printf("Unable to load history file: %v.", err)
-    }
-
-    t.historyFile, err = os.OpenFile(fullHistoryFile, os.O_RDWR|os.O_CREATE, 0600)
-    if err != nil {
-        fmt.Printf("Unable to open history file: %v. History will not be saved for this session.", err)
-    }
-    if _, err := t.line.ReadHistory(t.historyFile); err != nil {
-        fmt.Printf("Unable to read history file %s: %v\n", fullHistoryFile, err)
-    }
-
-    fmt.Println("Type 'help' for list of commands.")
-
-    if t.InitFile != "" {
-        err := t.cmds.executeFile(t, t.InitFile)
-        if err != nil {
-            if _, ok := err.(ExitRequestError); ok {
-                return t.handleExit()
-            }
-            fmt.Fprintf(os.Stderr, "Error executing init file: %s\n", err)
-        }
-    }
-
-    // Record the last executed command
-    var lastCmd string
-
-    // Ensure that the target process is neither running nor recording by
-    // making a blocking call.
-    _, _ = t.client.GetState()
-
-    // Enter the main loop of the debugger
-    for {
-        locs = nil
-
-        // Read the user's input
-        cmdstr, _ := t.promptForInput()
-        if strings.TrimSpace(cmdstr) == "" {
-            cmdstr = lastCmd
-        }
-
-        // Record the last executed command
-        lastCmd = cmdstr
-
-        // Execute the debugging command
-        if err := t.cmds.Call(cmdstr, t); err != nil {
-            if _, ok := err.(ExitRequestError); ok {
-                return t.handleExit()
-            }
-            ...
-        }
-    }
+	defers []func()
 }
 ```
 
-再来看看执行命令的 `t.cmds.Call(cmdstr, t)`：
+它持有的不是 `api.Client`，而是一棵 `*cobra.Command` 命令树——会话里的调试命令仍然用 cobra 管理。`NewDebugSession` 做三件事：注册自定义的 help 函数（`godbg> help` 打印分组后的命令表）、把注册表里的命令挂到根命令上、初始化字段。这里的注册表（`cmd/debug/def.go` 的 `commandDefs`/`installCommands`）目前还是空表，各命令仍以 `init()` + `debugRootCmd.AddCommand` 的方式挂载，注册表是为后续统一挂载预留的入口。
+
+`Start` 是会话的主函数，逻辑分成"回放"和"交互"两条路：
 
 ```go
-// Call takes a command to execute.
-func (s *DebugCommands) Call(cmdstr string, t *Session) error {
-    ctx := callContext{Prefix: noPrefix, Scope: api.EvalScope{GoroutineID: -1, Frame: s.frame, DeferredCall: 0}}
-    return s.CallWithContext(cmdstr, t, ctx)
-}
+func (s *DebugSession) Start() {
+	defer func() {
+		for idx := len(s.defers) - 1; idx >= 0; idx-- {
+			s.defers[idx]()
+		}
+	}()
 
-// callContext represents the context of a command.
-type callContext struct {
-    Prefix     cmdPrefix
-    Scope      api.EvalScope
-    Breakpoint *api.Breakpoint
-}
+	// 回放 init 脚本，回放结束后退出会话。
+	//
+	// 批量模式不创建 liner：liner.Close 会无条件对 stdin 做 tcsetattr
+	// 恢复终端模式，而冒烟测试用 `timeout 30 ./godbg ...` 启动会话——
+	// GNU timeout 默认把子进程放进新的进程组，godbg 于是是终端的后台
+	// 进程组；后台进程组对终端做 tcsetattr 会被内核以 SIGTTOU 停止……
+	if s.initFile != "" {
+		if err := s.replay(s.initFile); err != nil {
+			fmt.Fprintf(os.Stderr, "replay init file %s error: %v\n", s.initFile, err)
+		}
+		return
+	}
 
+	s.liner = liner.NewLiner()
+	s.liner.SetCompleter(completer)
+	s.liner.SetTabCompletionStyle(liner.TabPrints)
+	defer s.liner.Close()
 
-type cmdfunc func(t *Session, ctx callContext, args string) error
+	for {
+		select {
+		case <-s.done:
+			return
+		default:
+		}
 
-type command struct {
-    aliases         []string
-    builtinAliases  []string
-    group           commandGroup
-    allowedPrefixes cmdPrefix
-    helpMsg         string
-    cmdFn           cmdfunc
-}
+		txt, err := s.liner.Prompt(s.prefix)
+		if err != nil {
+			panic(err)
+		}
 
-type DebugCommands struct {
-    cmds   []*command
-    client service.Client
-    frame  int // Current frame as set by frame/up/down commands.
-}
+		txt = strings.TrimSpace(txt)
+		if len(txt) != 0 {
+			s.last = txt
+			s.liner.AppendHistory(txt)
+		} else {
+			txt = s.last
+		}
 
-// CallWithContext takes a command and a context that command should be executed in.
-func (s *DebugCommands) CallWithContext(cmdstr string, t *Session, ctx callContext) error {
-    vals := strings.SplitN(strings.TrimSpace(cmdstr), " ", 2)
-    cmdname := vals[0]
-    var args string
-    if len(vals) > 1 {
-        args = strings.TrimSpace(vals[1])
-    }
-    return s.Find(cmdname, ctx.Prefix).cmdFn(t, ctx, args)
+		_ = s.execute(txt)
+	}
 }
 ```
 
-DebugCommands相当于是对调试会话中的调试命令的管理，这里的调试命令需要的参数，就没有attach、debug、exec、connect、core那么简单了，每个调试命令需要的参数有很大不同。spf13/corbra中command的执行函数 `spf13/cobra.(*Command).Run(fset *flagsset, args []string)`，如果还是使用flagset、args这俩固定参数，不是很够，为什么这么说呢？我们第6章指令级调试章节，不就是完全基于spf13/corbra Command管理机制实现的吗？我们接下来会解释。
+第一段 `defer` 是"退出栈"：注册的清理函数按后进先出执行，`AtExit(debug.Cleanup)` 注册的那个就在其中。
+
+第二段是批量回放。**`liner` 只在交互模式下创建**，这不是随手写的优化，而是踩过一个很隐蔽的坑：`liner.Close()` 会无条件对 stdin 做 `tcsetattr`，把终端模式恢复回来；而冒烟测试用 `timeout 30 ./godbg …` 启动会话，GNU `timeout` 默认把子进程放进新的进程组，`godbg` 于是成了终端的后台进程组，后台进程组调用 `tcsetattr` 会被内核用 `SIGTTOU` 停住（进程状态变为 `T`）。此时 `timeout` 到点发的 `SIGTERM` 只能 pending，不带 `-k` 的 `timeout` 又会一直等子进程退出——整个 `make smoke` 就永久挂住了。批量模式从头到尾不读写终端，也就不需要恢复任何终端模式，所以干脆不创建 `liner`。
+
+第三段是交互循环。几个细节：`select` 先检查 `done`，让 `exit` 命令有机会在下一轮循环开始前退出；空行（含纯空白）复用 `last`，实现"回车重复上一条命令"；`AppendHistory` 只写内存，godbgv2 不读写任何历史文件。
+
+循环体里真正的分发逻辑在 `execute` 里，只有 8 行，却解决了 cobra 在 REPL 场景下的一个真问题：
 
 ```go
-type command struct {
-    aliases         []string
-    builtinAliases  []string
-    group           commandGroup
-    allowedPrefixes cmdPrefix
-    helpMsg         string
-    cmdFn           cmdfunc
+func (s *DebugSession) execute(line string) error {
+	s.root.SetArgs(strings.Split(line, " "))
+	cmd, err := s.root.ExecuteC()
+	if cmd != nil {
+		resetFlags(cmd)
+	}
+	return err
+}
+
+// resetFlags 把本次执行改过的 flag 恢复为默认值。
+func resetFlags(cmd *cobra.Command) {
+	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+		if !f.Changed {
+			return
+		}
+		_ = f.Value.Set(f.DefValue)
+		f.Changed = false
+	})
 }
 ```
 
-DebugCommands相当于自己维护所有的调试会话中的命令：
+两个要点：
 
-1. 每个命令的内置别名、自定义别名；
-2. 每个命令的所属分组；           
-3. 每个命令允许的cmdprefix；
-4. 每个命令的帮助信息；
-5. 每个命令对应的执行函数；
+- `SetArgs` + `ExecuteC` 让"一行文本"变成"一次 cobra 命令执行"，`ExecuteC` 返回实际执行的那条子命令，供后面复位 flag 用。注意参数是按空格 `strings.Split` 切开的（不是 shell 词法），因此调试命令的参数里不能带引号/转义的空白——这是这一版实现的已知边界；
+- `resetFlags` 是必须的。REPL 从头到尾复用同一棵命令树，而 pflag 在多次 `Parse` 之间**不会**把上一行设置过的 flag 恢复成默认值：本次命令行里没出现的 flag 会保留上一行的值。比如先执行 `break -n foo main.main`，再执行 `break main.main`，如果不复位，第二条命令会莫名其妙带上 `-n foo`。统一在 `execute` 里复位，交互模式和 `--init` 回放才能保证每条命令都从默认状态开始。`cmd/debug/shell_test.go` 里的 `TestExecuteResetsFlags` 就是这条规则的回归测试（`demo -n 3` 之后执行裸 `demo`，期望 `n` 回到默认值 10）。
 
-spf13/cobra的命令补全机制依赖生成的shell completion文件，spf13/cobra支持通过annotation机制来对命令分组、可以定制帮助信息，但是每个命令的执行函数还是固定只有`flagset *pflag.FlagSet`和`args []string`，如果函数中希望用到一些JSON-RPC client或者其他东西，就需要通过全局变量的形式来定义。但是到处读写全局变量的形式，对可读性和可维护性不好，还是希望函数签名能体现它依赖的对象。
-
-OK，所以dlv这里是通过自定义的方式来对调试会话中的命令进行管理，当找到对应的调试命令后，就执行对应命令的 `cmdFn()`。所以每个调试命令的核心，是这个cmdFn内的实现逻辑，它往往涉及到对远程调试器backend的请求（拼接请求参数、序列化数据、网络交互、数据展示），涉及到的RPC请求可能也不止一个，比如`print varNam<tab>` 可能涉及到 `client.ListLocalVariables(...)`，`client.ExamineMemory(...)`, 等等。
-
-OK，下面我们先看看JSON-RPC这里的代码逻辑，然后结合一个具体的例子看看。
-
-#### 调试器前端发送 json-rpc请求给后端
-
-这个小节我们重点得看几个代表性的调试命令的cmdFn的实现。
-
-```bash
-t.cmds.Call(cmdstr, t)
-    \--> DebugCommands.CallWithContext(...)
-            \--> cmd:= s.Find(cmdname, ctx.Prefix)
-                    \--> cmd.cmdFn(t, ctx, args)
-```
-
-我们看下JSON-RPC client实现了哪些方法吧，然后选几个有代表性的进行介绍，不用在这里一一介绍。
-
-我们以查看当前栈帧中的变量列表为例吧，ok，当我们执行 `godbg> vars [-v] [<regex>]` ，此时会执行 `varsCmd.cmdFun(...) -> vars(...)`。
-
-see path-to/tinydbg/cmds/debug/def.go，首先解析输入的命令行参数，filter就是要对变量列表进行过滤的一个正则表达式。然后请求t.client.ListPackageVariables(...)发起RPC调用，拿到服务端返回的变量列表后，将其打印出来。
+批量模式走的是另一个入口 `replay`，它不经过 cobra 之外的任何东西，只是逐行喂给 `execute`（下面是节选，省略了 `@capture` 的正则提取与输出重定向的细节）：
 
 ```go
-func vars(t *Session, ctx callContext, args string) error {
-    // 解析
-    filter, cfg := parseVarArguments(args, t)
-    vars, err := t.client.ListPackageVariables(filter, cfg)
-    if err != nil {
-        return err
-    }
-    return t.printFilteredVariables("vars", vars, filter, cfg)
+scanner := bufio.NewScanner(f)
+for scanner.Scan() {
+	line := strings.TrimSpace(scanner.Text())
+	if line == "" || strings.HasPrefix(line, "#") ||
+		strings.HasPrefix(line, "!") || strings.HasPrefix(line, "=") {
+		continue                       // 注释与冒烟测试的宿主指令
+	}
+	if strings.HasPrefix(line, "@") {
+		// 只有 @capture 由回放器自己处理：从上一命令输出里按正则
+		// 提取第一个捕获组存入 $<var>，供后续命令行做变量替换
+		continue
+	}
+
+	fmt.Printf("godbg> %s\n", line)
+	err = s.execute(line)              // 输出被临时重定向到管道，供 @capture 读取
+	if err != nil {
+		return err
+	}
+	if s.stopped {                     // 脚本里执行了 exit
+		return nil
+	}
 }
 ```
 
-see path-to/tinydbg/service/rpc2/client.go，这部分就是发起JSON-RPC的逻辑，调用调试器后端的RPCServer.ListPackageVariables(...)这个方法，返回正则匹配的变量列表。
+`@capture` 与 `$var` 替换是为冒烟测试准备的：线程 id 这类只在当次会话输出里出现的值，没法写死在脚本里，只能先捕获、再在后面几行里替换。这一段属于测试基础设施，读者了解用途即可。
+
+会话的退出有两条路。正常退出是 `exit` 命令（`cmd/debug/exit.go`）：`CurrentSession.Stop()` 设置 `stopped = true` 并 `close(s.done)`，交互循环在下一轮开头看到 `done` 关闭就 `return`，随后 `defer` 里的退出栈依次执行 `debug.Cleanup`，最后 `Start` 返回、`startDebugSession` 返回、命令结束。异常退出是 `main.go` 里的 `processSignals`：收到 `SIGTERM`/`SIGINT`/`SIGQUIT` 时直接调 `debug.Cleanup()` 再 `os.Exit(1)`，不走 `AtExit`，所以那里显式补了一次清理。
+
+还有一个必须如实写出来的已知问题：**在交互模式下按 Ctrl+C 或 Ctrl+D，当前会 panic**。`liner.Prompt` 在这两种按键下并不返回一个"取消"标记，而是返回错误（分别为 `liner.ErrPromptAborted` 与 `io.EOF`），而 `Start` 对任何 `Prompt` 错误都是 `panic(err)`。由于 panic 会触发栈展开，`defer` 里的 `liner.Close` 与退出栈仍会执行，目标进程不会变成孤儿；但用户体验是打印一整段 panic 栈、以非零状态退出，而不是"优雅地结束会话"。这是 `cmd/debug/shell.go` 目前真实的缺陷，修复方式（把错误分支改成 `s.Stop()` 或直接 `return`）留给后续小节，本节不做美化。
+
+#### 一次完整的 RPC 往返：break main.main
+
+现在把镜头对准一行命令。假设目标进程已经停在入口处，我们在提示符下输入：
+
+```
+godbg> break main.main
+```
+
+这一次输入要经过十步才能变成界面上的一行输出：
+
+```
+ ① liner.Prompt("godbg> ") 读到 "break main.main"
+ ② DebugSession.execute: SetArgs(strings.Split(line," ")) + ExecuteC()
+ ③ breakCmd.RunE: parseAddress("main.main") 失败 ⇒ spec = "main.main"
+ ④ Client.CreateBreakpoint(spec, cond="", name="")        ← api.Client 契约
+ ⑤ rpc2.Client: c.c.Call("Debugger.CreateBreakpoint",
+                         &CreateBreakpointArgs{...}, &reply)
+ ⑥ net/rpc Client.Call → Go → send：gob 编码 Request{Seq,ServiceMethod} + Args
+      传输介质：net.Pipe()（本地） / TCP（--headless + connect）
+ ⑦ rpc.Server.serveCodec：gob 解码 → 按 ServiceMethod 反射调用对应方法
+ ⑧ serverImpl.CreateBreakpoint(args, reply) → debugger.Debugger.CreateBreakpoint
+ ⑨ proc.Target.CreateBreakpointByLoc → target.AddBreakpoint：PTRACE_PEEKTEXT/POKETEXT(0xCC)
+ ⑩ 回程：gob 编码 Reply{Bps} + Response{Seq, Error:""} → ④ 拿到 reply.Bps
+```
+
+**第 ③ 步：命令层把文本变成一次契约调用。** `break` 命令的 `RunE`（`cmd/debug/break.go`）先尝试按纯地址解析，`main.main` 不是一个地址，于是进入 locspec 分支：
 
 ```go
-func (c *RPCClient) ListPackageVariables(filter string, cfg api.LoadConfig) ([]api.Variable, error) {
-    var out ListPackageVarsOut
-    err := c.call("ListPackageVars", ListPackageVarsIn{filter, cfg}, &out)
-    return out.Variables, err
+spec := loc
+if addr, err := parseAddress(loc); err == nil {
+	spec = fmt.Sprintf("*%#x", addr)
 }
 
-// don't change this method name, it's used by main_test.go:TestTypecheckRPC
-func (c *RPCClient) call(method string, args, reply interface{}) error {
-    return c.client.Call("RPCServer."+method, args, reply)
+// 位置描述（locspec）：可能解析出多个地址（如正则匹配）
+bps, err := Client.CreateBreakpoint(spec, cond, name)
+if err != nil {
+	return err
+}
+for _, bp := range bps {
+	info := fmt.Sprintf("breakpoint %d added at %#x", bp.ID, bp.Addr)
+	if bp.Pos != "" {
+		info += fmt.Sprintf(" (%s)", bp.Pos)
+	}
+	if bp.Name != "" {
+		info += fmt.Sprintf(", name %q", bp.Name)
+	}
+	if cond != "" {
+		info += fmt.Sprintf(", cond %q", cond)
+	}
+	fmt.Println(info)
 }
 ```
 
-所有的JSON-RPC的请求、响应类型都定义在 `path-to/tinydbg/service/rpc2/*.go` 中，OK，接下来就是Go标准库中JSON-RPC实现的细节了：
+注意这里没有"检查当前有没有目标进程"之类的判断，也没有任何格式化之外的后端职责——命令层拿到 `[]api.Breakpoint`，只负责打印。
 
-```bash
-go/src/net/rpc.(*Client).Call(serverMethod, args, reply) error
-    \--> rpc.(*Client).Go(serviceMethod, args, reply, donechan) *Call {
-            \--> rpc.(*Client).send(call)
-                    \--> rpc.(*clientCodec).WriteRequest(request, call.Args)
-                            \--> rpc.(*Encoder).Encode(request)
-                                     \--> e.marshal(v, encOpts) as JSON data
-                                     \--> e.w.Write(jsondata), w==net.Conn
-```
-
-发出去之后，调试器前端就等着调试器后端接受请求并处理、返回结果，那这里的JSON-RPC client是如何读取到结果返回的呢？
-
-注意JSON-RPC client.Call这个方法的实现， `client.Go(serviceMethod, args, reply, ...)` 执行后会返回一个chan，这个chan里就放的是RPC的上下文的信息 `*rpc.Call`，这个call包含了request、request-id、response、error信息，当RPC执行结束，如超时、网络错误、或者收到回包的时候，就会将这个call放回这个chan并close掉，表示这个请求已经处理结束。此时 `<-client.Go(...).Done` 就会返回RPC上下文信息，这个函数最终返回有没有错误。
+**第 ④⑤ 步：契约方法变成 RPC 消息。** `Client` 在命令层是接口，实际类型是 `rpc2.Client`，方法体就是一次 `Call`（`pkg/service/rpc2/client.go`）：
 
 ```go
-// Call invokes the named function, waits for it to complete, and returns its error status.
+func (c *Client) CreateBreakpoint(loc, cond, name string) ([]api.Breakpoint, error) {
+	var reply CreateBreakpointReply
+	err := c.c.Call("Debugger.CreateBreakpoint", &CreateBreakpointArgs{Loc: loc, Cond: cond, Name: name}, &reply)
+	return reply.Bps, err
+}
+```
+
+`c.c` 是标准库的 `*rpc.Client`。注意这里没有再包一层 `call` 辅助方法：每个契约方法都直接调 `c.c.Call`，方法名字符串与消息对写在一起，读的时候不用来回跳。方法名 `"Debugger.CreateBreakpoint"` 中的 `Debugger` 就是服务端注册时用的名字（`RegisterName("Debugger", …)`），后半段是 Go 方法名。所有请求/响应结构体都定义在 `pkg/service/rpc2/server.go` 的前半部分，和契约方法一一对应：
+
+```go
+// CreateBreakpointArgs/CreateBreakpointReply 对应
+// api.Client.CreateBreakpoint（ch9.2.22）
+type CreateBreakpointArgs struct {
+	Loc  string
+	Cond string
+	Name string
+}
+
+// CreateBreakpointReply 创建的断点（locspec 可解析出多个地址）
+type CreateBreakpointReply struct{ Bps []api.Breakpoint }
+```
+
+**第 ⑥ 步：标准库把消息写进连接。** 这一步不在 `godbgv2` 里，在 `$GOROOT/src/net/rpc` 里，但值得知道它做了什么：
+
+```go
+// $GOROOT/src/net/rpc/client.go（标准库，非本书代码）
 func (client *Client) Call(serviceMethod string, args any, reply any) error {
-    call := <-client.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
-    return call.Error
+	call := <-client.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
+	return call.Error
 }
 ```
 
-函数调用逐级返回，当到达下面这个函数时，就返回了服务器返回的变量列表：
+`Go` 分配一个递增的 `Seq`，把 `*Call{ServiceMethod, Args, Reply, Done}` 存进 `client.pending[seq]`，然后 `send` 用 gob 编码 `Request{Seq, ServiceMethod}` 和请求体，写到连接上；后台的 `input()` 协程不断读 `Response`，按 `Response.Seq` 从 `pending` 里找回对应的 `*Call`，gob 解码响应体到 `call.Reply`，最后 `call.Done <- call`。`Call` 因此是同步的：它只是在等自己的 `Done`。和早期实现不同，这里的编解码器是 gob 而不是 JSON，没有自研的方法表，也没有异步回调——服务端方法是被 `net/rpc` 反射调用的，不需要手工注册。
+
+**第 ⑦⑧ 步：服务端解码并调用。** 服务端对象是 `serverImpl`，它只包一个门面指针；`NewServer` 把它注册成 `Debugger` 服务：
 
 ```go
-func (c *RPCClient) ListPackageVariables(filter string, cfg api.LoadConfig) ([]api.Variable, error) {
-    var out ListPackageVarsOut
-    err := c.call("ListPackageVars", ListPackageVarsIn{filter, cfg}, &out)
-    return out.Variables, err
+type serverImpl struct {
+	dbg *debugger.Debugger
+}
+
+func NewServer(dbg *debugger.Debugger) *rpc.Server {
+	s := rpc.NewServer()
+	if err := s.RegisterName("Debugger", &serverImpl{dbg: dbg}); err != nil {
+		panic(err)
+	}
+	return s
+}
+
+func (s *serverImpl) CreateBreakpoint(args *CreateBreakpointArgs, reply *CreateBreakpointReply) error {
+	bps, err := s.dbg.CreateBreakpoint(args.Loc, args.Cond, args.Name)
+	reply.Bps = bps
+	return err
 }
 ```
 
-然后，就可以打印出这些变量列表，显示给用户了：
+能被 `net/rpc` 注册的方法要满足几条约定：方法名可导出（首字母大写）、恰好两个参数且都是指针、第二个参数充当响应、返回值只有一个 `error`。请求是否成功，就看这个 `error`；响应内容直接写进 `reply`——这也是为什么 `serverImpl` 的每个方法都长成一个样子：转调门面、填 reply、返回 err。
+
+**第 ⑧⑨ 步：门面与目标层真正干活。** 门面（`pkg/service/debugger/debugger.go`）做三件事：检查有没有目标进程、把 locspec 交给 `proc.Target`、把内部断点类型翻译成契约类型：
 
 ```go
-func vars(t *Session, ctx callContext, args string) error {
-    filter, cfg := parseVarArguments(args, t)
-    vars, err := t.client.ListPackageVariables(filter, cfg)
-    if err != nil {
-        return err
-    }
-    return t.printFilteredVariables("vars", vars, filter, cfg)
+func (d *Debugger) CreateBreakpoint(loc, cond, name string) ([]api.Breakpoint, error) {
+	if d.t == nil {
+		return nil, fmt.Errorf("no debugged process")
+	}
+	bps, err := d.t.CreateBreakpointByLoc(loc, cond, name)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]api.Breakpoint, len(bps))
+	for i, bp := range bps {
+		out[i] = toAPIBreakpoint(bp)
+	}
+	return out, nil
 }
 ```
 
-OK，那底层网络收包的细节是怎样的呢？和其他支持TCPConn、UnixConn全双工通信的网络编程框架类似，协议设计的时候请求、响应都要包含request-id，clientside记录一个`map[request-id]*rpc.Call`，等从服务端连接收到响应时，就从响应体力提取request-id，然后从上述map中找到原始的请求体，并将响应结果放回这个RPC上下文的内部`*rpc.Call.Reply`。
-
-see go/src/net/rpc/client.go
+`proc.Target.CreateBreakpointByLoc`（`pkg/proc/location.go`）负责 locspec 到地址的解析与多地址处理：先校验断点名字（不能是纯数字、不能重名），再 `FindLocation` 把 `main.main` 解析成函数入口地址，然后对每个地址建一条逻辑断点；多个地址中的任意一个失败，就回滚已经建好的：
 
 ```go
-// Call represents an active RPC.
-type Call struct {
-    ServiceMethod string     // The name of the service and method to call.
-    Args          any        // The argument to the function (*struct).
-    Reply         any        // The reply from the function (*struct).
-    Error         error      // After completion, the error status.
-    Done          chan *Call // Receives *Call when Go is complete.
+addrs, err := t.FindLocation(loc)
+if err != nil {
+	return nil, err
+}
+if name != "" && len(addrs) > 1 {
+	return nil, fmt.Errorf("breakpoint name %q cannot be used for %d locations", name, len(addrs))
+}
+
+bps := []*Breakpoint{}
+for _, addr := range addrs {
+	bp, err := t.createBreakpoint(addr, loc, UserBreakpoint)
+	if err != nil {
+		for _, created := range bps {
+			_, _ = t.ClearBreakpoint(created.ID)
+		}
+		return nil, err
+	}
+	bp.Name = name
+	bp.Cond = cond
+	bps = append(bps, bp)
 }
 ```
 
-see go/src/net/rpc/client.go，收回包的路径是这样的：
+`FindLocation` 内部按 `locspec.Parse` 的结果分支：`funcname` 走 `FindFunction` 拿入口地址、`file:line` 走行号表反查、`/regexp/` 匹配多个函数、`*addr`/`+N`/`-N` 各有对应路径。`main.main` 属于第一种。
 
-```bash
-go/src/net/rpc.(*Client).input()
-    \--> forloop
-            \--> client.codec.ReadResponseHeader(&response)
-            \--> seq := response.Seq
-            \--> call := client.pending[seq]
-                 delete(client.pending, seq)
-            \--> if call == nil then this request timeout and deleted already
-            \--> if reponse.Error != "" then set call.Error and done
-                    \--> call.Done <- call
-            \--> if reponse.Error == nil then set call.Replay and done
-                    \--> call.Done <- call
+最后一层是目标层写断点指令（`pkg/target/breakpoint.go`）：`PTRACE_PEEKTEXT` 读出断点处的原始首字节存进 `Orig`，`PTRACE_POKETEXT` 把它替换成 `0xCC`（`int3`），同时在 `Breakpoints[addr]` 与 `BreakpointsByID[id]` 两张索引里登记。到这里，内核里的 tracee 内存被真的改掉了——**这是本次调用链上唯一一处改动 tracee 的操作**，前面所有环节都只是搬运。
 
-go/src/net/rpc.(*Client).Call(serviceMethod string, args any, reply any) error
-    \--> call := <-client.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
-    \--> return call.Err
+**第 ⑩ 步：回程。** `serverImpl` 把 `[]api.Breakpoint` 填进 `reply`，`net/rpc` 用 gob 编码 `Response{Seq, Error:""}` 与响应体写回连接；客户端 `input()` 协程按 `Seq` 找到 `*Call`、解码到 `reply`、唤醒 `Call`；`rpc2.Client.CreateBreakpoint` 返回 `reply.Bps`；`breakCmd.RunE` 逐条打印 `breakpoint 1 added at 0x… (main.go:12)`。一次完整的往返到此结束，会话循环回到 `liner.Prompt`。
 
-func (c *RPCClient) ListPackageVariables(filter string, cfg api.LoadConfig) ([]api.Variable, error)
-    \--> err := c.call("ListPackageVars", ListPackageVarsIn{filter, cfg}, &out)
-    \--> return out.Variables, err
-```
-
-OK，大致就是这样，如果你对更多细节感兴趣，可以自己看下这部分的源码。
-
-#### 调试器后端初始化并接受请求
-
-OK，接下来就是服务器侧收包并处理这些请求了，当我们以 `--headless` 模式启动时，我们会启动一个调试器backend，它以服务的形式运行。
-
-see path-to/tinydbg/cmds/root.go
+**错误路径同样要过一遍 RPC，而且会丢掉错误身份。** 假设某个流程对没有物理断点的地址调用 `Client.RestoreInstruction(addr)`（`step` 越过断点时就会这么做）：服务端 `target.DebuggedProcess.RestoreInstruction` 找不到地址对应的断点，返回 `api.ErrBreakpointNotExisted`；`net/rpc` 跨进程只能传字符串，于是客户端收到的是一个 `rpc.ServerError("breakpoint not existed")`——内容对、类型错，`err == api.ErrBreakpointNotExisted` 直接不成立，`cmd/debug/step.go` 里那句
 
 ```go
-func execute(attachPid int, processArgs []string, conf *config.Config, coreFile string, kind debugger.ExecuteKind, dlvArgs []string, buildFlags string) int {
-    ...
-    // Make a TCP listener or Unix listener, or preConnectedListener via net.Pipe
-    if headless {
-        listener, err = netListen(addr)
-    } else {
-        listener, clientConn = service.ListenerPipe()
-    }
-    ...
-
-    // Create and start a debugger server
-    server := rpccommon.NewServer(&service.Config{
-        Listener:       listener,
-        ProcessArgs:    processArgs,
-        AcceptMulti:    acceptMulti,
-        Debugger: debugger.Config{
-            AttachPid:             attachPid,
-            WorkingDir:            workingDir,
-            CoreFile:              coreFile,
-            Foreground:            headless && tty == "",
-            Packages:              dlvArgs,
-            ...
-        },
-    })
-    ...
-
-    // run the server
-    _ = server.Run()
-    ...
+if err := Client.RestoreInstruction(addr); err != nil {
+	if err == api.ErrBreakpointNotExisted {
+		// PC-1 处不是断点，直接单步
 ```
 
-那么server.Run()具体做了什么呢？
+的分支就永远走不到。解决办法是客户端按消息还原哨兵（`pkg/service/rpc2/client.go`）：
 
 ```go
-// Run starts a debugger and exposes it with an JSON-RPC server. The debugger
-// itself can be stopped with the `detach` API.
-func (s *ServerImpl) Run() error {
-    ...
-    // Create and start the debugger
-    config := s.config.Debugger
-    if s.debugger, err = debugger.New(&config, s.config.ProcessArgs); err != nil {
-        return err
-    }
-
-    // Register the RPC methods mapping, map[methodName] = methodHandler
-    s.s2 = rpc2.NewServer(s.config, s.debugger)
-    s.methodMap = make(map[string]*methodType)
-    registerMethods(s.s2, s.methodMap)
-
-    // Accept connection and serve the connection requests
-    go func() {
-        defer s.listener.Close()
-        for {
-            c, err := s.listener.Accept()
-            if err != nil {
-                select {
-                case <-s.stopChan:
-                    // We were supposed to exit, do nothing and return
-                    return
-                default:
-                    panic(err)
-                }
-            }
-
-            // serve the connection requests
-            go s.serveConnection(c)
-            if !s.config.AcceptMulti {
-                break
-            }
-        }
-    }()
-    return nil
-}
-
-func registerMethods(s *rpc2.RPCServer, methods map[string]*methodType) {
-    methods["RPCServer.Command"] = &methodType{method: reflect.ValueOf(s.Command)}
-    methods["RPCServer.CreateBreakpoint"] = &methodType{method: reflect.ValueOf(s.CreateBreakpoint)}
-    methods["RPCServer.CreateWatchpoint"] = &methodType{method: reflect.ValueOf(s.CreateWatchpoint)}
-    methods["RPCServer.Detach"] = &methodType{method: reflect.ValueOf(s.Detach)}
-    methods["RPCServer.Disassemble"] = &methodType{method: reflect.ValueOf(s.Disassemble)}
-    methods["RPCServer.Eval"] = &methodType{method: reflect.ValueOf(s.Eval)}
-    methods["RPCServer.ExamineMemory"] = &methodType{method: reflect.ValueOf(s.ExamineMemory)}
-    ...
-    methods["RPCServer.ListLocalVars"] = &methodType{method: reflect.ValueOf(s.ListLocalVars)}
-    methods["RPCServer.ListPackageVars"] = &methodType{method: reflect.ValueOf(s.ListPackageVars)}
+// translateErr 将服务端错误还原为契约哨兵错误。
+//
+// net/rpc 跨进程传输错误时只保留错误消息、不保留错误同一性，
+// 客户端按消息还原哨兵，保证 api.Client 契约在 RPC 模式下依然成立
+// （cmd/ 层对哨兵的判等——如 step/continue 对
+// api.ErrBreakpointNotExisted 的 == 比较——依赖这一点）。
+func translateErr(err error) error {
+	if err != nil && err.Error() == api.ErrBreakpointNotExisted.Error() {
+		return api.ErrBreakpointNotExisted
+	}
+	return err
 }
 ```
 
-OK，看下如何处理连接请求的，JSON-RPC这里的serializer当然是JSON decoder了，这里从连接循环收包，收完一个request，就取出request.Method对应的handler `mtype`，这个handler就是一个方法了，然后就根据方法的入参类型、出参类型，通过反射将JSON中的数据decode成具体类型的字段值，然后通过反射调用对应的方法进行处理。处理完成后回包。
+这个话题还有一个诚实的补充：`translateErr` 只包裹了少数几个方法——`ClearBreakpoint`、`SetBreakpointCondition`、`ToggleBreakpoint`、`ListSource`、`SetVariable`、`RestoreInstruction`；像 `CreateBreakpoint`、`Continue`、`ReadRegs` 这样的方法没有包裹，错误只以字符串形态透传。原因很实际：只有 `cmd/` 层真的用 `==` 判等哨兵的地方，才需要还原；而漏掉一处，就会出现"本地模式走得到、RPC 模式走不到"的分支。
 
-值得一提的是，这里的RPC接口，在C/S通信交互方式上既有同步接口，也有异步接口。所谓同步、异步，就是客户端是否必须等待服务器响应才能继续执行做后续处理。
-
-- 对于客户端来说：
-  - 同步接口的话，客户端会等服务器的处理结果，一般调用方法 `RPCClient.Go(...)`；
-  - 而异步接口的话，客户端有可能不会等服务器的处理结果，比如disconnect操作通知下服务器就退出了，一般调用方法 `RPCClient.Call(...)`；
-- 对于服务端来说：
-  - 同步接口，这种接口一般耗时比较短，或者客户端必须等待服务端处理完成，这类接口出参out的类型 != RPCCallback，而是具体的req对应的类型rsp；
-  - 异步接口，这种接口一般耗时比较长，或者客户端不关心服务器是否处理完成，比如客户端exit时仅通知服务器即可、不用等到服务器detach完成，这类接口出参out的类型为RPCCallback，req对应的响应类型rsp，这里的rsp通过 `RPCCallback.Return(rsp)` 返回客户端；
-
-ps: 我们开发网络服务器时，主调服务有时也会有些通知被调服务的操作，仅做通知不等结果，或者被调服务处理完后再通知主调方。被调方也可能为了表示收到了请求而回包，但是请求的处理是异步的。对于后者，C/S通信交互方式上还是同步的，只是Server端请求处理上是异步处理的。所以有时候你说“异步”，是强调“异步通信”，还是“异步处理”，二字之差可能就会被挑战。如果没有其他上下文信息帮识别“异步”具体指的是通信方式异步，还是服务端处理方式异步，我们应该用词准确避免引发不必要的歧义。写东西写多了，才发现，语言的魅力除了“内涵文字”，“精确表达”才是它最大的魅力。
+**同一往返的另一副面孔：`funcs main.*`。** 这条命令的链路比 `break` 短得多，但形状不同，正好用来理解"快照语义"：`funcsCmd.RunE` 只做一次 `Client.ListFunctions()`，拿回全部函数（`[]api.Function`，按入口地址升序），然后在客户端用正则过滤、打印：
 
 ```go
-func (s *ServerImpl) serveConnection(c io.ReadWriteCloser) {
-    conn := &bufReadWriteCloser{bufio.NewReader(c), c}
-    s.log.Debugf("serving JSON-RPC on new connection")
-    go s.serveJSONCodec(conn)
+fns, err := Client.ListFunctions()
+if err != nil {
+	return err
 }
-
-func (s *ServerImpl) serveJSONCodec(conn io.ReadWriteCloser) {
-    ...
-    codec := jsonrpc.NewServerCodec(conn)
-    var req rpc.Request
-    var resp rpc.Response
-    for {
-        req = rpc.Request{}
-        err := codec.ReadRequestHeader(&req)
-        ...
-
-        mtype, ok := s.methodMap[req.ServiceMethod]
-
-        var argv, replyv reflect.Value
-        ...
-
-        // argv guaranteed to be a pointer now.
-        if err = codec.ReadRequestBody(argv.Interface()); err != nil {
-            return
-        }
-        ...
-
-        if mtype.Synchronous {
-            replyv = reflect.New(mtype.ReplyType.Elem())
-            function := mtype.method
-            returnValues := function.Call([]reflect.Value{argv, replyv})
-            errInter := returnValues[0].Interface()
-            ...
-            resp = rpc.Response{}
-            s.sendResponse(sending, &req, &resp, replyv.Interface(), codec, errmsg)
-            ...
-        } else {
-            function := mtype.method
-            ctl := &RPCCallback{s, sending, codec, req, make(chan struct{}), clientDisconnectChan}
-            go func() {
-                ...
-                function.Call([]reflect.Value{argv, reflect.ValueOf(ctl)})
-            }()
-            <-ctl.setupDone
-        }
-    }
-    ...
+for _, fn := range fns {
+	if !re.MatchString(fn.Name) {
+		continue
+	}
+	info := fmt.Sprintf("%s %#x", fn.Name, fn.Entry)
+	if fn.DeclFile != "" {
+		info += fmt.Sprintf(" (%s:%d)", fn.DeclFile, fn.DeclLine)
+	}
+	fmt.Println(info)
 }
 ```
 
-以RPCServer.Command为例，这个Command操作是个典型的异步操作：
+对应的 RPC 是 `Debugger.ListFunctions`，请求体是空的 `ListFunctionsArgs{}`，响应体是 `ListFunctionsReply{Fns []api.Function}`。这里没有分页、没有迭代器、没有"先返回前 100 个再拉下一页"的流式接口——一次调用返回完整快照，过滤放在客户端。这正是铁律 3 的直观体现，也是 `ListFunctions` 被当作 9.2.01 这一节（"api 增加符号层能力入口"）代表方法的原因。
 
-```go
-// Command interrupts, continues and steps through the program.
-func (s *RPCServer) Command(command api.DebuggerCommand, cb service.RPCCallback) {
-    // 执行对应命令
-    st, err := s.debugger.Command(&command, cb.SetupDoneChan(), cb.DisconnectChan())
-    if err != nil {
-        cb.Return(nil, err)
-        return
-    }
-    var out CommandOut
-    out.State = *st
-    // 通过callback返回结果
-    cb.Return(out, nil)
-}
-```
+把这几次调用整理成一张对照表，`api.Client` 的一个方法如何落到 RPC 就一目了然：
 
-举一个异步的调试命令disconnect作为参考，注意它和同步命令vars的不同。C/S异步通信交互方式用的是 `RPCClient.Go(...)`，同步通信方式用的是 `RPCClient.Call(...)`：
+| 契约方法 | RPC 方法名 | 请求结构 | 响应结构 |
+| --- | --- | --- | --- |
+| `CreateBreakpoint(loc, cond, name)` | `Debugger.CreateBreakpoint` | `CreateBreakpointArgs{Loc, Cond, Name}` | `CreateBreakpointReply{Bps []api.Breakpoint}` |
+| `ListFunctions()` | `Debugger.ListFunctions` | `ListFunctionsArgs{}` | `ListFunctionsReply{Fns []api.Function}` |
+| `RestoreInstruction(addr)` | `Debugger.RestoreInstruction` | `RestoreInstructionArgs{Addr}` | `RestoreInstructionReply{}` |
+| `Continue()` | `Debugger.Continue` | `ContinueArgs{}` | `ContinueReply{Stop *api.StopInfo}` |
 
-```go
-// disconnectCmd
-func (c *RPCClient) Disconnect(cont bool) error {
-    if cont {
-        out := new(CommandOut)
-        // 异步处理的，并没有等待RPCServer.Command执行结束才返回
-        c.client.Go("RPCServer.Command", &api.DebuggerCommand{Name: api.Continue, ReturnInfoLoadConfig: c.retValLoadCfg}, &out, nil)
-    }
-    return c.client.Close()
-}
+`Continue` 这一行值得多看一眼：它是全同步的——服务端 `debugger.Continue` 一直等到 tracee 停下来才返回 `*api.StopInfo`，客户端的 `Call` 也就一直阻塞。所以这一版没有"状态变化事件推给前端"的机制，前端也不需要处理"正在运行"的中间态。
 
-// varsCmd
-func (c *RPCClient) ListPackageVariables(filter string, cfg api.LoadConfig) ([]api.Variable, error) {
-    var out ListPackageVarsOut
-    // call操作，等到收到处理结果后才返回
-    err := c.call("ListPackageVars", ListPackageVarsIn{filter, cfg}, &out)
-    return out.Variables, err
-}
-```
+#### 能力边界：这一版没有的东西
 
-OK! 关于调试会话如何建立的，我们就介绍到这里。
+把 godbgv2 与 delve 对照，能更清楚地划定本节的边界。以下能力在 godbgv2 里**不存在**，读代码时不要去找：
+
+- **没有 JSON-RPC**。传输层就是标准库 `net/rpc` 的默认 gob 编码，没有 JSON 编解码、没有自研的请求/响应封装，也没有手写的方法分派表；服务端方法是 `net/rpc` 反射调用的。
+- **没有 `cmd/dlv` 那样的 `cmds` 包**。delve 用 `DebugCommands` + `callContext` + `cmdfunc` 自己管理会话内命令，理由是 cobra 的 `Run(fset, args)` 签名表达不了命令对 client、frame 的依赖。godbgv2 反过来：仍然用 cobra 管理调试命令，依赖通过包级 `Client` 注入（`cmd/debug/shell.go` 的 `var Client api.Client`），代价是要自己处理 flag 复位这类问题（见 `resetFlags`）。两条路线各有取舍，但不要用前者的模型去套后者的代码。
+- **没有 `TargetGroup`**。`debugger.Debugger` 只有一个 `t *proc.Target` 字段，一次会话只对应一个目标进程；不支持多进程/多目标切换。
+- **没有流式状态 channel**。`Continue()`、`StepOut()` 都是"阻塞到停止再返回快照"，没有把停止事件、输出、断点命中推给前端的通道，也没有异步回调。
+- **没有多客户端**。代码里没有 `--accept-multiclient` 之类的开关，没有客户端注册表，也没有会话隔离。`net/rpc` 的 `Server.Accept` 确实会为每个入连接起一个协程服务，但所有连接共享同一个 `debugger.Debugger`，因此不能当作"多人联合调试"特性来用。
+- **没有 DAP**。没有 `godbg dap`，也没有任何 DAP 编解码；VSCode 集成不在这一版的范围内。
+
+除此之外，还有一些"小一号"的边界，写在这里免得读者试了半天找不到：`core` 命令是桩（`cmd/core.go` 直接返回错误）；没有 `--allow-non-terminal-interactive`、`--redirect` 这类 dlv 选项；没有 `restart` 命令（目标层保留了 `Command`/`Args` 字段，只是命令层还没实现）；补全器只补命令名与别名，不补函数名、变量名（第5.4节讨论的补全能力只落地了一部分）；命令历史只存在内存里、不落盘；命令参数按空格切分，不支持引号。
 
 ### 本节小结
 
-这个小节我们对tinydbg调试器会话进行了非常详细的介绍，我们介绍了裁剪go-delve/delve过程中移除的一些特性，以让tinydbg尽可能保持代码精简，方便读者朋友们学习。我们介绍了tinydbg启动前后端以及调试会话工作期间，整个的一个交互时序，前后端的一些关键操作以及Linux内核介入的一些关键处理。然后，我们介绍了调试器会话中键入一个调试器命令开始，调试器前端如何解析并转入JSON—RPC发起对调试器后端RPC方法的调用、调试器后端的收包、处理、返回结果，我们甚至还介绍了标准库JSON-RPC的工作过程。
+这一节我们拆开了 godbgv2 的调试会话，要点可以归纳成三句话：
 
-相信读者已经了解了调试器会话的具体工作过程，将来我们如果要扩展一个新的调试命令，大家应该了解我们需要对项目中哪些部分做调整了。OK，本节就先介绍到这里。
+1. **装配在 `main`，会话在 `cmd`。** `main.main` 用 `debugger.New()` + `service.WireLocal(dbg)` 建好进程内 RPC，把 `api.Client` 注入 `cmd.Client`；四个命令在 `RunE` 里建立目标进程（或远程连接），在 `PostRun` 里统一汇入 `cmd/session.go` 的 `startDebugSession`。
+2. **会话本身只是一个循环加一棵命令树。** `DebugSession.Start` 分流出 `--init` 批量回放与交互 REPL（后者才创建 `liner`，以避免 `SIGTTOU`），每行输入经 `SetArgs` + `ExecuteC` 分发到具体命令的 `RunE`，`resetFlags` 负责让 pflag 回到默认状态；`exit` → `Stop` → 退出栈 → `debug.Cleanup` 是正常的收尾路径，而 Ctrl+C/Ctrl+D 目前会 panic，属于待修的已知问题。
+3. **每条命令都是一次完整 RPC 往返。** `break main.main` 依次经过 locspec 解析、`Client.CreateBreakpoint`、`rpc.Client.Call`、gob 编解码、`serverImpl`、`debugger` 门面、`proc.Target`、`target` 的 `PTRACE_POKETEXT`，再把 `[]api.Breakpoint` 原路带回；本地模式与 headless 模式的差别只在传输介质，协议、消息对、服务端方法完全共用。
+
+理解了这条主线和它的边界，再去看 9.2.11 起的各个命令实现，就会发现它们都只是在"命令层的一次调用"与"目标层的一次 ptrace"之间填充中间层——而会话循环、装配方式、RPC 往返这三件事，本节已经讲完了。
