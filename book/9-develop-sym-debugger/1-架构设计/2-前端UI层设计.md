@@ -7,249 +7,261 @@
 - UI层为用户提供调试相关的界面交互逻辑；
 - Service层完成与调试器后端实现的通信，完成对被调试进程的各种控制；
 
-前端、后端的Service层设计统一在《Service层设计》小节进行描述。本节来介绍下前端UI层的详细设计，以及相关的技术点。
+Service层的设计统一在《Service层设计》一节描述，本节只讨论UI层。本节及后面各节的配套实现是 godbgv2（更早的章节稿曾以 tinydbg 为例，两者只是命名与代码基线不同，架构分层一致），命令行程序名是 `godbg`。
 
 ### 图形化调试界面
 
-对于图形化的调试界面，包括：
+图形化调试界面大致有三类做法：
 
-- 将终端从文本模式调整为图形模式，以可视化的方式进行调试，这类支持库包括 ncurses 等；
-- 使用图形库设计实现的图形化调试界面，如 gdlv 基于 nuklear图形库实现；
-- 在IDE中实现调试插件，如VSCode中自带的或者第三方的调试插件，使用JS或者TS实现调试界面；
+- 把终端从文本模式切到图形模式，用 ncurses 一类库做可视化调试界面；
+- 用图形库自行绘制界面，如 gdlv 基于 nuklear 实现；
+- 在 IDE 里实现调试插件，如 VSCode 的调试插件用 JS/TS 绘制界面。
 
-图形化调试界面的内容不在我们的详细讨论范围内，我们只是罗列下，这是一个可以扩展的方向。
-
-图形化界面调试，相比于终端中文本模式的命令行界面调试，有着非常大的优势，它可以一次性展示更多内容。命令行调试界面要支持的操作，图形化界面下肯定要都应该支持，但是图形化界面可以同时展示的东西更多，理论上UI层的设计上也会需要更细腻。
+图形化界面的长处是一次能展示更多内容（源码、断点、变量、调用栈、goroutine 列表可以同屏），但UI层的设计也更细碎。它不在本书的详细讨论范围内，这里只作为可扩展方向罗列。
 
 ### 命令行调试界面
 
-我们本章要实现的Go调试器，最终形态是一个在终端文本模式下的命令行调试器，以文本模式的形式与用户交互，获取用户输入的调试命令，转换成对应的调试动作执行，并将结果以文本模式的形式显示出来。
+godbgv2 的最终形态是终端文本模式下的命令行调试器：读入用户输入的调试命令，转换成对应的调试动作，再把结果以文本形式打出来。主流调试器 gdb、lldb、dlv 都工作在这种模式下。
 
-> 终端可以工作在文本模式，或者图形模式下，我们这里采用文本模式。其实主流的命令行调试器gdb、lldb、dlv等都是工作在终端文本模式下。
+命令行的优劣势都摆在明面上：
 
-命令行调试相比图形化调试有其独特的优缺点：
+- **优势**：跨平台表现一致，不依赖图形库；资源占用少；远程调试友好（SSH、容器里直接用）；容易脚本化。
+- **劣势**：一次只能展示有限信息，视图要来回切；命令和参数靠记忆；输入比点按钮慢；复杂数据结构和调用关系不直观。
 
-**优势：**
+对一本讲原理的书来说，这些劣势可以接受：文本界面的每行输出都能对应到后端返回的一份数据，"前端只是数据的呈现层"这件事反而更容易讲清楚。
 
-1. 跨平台一致性：文本模式调试界面在不同操作系统上表现一致，不需要为不同平台开发特定的图形界面
-2. 资源占用少：不需要加载图形库，对系统资源要求更低
-3. 远程调试友好：在远程服务器或容器环境中，文本模式更容易通过SSH等远程连接使用
-4. 可脚本化：命令行操作更容易被脚本化，便于自动化调试流程
-5. 学习曲线统一：一旦掌握命令行调试，可以快速适应不同的命令行调试工具
-
-**劣势：**
-
-1. 信息展示受限：一次只能展示有限的信息，需要频繁切换视图
-2. 命令记忆负担：需要开发者熟记各种调试命令及其参数
-3. 操作效率：输入命令通常比点击图形界面按钮更耗时
-4. 可视化效果差：难以直观地展示复杂的数据结构或调用关系
-5. 新手友好度低：对初学者来说，命令行界面可能显得不够直观和友好
+会话形态很朴素：`godbg exec/attach/debug` 启动调试后进入 `DebugSession`，提示符是 `godbg> `（`cmd/debug/shell.go` 的 `prefix` 常量），一行输入对应一次命令执行。`DebugSession` 持有会话命令树根 `root *cobra.Command`、行编辑器 `liner *liner.State`、上一条命令 `last`、待回放脚本 `initFile` 等状态，`Start()` 里跑读行循环。
 
 ### 调试命令支持
 
-go符号级调试器的功能性需求，大家联想下常见调试器的使用经历，这个是比较直观的：
+要支持的调试命令分两类，管理方式不同：
 
-#### 启动调试支持多种调试对象类型
+- **进程级命令**：怎么发起调试。顶层只有 6 个：`exec`、`attach`、`debug`、`core`、`connect`、`version`，各自在自己的文件里 `rootCmd.AddCommand(...)`。注意 `--headless`/`--listen` 是根命令上的 persistent flag（如 `godbg debug --headless --listen 127.0.0.1:0`），不是独立子命令；也没有 `test`、`dap`、`tracepoint` 这样的顶层命令。
+- **会话级命令**：进入会话后怎么读写、控制被调试进程。一个命令一个文件，统一挂到 `debugRootCmd`；命令形态是 `Use`（含参数用法）、`Short`、`Aliases`、`Annotations`（分组）、`RunE`（实现）五件套。
 
-| 命令                   | 描述                                                                  |
-| ---------------------- | --------------------------------------------------------------------- |
-| godbg attach           | 调试一个正在运行中的process                                           |
-| godbg exec             | 启动并调试指定的go executable                                         |
-| godbg test             | 调试当前go package中的测试函数                                        |
-| godbg debug            | 调试当前go main module                                                |
-| godbg debug --headless | 类似gdbserver的headless模式                                           |
-| godbg dap              | 启动一个headless模式的服务，接收DAP协议请求，以方便与VSCode等进行集成 |
-| godbg core             | 启动并调试指定的coredump                                              |
-| godbg tracepoint       | 支持tracepoint能方便观察程序执行命中的函数                            |
+会话命令的数量和实现状态不在本节展开：**命令全集、每条命令的实现状态、每条命令的讲解章节，统一以《核心调试命令》（9.2.00）为准**，本节再抄一份只会产生第二个真相源。只需要知道命令集合里既有可用命令（`break`、`continue`、`step`、`backtrace`、`list`、`print` 等），也有先占位、只打印 `TODO(chX.Y.Z)` 的桩（`next`、`frame`、`finish`、`ptypes`、`display`），`ptype` 这类"想要但还没排期"的能力同样在 9.2.00 里标注。
 
-#### 调试会话支持多种调试命令
-
-**1 Running the program**
-
-| 命令             | 别名 | 描述                                                                                                      |
-| ---------------- | ---- | :-------------------------------------------------------------------------------------------------------- |
-| call             | -    | Resumes process, injecting a function call (EXPERIMENTAL!!!)                                              |
-| continue         | c    | Run until breakpoint or program termination.                                                              |
-| next             | n    | Step over to next source line.                                                                            |
-| rebuild          | -    | Rebuild the target executable and restarts it. It does not work if the executable was not built by delve. |
-| restart          | r    | Restart process.                                                                                          |
-| step             | s    | Single step through program.                                                                              |
-| step-instruction | si   | Single step a single cpu instruction.                                                                     |
-| stepout          | so   | Step out of the current function.                                                                         |
-| rr相关           |      | rr相关的命令，如rnext, rstep...                                                                           |
-
-**2 Manipulating breakpoints**
-
-| 命令        | 别名 | 描述                                         |
-| ----------- | ---- | -------------------------------------------- |
-| break       | b    | Sets a breakpoint.                           |
-| breakpoints | bp   | Print out info for active breakpoints.       |
-| clear       |      | Deletes breakpoint.                          |
-| clearall    |      | Deletes multiple breakpoints.                |
-| condition   | cond | Set breakpoint condition.                    |
-| on          |      | Executes a command when a breakpoint is hit. |
-| toggle      |      | Toggles on or off a breakpoint.              |
-| trace       | t    | Set tracepoint.                              |
-
-**3 Viewing program variables and memory**
-
-| 命令       | 别名 | 描述                                     |
-| ---------- | ---- | ---------------------------------------- |
-| args       |      | Print function arguments.                |
-| display    |      | Disassembler.                            |
-| examinemem | x    | Examine raw memory at the given address. |
-| locals     |      | Print local variables.                   |
-| print      | p    | Evaluate an expression.                  |
-| regs       |      | Print contents of CPU registers.         |
-| set        |      | Changes the value of a variable.         |
-| vars       |      | Print package variables.                 |
-| whatis     |      | Prints type of an expression.            |
-
-**4 Listing and switching between threads and goroutines**
-
-| 命令       | 别名 | 描述                                    |
-| ---------- | ---- | --------------------------------------- |
-| goroutine  | gr   | Shows or changes current goroutine      |
-| goroutines | grs  | List program goroutines.                |
-| thread     | tr   | Switch to the specified thread.         |
-| threads    |      | Print out info for every traced thread. |
-
-**5 Viewing the call stack and selecting frames**
-
-| 命令     | 别名 | 描述                                                            |
-| -------- | ---- | --------------------------------------------------------------- |
-| deferred |      | Executes command in the context of a deferred call.             |
-| down     |      | Move the current frame down.                                    |
-| frame    |      | Set the current frame, or execute command on a different frame. |
-| stack    | bt   | Print stack trace.                                              |
-| up       |      | Move the current frame up.                                      |
-
-**6 Other commands**
-
-| 命令        | 别名     | 描述                                                   |
-| ----------- | -------- | ------------------------------------------------------ |
-| config      |          | Changes configuration parameters.                      |
-| disassemble | disass   | Disassembler.                                          |
-| dump        |          | Creates a core dump from the current process state     |
-| edit        | ed       | Open where you are in `$DELVE_EDITOR` or `$EDITOR` |
-| exit        | quit / q | Exit the debugger.                                     |
-| funcs       |          | Print list of functions.                               |
-| help        | h        | Prints the help message.                               |
-| libraries   |          | List loaded dynamic libraries                          |
-| list        | ls / l   | Show source code.                                      |
-| source      |          | Executes a file containing a list of delve commands    |
-| sources     |          | Print list of source files.                            |
-| types       |          | Print list of types.                                   |
-| ptype       |          | Print type info of specific datatype.                  |
-
-使用过Go调试器 `go-delve/delve` 的读者，对上述列出的调试命令应该不陌生，我们基本上是罗列了 `go-delve/delve` 中支持的调试命令，额外增加了一个受gdb启发的 `ptype` 打印类型详情的命令。
-
-> dlv支持 `whatis <expr>` 来查看expr对应的类型信息，但是如果我们定义了一个类型、类型上定义了一些成员、方法，whatis只能输出类型名，而不能输出成员、方法，这个很不方便。
->
-> 而gdb `ptype` 就支持，下面是个gdb的示例，我们将在后面的实现阶段，实现和 gdb ptype 一样的效果。
->
-> ```bash
-> (gdb) ptype student1
-> type = class Student {
->   private:
->     std::__cxx11::string name;
->     int age;
->
->   public:
->     Student(std::__cxx11::string, int);
->     std::__cxx11::string String(void) const;
-> }
-> ```
-
-写这本书的初衷是为了解释如何开发一款符号级调试器，而非为了写而写，更不是为了超越dlv。考虑到调试功能完整度、相关知识的覆盖度、工程的复杂度、个人时间有限等诸多因素，我们将fork go-delve/delve实现，并进行适当的裁剪，保留核心设计、删减与linux/amd64无关架构扩展代码、删减dap实现、删减对接不同调试器backend gdb、lldb、rr的扩展，这些代码中被移除但是又有必要介绍的内容，将其迁移至扩展阅读部分介绍。
+本节关心的是这些命令**怎么被组织起来**、用户**怎么把它们敲进去**。
 
 ### 调试命令管理
 
-需要支持的调试功能众多，我们前面做需求分析时对需要支持的调试命令进行了整理，并将它们按照调试动作的类型进行了分组。
+命令管理的难点不在"注册命令"，而在于：命令多、要分组展示、要支持别名、要在同一次会话里反复执行而不互相污染状态，还要让命令实现不依赖后端的具体类型。godbgv2 的做法是"继续用 cobra，再加一层很薄的约定"。
 
-这些要支持的调试命令，根据使用的阶段可以分成两类。一类属于如何发起调试，一类属于在调试会话中如何读写、控制被调试进程状态。这样的话，我们在进行命令管理的时候就要注意区分为两组不同的命令。
+#### 会话命令的注册：init() + AddCommand
 
-#### 方式1：统一由cobra管理
+顶层命令树由 `cmd/root.go` 的 `rootCmd` 维护；会话命令树的根是 `debugRootCmd`（`cmd/debug/shell.go`，只声明 `Use: "help [command]"` 与 `Short: descShort`），它自己不干活，只负责挂命令。
 
-在进行指令级调试器设计实现时，我们采用cobra命令行框架来组织命令。首先我们注册了两个发起调试的命令：`godbg exec`和 `godbg attach`。
-
-```go
-rootCmd.AddCommand(execCmd)
-rootCmd.AddCommand(attachCmd)
-```
-
-当调试器正常attach到被调试进程后，我们会紧接着启动一个调试会话DebugSession，其实这个DebugSession内部能运行的所有调试命令，也是由cobra命令行框架管理的，每个调试会话内部都有一个 `root *cobra.Command`，我们在这个root上注册了一系列调试命令。
+33 个会话命令各自一个文件，都在 `init()` 里挂到 `debugRootCmd`。以 `break` 为例（`RunE` 的实现省略）：
 
 ```go
-// DebugSession 调试会话
-type DebugSession struct {
-	root   *cobra.Command
-    ...
+// cmd/debug/break.go
+var breakCmd = &cobra.Command{
+	Use:     "break [--name|-n name] <locspec> [if <condition>]",
+	Short:   "添加断点",
+	Aliases: []string{"b", "breakpoint"},
+	Annotations: map[string]string{
+		cmdGroupAnnotation: cmdGroupBreakpoints,
+	},
+	RunE: func(cmd *cobra.Command, args []string) error { /* ... */ },
 }
 
-debugRootCmd.AddCommand(breakCmd)
-debugRootCmd.AddCommand(clearCmd)
-...
-debugrootCmd.AddCommand(nextCmd)
+func init() {
+	debugRootCmd.AddCommand(breakCmd)
+
+	breakCmd.Flags().StringP("name", "n", "", "断点名称")
+}
 ```
 
-启动调试的命令、调试会话中的调试命令，这些命令我们都是用cobra来管理的，只不过分了两级来管理，这种设计方式更优雅简单。
+每行输入由 `DebugSession.execute` 交给 cobra：`s.root.SetArgs(strings.Split(line, " "))` 之后调 `ExecuteC()`，由 cobra 完成"命令名或别名 → 子命令"的匹配、flag 解析，再分派到 `RunE`。也就是说，**别名匹配、flag 解析、子命令树、help 骨架全部由 cobra 提供**，会话层没有另写一套分发逻辑。
 
-#### 方式2：cobra+自定义管理逻辑
+#### 命令注册表：def.go 的现状
 
-是接下来我们要换一种实现思路，启动调试的命令attach、exec等还是采用cobra管理，调试会话中的调试命令将用自己编写的命令组织逻辑来管理。为什么要这么做呢？
+`ch9.1.2` 引入了 `cmd/debug/def.go`，想把"命令声明"从 33 个文件里抽出来集中管理：
 
-- 需要允许用户自定义调试命令的别名，而不仅仅是 `cobra.Command.Aliases`中指定的这些，而cobra也没有提供可配置的方式来自由添加别名；
-- cobra框架中各个命令对应的处理函数只有cmd、flags、args参数，但是调试过程中我们需要维护一点状态相关的信息，并且需要将这些信息传递给调试命令的处理函数，当然是以参数的形式，而cobra框架中命令对应的处理函数的列表是无法传递额外参数的，而这些也不适合通过共享变量的形式来维护；
-- 除了要实现的这些功能，最终也希望能提供额外的扩展能力，我们可以为调试器嵌入starlark脚本引擎、注册新调试命令的函数，这样开发人员可以自定义starlark函数作为调试器的新的调试命令，这样来扩充调试器功能。要实现这些这就要求调试器实现能够对子命令的管理逻辑细节100%可控制，而cobra作为一个命令行管理框架存在一些限制；
+```go
+// cmd/debug/def.go
+type commandDef struct {
+	use     string
+	aliases []string
+	short   string
+	group   string
+	runE    func(cmd *cobra.Command, args []string) error
+}
 
-因此，在接下来的符号级调试器实现中，调试会话中的调试命令是通过重写的命令管理逻辑来完成的，而非像之前那样由cobra管理（调试器 go-delve/delve 也是这么做的)。
+var commandDefs = []commandDef{}
+
+func Register(def commandDef) {
+	commandDefs = append(commandDefs, def)
+}
+```
+
+`installCommands(root *cobra.Command)` 把 `commandDefs` 按"分组 + 命令名"排序后逐个 `AddCommand`，`NewDebugSession` 里调用它。
+
+**这里的状态必须说清楚**：`commandDefs` 目前是**空切片**，`installCommands` 实际什么也不挂载，33 个命令仍然走 `init()` + `AddCommand`；`def.go` 顶部那张"命令 ↔ 实现章节"的对照表（`exec/attach` 6.1–6.2、`break` 6.6/9.2.22、……、`call` 9.2.42）也只是注释。准确的说法是"注册表骨架已搭好，迁移还没做完"——`shell.go` 的注释写的是「ch9.2 起各命令逐步从 `init()` 迁移到 `Register` 注册表」。
+
+所以不要把 godbgv2 描述成"用自研命令管理逻辑替代了 cobra"。它一直在用 cobra 管会话命令，`def.go` 只是加了一层声明式外壳，而且尚未启用。
+
+那为什么不再往前走一步、彻底自研一套命令分发？设计时评估过三个动机，结论是代价大于收益：可配置别名并不是需求（cobra 的 `Aliases` 编译期固定就够了）；处理函数需要的额外上下文不必靠函数参数传递（后端入口提成包级 `Client` 即可）；嵌入 starlark、允许运行时注册新命令确实要求对子命令管理细节 100% 可控，但这超出了本书范围（9.3.100 只讨论思路）。
+
+最终选择：命令树交给 cobra，只在"分组展示"和"flag 复位"两处补自己的逻辑。
+
+#### 命令分组：annotation + helpMessageByGroups
+
+cobra 不提供命令分组。godbgv2 用一个 annotation key 存分组，再由自定义 help 函数按分组渲染。分组常量在 `cmd/debug/shell.go`，帮助信息里的组标题就是去掉数字前缀后的名字（组内只列举例，完整命令清单见 9.2.00）：
+
+| annotation 值 | help 里的组 | 组内命令举例 |
+| --- | --- | --- |
+| `1-breaks` | `[breaks]` | `break`、`breakpoints`、`clear`、`condition`、`toggle`、`trace`、`watch` |
+| `2-source` | `[source]` | `list`、`disass` |
+| `3-execute` | `[execute]` | `continue`、`step`、`stepout`、`next`、`call`、`finish` |
+| `4-info` | `[info]` | `backtrace`、`print`、`pregs`、`pmem`、`thread`、`goroutine`、`funcs`、`set` |
+| `5-other` | `[other]` | `exit`、`display`，以及 cobra 内置命令 |
+
+分组名前的数字只用于排序：`helpMessageByGroups` 按分组名排序后，用 `strings.Split(groupName, cmdGroupDelimiter)[1]` 把 `1-breaks` 切成 `breaks` 当标题。没有写 annotation 的命令（cobra 内置的 `help` 等）按 `cmdGroupCobra`（值为 `"other"`）归组，最后并入 `[other]`。
+
+渲染细节在 `helpMessageByGroups`：先按最长的"命令名, 别名"串算出列宽，再逐组输出 `[组名]` 与组内命令（组内按字符串排序）。命令名与别名并列展示，写法与 flag 的 `-h, --help` 一致，如 `breakpoints, bp, bs`、`list, ls, l`。`NewDebugSession` 通过 `debugRootCmd.SetHelpFunc(...)` 把 `Short`、`Use`、`FlagUsages()` 和这段分组列表拼成最终 help 输出；`cmd/debug/shell_test.go` 的 `TestHelpMessageByGroups` 断言了 `[breaks]`、`[source]`、`break, b`、`list, ls, l` 这些片段。
+
+#### flag 复位：resetFlags
+
+REPL 里所有命令共用同一棵命令树，pflag 在多次 `Parse` 之间**不会**把 flag 恢复默认值：上一行敲了 `disass -n 3`，下一行只敲 `disass`，`-n` 还是 3。这不是 cobra 的 bug，而是把一个"只解析一次"的框架用在了"反复解析"的场景里。
+
+```go
+func (s *DebugSession) execute(line string) error {
+	s.root.SetArgs(strings.Split(line, " "))
+	cmd, err := s.root.ExecuteC()
+	if cmd != nil {
+		resetFlags(cmd)
+	}
+	return err
+}
+
+func resetFlags(cmd *cobra.Command) {
+	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+		if !f.Changed {
+			return
+		}
+		_ = f.Value.Set(f.DefValue)
+		f.Changed = false
+	})
+}
+```
+
+`execute` 在每次执行后统一复位：只处理 `Changed` 为真的 flag，顺手把 `Changed` 置回 false，下次判断依然有效。`ExecuteC` 内部的 `ParseFlags` 已经把继承的 persistent flag 合并进 `cmd.Flags()`，所以 `VisitAll` 能同时覆盖命令自己的 flag 和从父命令继承下来的 flag（包括根命令上的 `--init`、`--log` 等）。`TestExecuteResetsFlags` 用 `demo -n 3` 后接裸 `demo`，断言两次取到的值是 `3, 10`。
+
+交互模式和 `--init` 批量回放都走 `execute`，两条路径的 flag 语义因此一致。
+
+#### 后端注入：Client api.Client
+
+会话命令里看不到任何后端类型，只有 `Client.XXX(...)` 这样的调用。`Client` 是 `cmd/debug/shell.go` 的包级变量（`var Client api.Client`），`cmd/session.go` 在进入会话前装配 `debug.Client = Client`。
+
+`main.go` 把具体实现塞进 `cmd.Client`，`cmd/debug` 只认 `pkg/service/api` 的接口。这是 `docs/ARCH-RULES.md` 的铁律 4：`cmd/` 只允许 import `pkg/service/api`、`pkg/log` 等白名单包，禁止 import `pkg/target`、`pkg/proc`、`pkg/dwarf`、`pkg/service/debugger`、`pkg/service/rpc2`。
+
+好处很直接：等 9.2.16 把调试器切到 headless RPC 时，`cmd/` 下的命令实现一行都不用改，只换 `Client` 指向的实现。也正因为如此，"处理函数需要额外上下文"这个动机不需要靠自定义命令框架来解决。
 
 ### 用户交互设计
 
-这里与用户的交互，主要涉及到用户的输入、调试器的输出两部分。
+与用户交互只有三件事：怎么读输入、怎么展示输出、非交互时怎么办。
 
 #### 用户输入
 
-当执行attach或exec启动调试之后，会启动一个调试会话，其实就是一个可以输入调试命令、展示调试结果的命令行窗口：
+读行循环在 `DebugSession.Start` 里，去掉 `Prompt` 的错误处理后核心就这几行：
 
-- 用户可以在stdin输入调试命令及其参数，然后等待调试器执行对应的调试动作（如读写内存），然后等待调试器结果，结果会输出到stdout；
-- 用户可以输入 `help`命令查看当前调试器支持哪些调试命令，这些命令将按照所属的分组进行汇总显示，如断点相关、运行暂停相关、数据读写相关、goroutine相关、stack等分组；
-- 用户也可以输入 `help subcmd`来显示某个特定命令的详细帮助信息，此时会显示subcmd的各个参数的帮助信息；
-- 用户可以输入调试命令的别名，而非完整的命令名，以简化命令输入；
-- 用户可以直接键入回车键Enter，来重复执行上一次输入的调试命令，这在执行next、step时将非常有用；
-- 为了方便用户输入过去输入过的调试命令，我们还可以记录用户输入过的命令，并允许用户通过方向键up/down来选择过去输入过的命令，并且还可以允许自动补全，以简化命令输入；
-- 当用户向结束调试时，可以通过ctrl+c或者exit、quit等命令结束调试；
+```go
+txt = strings.TrimSpace(txt)
+if len(txt) != 0 {
+	s.last = txt
+	s.liner.AppendHistory(txt)
+} else {
+	txt = s.last
+}
+_ = s.execute(txt)
+```
 
-用户的输入动作都是非常简单的在stdin上的行输入，在调试会话启动后，我们就可以启动一个for-loop来不停地读取stdin上的行输入，当读取到一个完整的行之后，我们就将输入信息进行解析，解析成命令、及参数，这里的命令也可能是别名。然后查找所有的命令中哪个命令的别名与用户输入相同，一旦找到该命令，则执行命令关联的处理函数，完成调试动作。
+（`Prompt` 返回错误时直接 `panic(err)`，所以会话的正常出口是 `exit`，不是关掉 stdin。）
 
-关于这里的输入逻辑，接下来将使用[peterh/liner](https://github.com/peterh/liner)这个第三方库来方便地管理用户输入、执行输入处理、记录历史输入、输入自动补全等功能。
+由此得到几个用户可见的行为：
+
+- **空行重复上一条**：输入非空时记入 `last`，为空时用 `last` 顶上，连按回车就会反复执行上一条命令，`step`、`continue` 之后最实用；
+- **方向键历史**：`liner.AppendHistory` 把每行记入 `liner.State` 的内存历史，单次会话内可以用上下方向键翻；
+- **`help` 与 `help <cmd>`**：`help` 输出分组列表；`help break` 输出该命令的 `Short`、`Use` 与 `FlagUsages()`；
+- **`exit` 结束会话**：`exit` 命令调用 `CurrentSession.Stop()`，`Start` 的循环检测到 `done` 关闭后返回，`AtExit` 注册的 `Cleanup` 会还原断点，并按调试发起方式 kill 或 detach 被调试进程。
+
+别名（`b`、`bp`、`c` 等）由 cobra 的 `Aliases` 匹配，`execute` 不需要额外处理，代价是别名编译期固定、运行时不可配置。
+
+进程级信号在 `main.go` 的 `processSignals` 里兜底：收到 `SIGTERM`/`SIGINT`/`SIGQUIT` 时先 `debug.Cleanup()` 再 `os.Exit(1)`（`os.Exit` 不会触发 `AtExit`，必须显式清理）。会话层本身没有针对 Ctrl+C 的分支。
+
+#### 补全范围
+
+`completer` 只有十几行，直接决定了补全的能力边界：
+
+```go
+func completer(line string) []string {
+	cmds := []string{}
+	for _, c := range debugRootCmd.Commands() {
+		if strings.HasPrefix(c.Use, line) {
+			cmds = append(cmds, strings.Split(c.Use, " ")[0])
+		}
+		for _, alias := range c.Aliases {
+			if strings.HasPrefix(alias, line) {
+				cmds = append(cmds, alias)
+			}
+		}
+	}
+	return cmds
+}
+```
+
+它做的是"命令名与别名的前缀匹配"：行首输入 `br` 再按 Tab（`SetTabCompletionStyle(liner.TabPrints)`）能列出 `break`、`breakpoints`；但输入 `break ma` 不会有任何补全——liner 传进来的是整行，而 `c.Use` 不会以 `break ma` 开头。**函数名、变量名、locspec 这类参数级补全没有实现**，参数只能自己敲全。
 
 #### 调试器输出
 
-调试器的输出信息，包括执行日志，以及调试命令的结果。这两类信息，我们的调试器实现中都是将其输出到stdout，以简化实现复杂度。
+- **命令结果**：各命令在 `RunE` 里直接 `fmt.Printf`/`fmt.Println` 到 stdout，需要对齐的表格（如 `pmem`）自己用 `text/tabwriter`。前端没有统一的输出层。
+- **日志**：后端包一律不打印（架构铁律 1），调试信息经 `pkg/log` 输出，默认级别 `LevelError`、默认写 stderr；`--log` 打开 debug 级别，`--log-output <file>` 重定向到文件（`cmd/root.go` 的 `PersistentPreRun` 里装配）。
 
-- 本地调试时，调试器前端、后端的日志都是输出到stdout的，调试结果首先是由backend发送给frontend，frontend做些数据转换之后就输出到stdout显示出来。所以本地调试时，日志、调试结果都可以在stdout中查看到；
-- 远程调试时（或者是同一个机器也是起了前端、后端两个进程时），调试器前端、后端的日志各自输出也均输出到stdout，如果是在两个不同的终端中运行，那么日志输出到对应的终端中。对于调试结果则由backend发送给frontend，最终由frontend显示在其对应的终端中。
-- 对于frontend、backend对应的日志如果不关心，可以通过日志级别将其关闭，或者通过选项--log指定个日志文件让其将日志信息输出到指定日志文件中。
+这里要澄清一个容易写错的地方：godbgv2 **没有**"UI 输出统一走 `pkg/terminal`"的实现。`pkg/terminal` 目前只有 `print.go` 里的 23 行（`TabWriter`、`Printf`、`Errorf`），全仓没有任何 Go 包 import 它，`pmem.go` 这类命令是直接调 `tabwriter.NewWriter` 的。它是为后续输出能力预留的一层，`doc.go` 里写的"分页、语法高亮、会话转录"是目标而不是现状（分别规划在 9.3.102、9.3.103、9.3.109）。
 
-  > ps：支持--log选项，这么设计并不一定最终这么实现，我们为了赶进度，做了些简化，只允许调试日志、结果输出到stdout，但是会给予一定的日志级别控制。
-  >
-- 个别输出信息可能需要颜色高亮，如执行 `l main.go:10`这样来查看源代码时，我们希望能根据源代码中不同的关键字、语句、注释、字符串、当前执行到的源码行等能像IDE中那样有个不同颜色的高亮显示，这样对于用户而言无意是更加友好的。这就意味着我们需要对源代码进行必要的AST分析统计出有哪些词素需要高亮显示。
+#### 交互能力边界
 
-#### 输入输出重定向
+把上面几段合起来，godbgv2 的交互能力大致如下：
 
-对于被调试进程而言，它可能需要从stdin读取输入，向stdout、stderr输出信息，但是调试器进程本身也存在类似的需要。
+| 能力 | 现状 | 说明 |
+| --- | --- | --- |
+| 命令名、别名 Tab 补全 | ✅ | `completer`，前缀匹配，仅行首有效 |
+| 单会话命令历史（上下方向键） | ✅ | liner 内存历史 |
+| 回车重复上一条 | ✅ | `last` 字段 |
+| `help` 按分组展示 / `help <cmd>` | ✅ | annotation + `helpMessageByGroups` |
+| 参数级补全（函数名、变量名、locspec） | ❌ | 补全器只认命令名 |
+| 跨会话历史持久化 | ❌ | 无 history 文件、无偏好配置（9.3.107） |
+| 分页 / 语法高亮 / transcript | ❌ | `pkg/terminal` 未接线；规划 9.3.102/103/109 |
+| 目标进程 IO 重定向 | ❌ | 规划 9.3.106 |
+| `--allow-non-terminal-interactive` | ❌ | 无此选项，非交互走 `--init` |
+| 运行时自定义别名 / starlark 命令 | ❌ | 别名编译期固定；扩展思路见 9.3.100 |
 
-这样就产生了读写冲突，问题来了：
+#### 非交互模式：--init 回放
 
-- 当用户在stdin输入时，究竟是将输入内容给调试器呢，还是给被调试进程呢？
-- 当在stdout、stderr有输出时，输出信息时来自调试器呢，还是来自被调试进程呢？
+`--init <file>` 是根命令上的 persistent flag（`cmd/root.go`），`startDebugSession` 读到后调用 `SetInitFile`，`Start` 于是不建 liner，直接 `replay(file)` 逐行回放再返回。典型用法是 `godbg exec ./main --init /path/to/script.txt`（被调试程序自己的参数要写在 `--` 之后，否则会被当成 godbg 的选项）。
 
-为了解决这个问题，我们需要为被调试进程提供输入、输出重定向的能力，比如 `godbg exec ./main -r stdin:/path-to/fin -r stdout:/path-to/fout -r stderr:/path-to/ferr` 。
+`replay` 的规则不多，但够用：
 
-调试期间，当希望观察被调试进程要读取什么数据、是否在等待数据输入、是否读取成功时，就可以通过 `tail -f /path-to/fout /path-to/ferr` 来观察，通过 `echo data >> /path-to/fin` 来输入。
+- 行首 `#` 是注释；
+- 行首 `!`、`=` 以及 `@spawn`/`@delay`/`@set` 这类宿主指令由冒烟测试脚本 `scripts/smoke.sh` 处理，会话回放时跳过；
+- `@capture <var> <re>` 由回放器自己处理：从上一行命令的输出里用正则取第一个捕获组存进 `$<var>`，后续行执行前做 `$<var>` 替换——线程 id 这种只存在于本次会话输出里的值，靠它在上下两条命令之间传递；
+- 回放到 `exit` 会提前结束。
+
+`--init` 是已有的脚本化能力：`testdata/script/` 下的 smoke 脚本就靠它跑端到端测试。批量模式不创建 liner 还有一个实际原因——`liner.Close` 会对 stdin 做 `tcsetattr`，在 `timeout` 启动的后台进程组里会触发 `SIGTTOU` 把整个测试挂死，`shell.go` 里有大段注释记录了这个坑。但它不是通用 `source` 命令：会话里没有 `source`，也不能在会话中途再加载脚本文件。
+
+#### 为什么要关心输入输出重定向
+
+被调试进程可能要从 stdin 读输入、往 stdout/stderr 写输出，调试器自己也要用这三个流，于是就抢同一组文件描述符：用户在键盘上敲的这一行，是给调试器还是给被调试进程？屏幕上出现的一行，是调试器打的还是 tracee 打的？
+
+dlv 用 `-r stdin:/path -r stdout:/path` 这类选项把它们拆开，godbgv2 目前**没有实现**（规划在 9.3.106）。从设计上看，这个能力属于"启动调试"一侧而不是会话一侧——重定向必须在进程启动时就定好，所以它最终会落在 `exec`/`debug` 的启动选项上，而不是会话命令。
 
 ### 本节小结
 
-本节简要介绍了调试器前端UI层的一些设计，包括命令行调试界面、调试命令管理、用户交互管理，在后面的实现部分我们将进一步结合源码来展开。
+本节只讲前端 UI 层的两件事：命令怎么管、交互怎么做。
+
+- **命令管理**：顶层命令与会话命令都用 cobra，会话命令由 `init()` 挂到 `debugRootCmd`；`def.go` 的 `commandDef`/`Register`/`installCommands` 是计划中的注册表骨架，`commandDefs` 目前为空，尚未启用；分组靠 `Annotations` + `helpMessageByGroups`；`resetFlags` 解决 REPL 复用命令树导致的 flag 残留；命令实现只依赖包级 `Client api.Client`，不 import 后端包。
+- **用户交互**：liner 提供行编辑、单会话历史、命令名与别名补全，空行重复上一条，`help` 按分组展示；参数级补全、跨会话历史、分页、语法高亮、transcript、IO 重定向都还没有（各有规划小节）；`--init` 提供脚本化回放，但不是通用 `source`。
+- **命令全集与逐条实现状态以 9.2.00 为准**，本节不重复列表，避免两处口径漂移。
+
+后面讲具体命令的实现时沿用这里的约定：一个命令一个文件，`RunE` 里只和 `Client` 打交道，需要分组就加 annotation。
