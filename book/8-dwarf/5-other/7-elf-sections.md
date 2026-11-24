@@ -19,7 +19,7 @@ DWARF调试信息根据描述对象的不同，在最终存储的时候也进行
 11. .debug_str, 存储.debug_info中引用的字符串表，也是通过偏移量来引用；
 12. .debug_types, 存储描述数据类型相关的DIEs；
 
-这些信息都存储在.debug_前缀的sections中，它们之间的引用关系入下图 (DWARFv4 Appendix B) 所示，大家先有个直观的认识。注意DWARF v5有些变化，比如.debug_types废弃，.debug_pubnames, .debug_pubtypes 使用 .debug_names代替等，但是Go从1.12开始主要使用的是DWARF v4，所以从v4到v5的变化，我们了解即可。
+这些信息都存储在.debug_前缀的sections中，它们之间的引用关系入下图 (DWARFv4 Appendix B) 所示，大家先有个直观的认识。注意DWARF v5有些变化，比如.debug_types废弃，.debug_pubnames, .debug_pubtypes 使用 .debug_names代替等，但是 Go 从 go1.9 起到 go1.24 用的都是 DWARF v4（详见 8.1 与附录 12.6），所以从 v4 到 v5 的变化，我们了解即可。
 
 <img alt="dwarfv4-sections" src="assets/dwarfv4-sections.jpg" width="480px"/>
 
