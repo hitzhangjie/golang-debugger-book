@@ -1,630 +1,518 @@
 ## 支持表达式计算
 
-### 实现目标：理解并实现表达式计算 evalexpr
+### 实现目标：理解并实现表达式求值器
 
-调试器调试过程中，我们经常会输入调试命令，有些调试命令允许输入一些表达式，比如 `print 1+2`， `print a+b`，`break 20`，`break *<addr>`，`whatis a.b.c` 等等。支持表达式计算能够让我们的调试过程更加便利，这个小节我们就来介绍下如何实现表达式计算。
+调试会话里最常用的操作之一，就是让调试器算点什么：
+
+```bash
+godbg> print a+b
+a+b = 300 (int)
+godbg> break main.go:10 if a > 25
+breakpoint 1 added at 0x4bcbdc (...), cond "a > 25"
+```
+
+`print` 要算出一个值并打印，`break ... if` 与 `condition` 要算出一个布尔值决定是否停下。它们背后是同一个组件——表达式求值器。本节把它拆开讲清楚：
+
+1. 表达式字符串如何被切成 token、解析成 AST；
+2. AST 如何递归求值，标识符如何变成变量、内存如何被读取；
+3. 结果如何从后端回到前端；
+4. 当前实现的能力边界与作用域简化。
+
+求值器实现在 `pkg/proc/eval.go`，前端入口是 `cmd/debug/print.go`，条件求值入口在 `cmd/debug/continue.go`。后端的求值入口是 `proc.Eval(expr, lookup, mem)`；`whatis`（`ptypes`）目前仍是桩，求值请用 `print`。
 
 ### 基础知识
 
-其实大家对于表达式计算并不陌生，我举几个你可能“并不陌生”的例子，帮你梳理下曾经的知识点：
+#### 中缀表达式与栈求值
 
-- 读者学习《数据结构与算法》时，学习过中缀表达式转后缀表达式吧？还可以基于栈（运算符栈、操作数栈）的方式算出结果。
-- 读者学习《编译原理》时，学习过词法分析、语法分析、语义分析吧，对抽象语法树AST有了解吧，其中包含了很多的表达式构造；
+学《数据结构与算法》时做过“中缀转后缀”：`a+b*c` 的中缀写法要靠优先级和括号确定顺序；转成后缀 `a b c * +` 后，顺序完全由位置决定，用一个操作数栈从左到右算即可——遇操作数入栈，遇运算符弹出两个操作数、算完再入栈，栈顶就是结果。
 
-我们调试场景下支持的表达式，其实就是使用Go语言可以写出的表达式（表达式并不是语句），这也是为了以最小的记忆成本就可以写出想要的表达式。表达式操作数可以是常量、变量、指针等，运算符不仅包括 `+-*/()`，还包括索引操作 `[idx]`，slice操作 `[low:high]`，包括结构体成员访问操作 `.`等。
+`a+b` 就是“入栈 a、入栈 b、执行加法”。表达式求值的本质是“确定运算顺序，再按顺序取操作数算结果”；区别只在于顺序是编译成一串指令，还是由树的形状直接表达。
 
-1. eval(expr)，需要先解析理解这个表达式，这一步就需要进行此法分析、语法解析得到这个表达式的AST。
-2. 然后我们需要walk这个AST，准备好运算符每个操作数的值：
-   - 如果操作数是字面量true/false，这种操作数一般要处理为bool类型，然后再参与表达式计算；
-   - 如果操作数是字面量nil，在Go表达式里面通常是表示一个nil指针或者无类型接口变量值；
-   - 其他符号名，需要先在DWARF DIEs中搜索该符号对应的变量、常量定义，从而得知其具体类型信息 `DIE.DW_AT_type`，以及在内存中的位置  `DIE.DW_AT_location`。
-3. 最后对表达式进行计算，处理不同运算符的计算逻辑，最终得到计算结果。如将AST转为后缀表达式，使用基于栈的方法进行运算，运算符栈空、操作数栈栈顶就是结果。
+#### 词法、语法、语义
 
-**注意：关于在DWARF DIEs中搜索符号定义，不得不强调下作用域的问题。** 变量、常量的定义是要注意区分作用域的，我们自然都明白。在DWARF DIEs中通过操作数名字搜索它的定义时，除了检查DIE的 `DW_AT_name` 是否与名字相同外，还要注意包含该DIE定义的当前PC是否位于 `DW_TAG_lexical_block[DW_AT_low_pc,DW_AT_high_pc]` 作用域范围内。如果不注意检查作用域相关的DIE，您可能最后使用了一个错误的同名变量，表达式计算结果就错了。
+编译原理的三个阶段在这里一一对应：
 
-OK，我们来看下这部分的代码实现。
+- **词法分析**：字符流 → token（标识符、整数、运算符、括号、点）；
+- **语法分析**：token 序列 → AST，同时处理优先级与结合性；
+- **语义分析与求值**：遍历 AST，确定每个节点的类型与值。
+
+错误也按这三层体现：`a+` 是语法错误（缺右操作数），`foo(1)` 语法合法但语义不支持（能力边界），`x` 在 DWARF 里找不到定义是语义错误。
+
+#### 操作数从哪来
+
+求值绕不开：表达式里的 `a` 到底是哪个 `a`？
+
+```go
+func main() {
+	var a string = "helloworld"
+	{
+		var a int = 200
+		_ = a
+	}
+}
+```
+
+同名变量在嵌套作用域里可以有多份定义，类型甚至不同。DWARF 用 DIE 描述：`DW_TAG_variable` 给出名字、类型（`DW_AT_type`）和位置（`DW_AT_location`）；`DW_TAG_lexical_block` 用 `[DW_AT_low_pc, DW_AT_high_pc]` 圈定地址范围。严格做法是用当前 PC 判断落在哪个 block，从最内层往外找，第一个命中的才是正确定义。
+
+godbg 当前没有做这一层过滤，取的是函数子树里第一个同名 DIE。后果见后文“作用域与 shadowing”，这里先记住结论：**这是明确简化，不是已支持能力**。
+
+#### AST Explorer
+
+对 AST 没有直观感受的话，可以用 [AST Explorer](https://astexplorer.net/) 写几个 Go 表达式看右侧的树。`a + b*c` 会解析成“加法节点，左操作数 `Ident(a)`，右操作数 `BinaryExpr(*)`”，乘法节点下再挂 `Ident(b)`、`Ident(c)`。godbg 不用 Go 标准库的 AST，而是自建节点，但树形与此一致——理解这棵树，就理解了后面的递归代码。
+
+#### 三种实现路线
+
+表达式求值在 delve 里演进过两版，godbgv2 是第三种：
+
+- **2015 年第一版（递归）**：解析成 AST 后用一个大 `switch` 递归求值。直观，但分支多、维护成本高。
+- **2023 年第二版（栈机器）**：把 AST 编译成一串操作指令，用操作数栈顺序执行。求值过程线性、易扩展，代价是多一层编译和一套指令定义。
+- **godbgv2（第三种：手写 Pratt + 解释执行）**：自己写 tokenizer 与 Pratt 解析器，产出只有 9 种节点的自建 AST，再递归解释。没有编译阶段、没有操作数栈，也没有把寄存器/内存/帧信息封进一个大上下文对象——需要什么由调用方通过两个回调注入。
+
+delve 的教学裁剪版（tinydbg）属于前两版的复刻，godbgv2 是净室重写，三者代码没有派生关系；后面看到的函数名不能往 delve 上套。
 
 ### 代码实现
 
-截止到现在，tinydbg支持Go语言中的如下表达式写法：
+#### 能力边界
 
-- 除了 <-, ++ 和 -- 之外的所有基本类型上的二元和一元运算符
-- 任意类型上的比较运算符
-- 数值类型之间的类型转换
-- 整型常量与任意指针类型之间的相互转换
-- string、[]byte 和 []rune 之间的类型转换
-- 结构体成员访问（例如：somevar.memberfield）
-- 数组、切片和字符串的切片和索引运算符
-- Map访问
-- 指针解引用
-- 内置函数调用：cap、len、complex、imag 和 real
-- 接口变量的类型断言（例如：somevar.(concretetype)）
+godbg 的求值器是“教学子集”。下表按当前代码逐条核对，✅ 项本机实跑验证，❌ 项给出实测错误：
 
-#### Expr类型
+| 能力 | 支持 | 说明 |
+|---|---|---|
+| 十进制整数字面量 | ✅ | 只识别 `0-9` 连续串；`0x10`、`1.5`、`true`、字符串都不是字面量 |
+| 标识符 | ✅ | 经 `EvalLookup` 回调解析为值与类型 |
+| 字段选择 `x.f` | ✅ | 按 `StructType.Fields[].ByteOffset` 定位 |
+| 下标 `x[i]` | ✅ | 数组、切片、字符串，带边界检查 |
+| 解引用 `*p` | ✅ | 要求操作数类型是 `*dwarf.PointerType` |
+| 取地址 `&x` | ✅ | 要求可寻址（`Value.Addr != 0`） |
+| 算术 `+ - * / %`、括号、一元负号 | ✅ | 除零报错；`/`、`%` 为整数运算；负号按 `^x+1` |
+| 比较 `== != < <= > >=` | ✅ | 结果为 `bool` |
+| 逻辑与、或、非 | ✅ | 结果为 `bool`；与/或不短路，两边都求值 |
+| `len` / `cap` | ✅ | 数组、切片、字符串；数组的 `cap` 明确报错 |
+| 函数调用 | ❌ | 除 `len`/`cap` 外一律报 `function calls not supported` |
+| 类型转换 `int(x)` | ❌ | 被当函数调用拒绝，实测同一错误 |
+| 切片表达式 `s[lo:hi]` | ❌ | 解析阶段报 `missing ]`，`:` 不是合法运算符 |
+| map / channel 操作 | ❌ | 类型模型只有基础类型、指针、结构体、数组 |
+| 复合字面量、方法调用、接口断言 | ❌ | 解析器没有对应节点 |
+| `complex` / `imag` / `real` | ❌ | 无复数类型，函数调用本身也不支持 |
+| 位运算（按位与/或/异或/移位） | ❌ | 优先级表里没有这些二元运算符 |
+| 赋值、逗号表达式 | ❌ | 求值器只读；赋值由单独的 `set` 命令实现 |
 
-Go标准库 `go/src/go/parser.ParseExpr(string)` 支持表达式解析并返回一个ast.Expr实例，ast.Expr是个接口类型，Go语言中的不同表达式都要实现这个接口。
+> `pkg/proc/eval.go` 顶部注释和 `docs/FEATURE-MATRIX.md` §4 都把“类型转换”写成支持能力，但实现中 `int(x)` 会走函数调用分支被拒。本节以代码与实跑为准，把类型转换归入不支持。
 
-see: go/src/go/ast/ast.go, ast.Expr
+#### 整体结构：tokenizer → AST → 解释执行
+
+与“解析 → 编译 → 栈机器”的两段式不同，godbg 是三段式：
+
+```text
+expr string
+   │
+   ▼
+parser.next()       词法（eval.go:86）
+   │
+   ▼
+parseExpr(minPrec)  语法：前缀递归下降 + 中缀优先级爬升（eval.go:187）
+   │
+   ▼
+astNode             自建节点（eval.go:142）
+   │
+   ▼
+evalNode(ast)       语义：递归解释（eval.go:299）
+   │
+   ▼
+proc.Value{Uint, Type, Addr}
+```
+
+四层职责分明：词法只切分，语法只组装，`evalNode` 只按节点类型求值，符号解析与内存读取完全在回调里。因此求值器不依赖 ptrace、寄存器或 DWARF 树遍历，单元测试里用假内存和假 lookup 就能跑。
+
+#### step1：手写词法分析
+
+`parser.next()` 每次从剩余字符串头部取一个 token：先跳过空白，再按首字符分派——数字读连续数字串，字母/下划线读标识符，括号、点、方括号各成一个 token，其余走“操作符最长匹配”：
 
 ```go
-// All expression nodes implement the Expr interface.
-type Expr interface {
-    Node
-
-    // 这里额外定义了一个非导出方法，这样用户自定义的类型就无法赋值给ast.Expr类型的接量，
-    // 因为只有go标准库内的表达式类型可以实现接口Expr。
-    exprNode()
-}
-
-// All AST node types implement the Node interface.
-type Node interface {
-    Pos() token.Pos // position of first character belonging to the node
-    End() token.Pos // position of first character immediately after the node
+func (p *parser) next() {
+	p.src = strings.TrimSpace(p.src)
+	c := p.src[0]
+	switch {
+	case c >= '0' && c <= '9':
+		// 读连续数字串 → tokInt
+	case c == '(':
+		p.tok = token{tokLParen, "("}
+	// ')' '[' ']' '.' 同理
+	default:
+		// 操作符最长匹配，双字符优先
+		ops := []string{"==", "!=", "<=", ">=", "&&", "||", "+", "-", "*", "/", "%", "<", ">", "&", "!"}
+		// ...
+	}
 }
 ```
 
-实现了ast.Expr接口的表达式，可以分为如下两类：
+（节选，完整实现见 `pkg/proc/eval.go:86-138`）
 
-- Value Expression, 包括 BadExpr, Ident, Ellipsis, BasicLit, FuncLit, CompositeLit, ParenExpr, SelectorExpr, IndexExpr, IndexListExpr, SliceExpr, TypeAssertExpr, CallExpr, StarExpr, UnaryExpr, BinaryExpr, KeyValueExpr；
-- Type Expressions, 包括 ArrayType, StructType, FuncType, InterfaceType, MapType, ChanType；
+双字符运算符排在单字符前面，所以 `<=` 不会被切成 `<` 和 `=`；数字分支只吃 `0-9`，负数由一元负号处理，十六进制、浮点、字符/字符串都不在词法范围内。
 
-这就是理论上所有可以支持的Go表达式类型，调试器tinydbg支持了其中的绝大部分操作，本文前面提到过，只有极少数表达式操作不支持。
+#### step2：Pratt 解析与自建 AST
 
-#### step1：AST解析
-
-OK, 当输入一个表达式字符串后，调试器后端要先调用 `parser.ParseExpr(...)` 实现AST解析，返回一个ast.Expr。这个操作是通过go标准库函数 `go/parser.ParseExpr(x string)` 来完成的。
-
-see: go/src/go/parser/interface.go
+AST 只有 9 种节点，全是小结构体：
 
 ```go
-// ParseExpr is a convenience function for obtaining the AST of an expression x.
-// The position information recorded in the AST is undefined. The filename used
-// in error messages is the empty string.
-//
-// If syntax errors were found, the result is a partial AST (with [ast.Bad]* nodes
-// representing the fragments of erroneous source code). Multiple errors are
-// returned via a scanner.ErrorList which is sorted by source position.
-func ParseExpr(x string) (ast.Expr, error) {
-    return ParseExprFrom(token.NewFileSet(), "", []byte(x), 0)
-}
+type astNode interface{}
 
-func ParseExprFrom(fset *token.FileSet, filename string, src any, mode Mode) (expr ast.Expr, err error) {
-    // get source from filename or use src directly
-    text, _ := readSource(filename, src)
+type identNode struct{ name string }
+type intNode struct{ v uint64 }
+type unaryNode struct{ op string; oper astNode }
+type binaryNode struct{ op string; lhs, rhs astNode }
+type derefNode struct{ oper astNode } // *
+type addrNode struct{ oper astNode }  // &
+type indexNode struct{ arr, idx astNode }
+type fieldNode struct{ obj astNode; field string }
+type callNode struct{ name string; args []astNode }
+```
 
-    // parse expr
-    var p parser
-    file := fset.AddFile(filename, -1, len(text))
-    p.init(file, text, mode)
-    expr = p.parseRhs()
-    ...
+（字段展开写法见 `pkg/proc/eval.go:142-164`，此处为排版紧凑合并了一行）
 
-    return
+解析采用 Pratt 风格（优先级爬升）：`parseExpr(minPrec)` 先解析前缀/原子，再循环处理中缀运算符，遇到优先级低于 `minPrec` 的就返回。优先级表就是全部规则：
+
+```go
+var precedence = map[string]int{
+	"||": 1, "&&": 2,
+	"==": 3, "!=": 3, "<": 3, "<=": 3, ">": 3, ">=": 3,
+	"+": 4, "-": 4,
+	"*": 5, "/": 5, "%": 5,
 }
 ```
 
-因为是Go标准库中的实现，我们就不浪费太多篇幅展示相关的源代码了，感兴趣的读者可以自行查看源码。毕竟大家有编译原理基础，结合 [Go语言文法](https://go.dev/ref/spec) 手写一个词法分析器、语法分析器也不困难。
+（`pkg/proc/eval.go:180-185`）
 
-> 可能有些读者毕业之后再也没有接触过编译相关的实践，OK，那这里提供个可视化工具，供大家了解下，[AST Explorer](https://astexplorer.net/)，你可以在页面上编程语言的源代码，右侧就可以及时输出解析后的AST。如果你对上述提及的ast.Expr的具体实现类型没有任何一点感觉，不代表你看不懂，只是你很少涉猎这方面的内容，所以看了后很陌生。
->
-> 举几个简单例子吧，你可以像这样写一些并不用十分完整的Go代码，看下解析出来的AST结构，比如这里的表达式IndexExpr、SliceExpr、BinaryExpr，这样你就知道了我们输入的表达式，最终解析完后大约长什么样子。
->
-> ```go
-> // ast.File.Name.(*Ident).Name="main"
-> package main
->
-> // GenDecl.Tok="import"
-> // GenDecl.Specs[0].(*ImportSpec).Path.(*BasicLit).Value="\"fmt\""
-> // GenDecl.Specs[0].(*ImportSpec).Path.(*BasicLit).Kind="STRING"
-> import "fmt"
->
-> // main.main对应FuncDecl，FuncDecl.Body.Statements表示函数体中的每一行语句
-> func main() {  
->   var nums []int  // DeclStmt.Decl.(*GenDecl).Tok="nums", 
->                   // DeclStmt.Decl.(*GenDecl).Specs[0].(*ValueSpec).Type=ArrayType, 
->                   // DeclStmt.Decl.(*GenDecl).Specs[0].(*ValueSpec).Elt.(*Ident).Name="int"
->                   // DeclStmt.Decl.(*GenDecl).Specs[0].(*ValueSpec).Values=[]
->
->   nums[1]         // ExprStmt.X.(*IndexExpr).X.(*Ident).name="nums"
->                   // ExprStmt.X.(*IndexExpr).Index.(*BasicLit).Value=1
->                   // ExprStmt.X.(*IndexExpr).Index.(*BasicLit).Kind=INT
->
->   nums[1:2]       // ExprStmt.X.(*SliceExpr).X.(*Ident).Name="nums"
->                   // ExprStmt.X.(*SliceExpr).Low.(*BasicLit).Value="1"
->                   // ExprStmt.X.(*SliceExpr).Low.(*BasicLit).Kind="INT"
->                   // ExprStmt.X.(*SliceExpr).High.(*BasicLit).Value="2"
->                   // ExprStmt.X.(*SliceExpr).High.(*BasicLit).Kind="INT"
->
->   var a int       // DeclStmt.Decl.(*GenDecl).Tok="var"
->                   // DeclStmt.Decl.(*GenDecl).Specs[0].(*ValueSpec).Type.(*Ident).Name="int"
->                   // DeclStmt.Decl.(*GenDecl).Specs[0].(*ValueSpec).Names[0].(*Ident).Name="a"
->   var b int
->   var c int
->
->   var d = a + b*c // DeclStmt.Decl.(*GenDecl).Tok="var"
->                   // DeclStmt.Decl.(*GenDecl).Specs[0].(*ValueSpec).Names[0] = &Ident{Name:"d"}
->                   // DeclStmt.Decl.(*GenDecl).Specs[0].(*ValueSpec).Values[0] =
->                   //   &BinaryExpr{Op:"+", X:&Ident{Name:"a"}, Y:&BinaryExpr{Op:"*", X:&Ident{Name:"b"}, Y:&Ident{Name:"c"}}}
-> }
-> ```
+中缀循环是标准的左结合写法：取出运算符，查表得 `prec`，若 `prec < minPrec` 退出；否则消费运算符，用 `parseExpr(prec+1)` 解析右操作数，组装 `binaryNode`。一元运算符不在表里——`-`、`!`、`&` 在 `tokOp` 分支直接递归 `parseExpr(6)`（6 高于所有二元），`*` 单独走 `derefNode`。原子之后、中缀之前还有一个后缀循环处理 `.` 与 `[`：`a.b` 得 `fieldNode`，`a[i]` 得 `indexNode`，方括号里递归 `parseExpr(0)`，所以 `arr[i+1]` 也合法。
 
-#### step2: EvalScope
+三个容易踩的细节：
 
-OK，现在从输入的表达啥字符串得到了ast.Expr之后，我们如何进行计算呢？如果我们把符号替换成对应的真实值（比如变量名a,b,c对应的数值），然后再结合运算表达式进行计算，不就得到最终结果了吗？确实如此。
+1. **后缀比一元更紧**：一元分支用 `parseExpr(6)` 解析操作数，而后缀在 `parseExpr` 内部先处理。所以 `*p.X` 是 `*(p.X)`，解引用后再取字段必须写 `(*p).X`——单元测试正是这么写的。
+2. **`[` 里只认一个表达式**：`s[0:1]` 在 `parseExpr(0)` 里读到 `:`（切成 `tokOp`），优先级表没有它，返回后期待 `]` 却看到 `:`，于是报 `missing ]`。切片表达式不是“求值不支持”，而是根本没进文法。
+3. **标识符后跟 `(` 一律当函数调用**：`int(x)` 因此变成 `callNode{name:"int"}`，到求值阶段才被拒绝。没有类型转换节点，也就没有实现。
 
-但是要通过符号名，知道它到底是个int还是个string，还是个slice或者其他类型，我们需要知道它的确切定义信息。同一个符号名，在源码不同作用域下可能会被多次使用，这很常见。因此，我们还必须提供执行此表达式时的硬件上下文信息(PC)，进而确定当前执行指令所处的源码作用域，然后在该作用域中搜索对应的符号定义，如果找不到再继续搜索上一层作用域。
+#### step3：求值上下文：两个回调 + 一个结果类型
 
-这里举个简单的例子：
+godbg 没有把“当前 PC、寄存器、内存、帧基址”打包成上下文对象。`Eval` 只接收三个参数：表达式、一个“名字 → 值”的回调、一个“地址/长度 → 字节”的回调。
 
 ```go
-$ cat main.go
+type Value struct {
+	Uint uint64
+	Type dwarf.Type
+	Addr uint64
+}
+
+type MemReader func(addr uint64, size int64) ([]byte, error)
+type EvalLookup func(name string) (*Value, error)
+
+func Eval(expr string, lookup EvalLookup, mem MemReader) (*Value, error) {
+	p := &parser{src: expr, lookup: lookup}
+	ast, err := p.parse()
+	if err != nil {
+		return nil, err
+	}
+	return evalNode(ast, lookup, mem)
+}
+```
+
+（节选，注释与完整定义见 `pkg/proc/eval.go:24-56`）
+
+这三个类型把求值器与调试器解耦了：求值器不知道变量在栈上还是寄存器里，也不知道 DWARF 树长什么样——`lookup` 返回 `Uint`/`Type`/`Addr` 就够；也不关心内存是 `process_vm_readv` 还是 `PTRACE_PEEKDATA`——`mem` 只承诺“读 addr 开始的 size 字节”。结果统一是 `Value`，后续渲染再按 `Type` 与 `Addr` 决定怎么取值。
+
+布尔类型在 DWARF 里没有独立 DIE，按约定用 `DW_ATE_boolean` 编码的基础类型表示，godbg 为此定义了包级 `boolType`（`eval.go:43`）。比较与逻辑运算的结果都挂在它上面——这也是 `EvalCondition` 判断“是不是布尔表达式”的依据。
+
+#### step4：evalNode 递归解释
+
+`evalNode` 是按节点类型分派的 `switch`，每个分支递归求子节点，再按语义组合：
+
+```go
+func evalNode(n astNode, lookup EvalLookup, mem MemReader) (*Value, error) {
+	switch node := n.(type) {
+	case intNode:
+		return &Value{Uint: node.v}, nil
+	case identNode:
+		if lookup == nil {
+			return nil, fmt.Errorf("identifier %q: no lookup provided", node.name)
+		}
+		return lookup(node.name)
+	}
+}
+```
+
+（节选，完整实现见 `pkg/proc/eval.go:299-399`）
+
+各分支语义：
+
+| 节点 | 求值方式 |
+|---|---|
+| `intNode` | 构造 `Value{Uint: v}`，无类型（类型由参与运算的变量决定） |
+| `identNode` | 调 `lookup(name)`；未注入时报错，变量不存在由回调用 `variable "x": …` 包装 |
+| `unaryNode` `-` | `^x + 1`（二补码取负），保留操作数类型 |
+| `unaryNode` `!` | `Uint == 0` 得 1，否则 0，类型 `bool` |
+| `unaryNode` `&` | 要求 `Addr != 0`，返回 `Addr` 并构造 `*T` |
+| `derefNode` | 操作数必须是 `*T`，读 `oper.Uint` 处的 `T` 值 |
+| `fieldNode` | 操作数必须是结构体，按字段 `ByteOffset` 读 `obj.Addr+offset` |
+| `indexNode` | 数组按元素大小算地址；切片/字符串先读头再算；带边界检查 |
+| `callNode` | 只接受 `len`/`cap`，其余报能力边界错误 |
+| `binaryNode` | 递归左右，交给 `evalBinary` 按运算符计算 |
+
+解引用与字段读取都落到 `readMemoryValue(addr, typ, mem)`：基本类型和指针把内存字节拼成 `Uint`；复合类型不立即读，只记 `Addr`，等渲染时再按类型读（`eval.go:405-421`）。这解释了为什么 `print pt` 能打印整个结构体，而 `print pt.X` 只打印一个整数。
+
+下标由 `evalIndex` 处理（`eval.go:426-490`）：数组用 `arr.Addr + idx*elem.Size()` 并检查 `Count`；切片先读头部偏移 0 的 `array` 指针、偏移 8 的 `len`，再按元素大小定位；字符串读偏移 0 的指针和偏移 8 的长度，返回一个 `uint8`。`len`/`cap` 由 `evalLenCap` 处理（`eval.go:494-530`）：数组取 `Count`（`cap` 报错），切片按头部偏移 8/16 读 `len`/`cap`，字符串只读偏移 8 的 `len`（`cap` 报错）。注意这里用固定偏移而不是 DWARF 字段偏移——对 Go 运行时成立，但把“只支持 Go 的切片/字符串布局”写死进了实现。
+
+二元运算由 `evalBinary` 完成（`eval.go:549-610`）：两个操作数都按 `uint64` 取出，算术结果沿用左操作数类型，比较/逻辑结果固定是 `bool`，除零与未知运算符报错。它没有任何类型检查与类型提升，带符号语义（负数大小比较、窄整型溢出）并未建模——这是又一处教学简化。
+
+#### step5：结果如何变成前端可读的变量
+
+`print` 最终落到 `Target.EvalExpression`（`pkg/proc/variables.go:400-422`）：
+
+```go
+func (t *Target) EvalExpression(expr string) (*Variable, error) {
+	v, err := Eval(expr, t.variableLookup, t.readTargetMemorySize)
+	if err != nil {
+		return nil, err
+	}
+	out := &Variable{Name: expr, Type: v.Type, Addr: v.Addr}
+	switch v.Type.(type) {
+	case *godbgdwarf.BasicType, *godbgdwarf.PointerType:
+		out.Value = v.Uint
+		return out, nil
+	}
+	if v.Addr == 0 {
+		return nil, fmt.Errorf("expression %q is not addressable", expr)
+	}
+	// 复合类型：按地址与类型读取渲染
+	if err := t.fillVariableValue(out, v.Addr, v.Type); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+```
+
+（节选）
+
+这一步把 `proc.Value` 转成 `proc.Variable`：基本类型和指针直接拿 `Uint`；复合类型必须可寻址，再按地址与类型渲染成字符串。`t.variableLookup` 是 `EvalLookup` 的实现（`eval.go:631-637`），复用变量定位链路拿到值与类型；`t.readTargetMemorySize` 是 `MemReader` 的实现（`variables.go:213-223`），内部是一次 `ReadMemory`。
+
+再往上，`debugger.PrintVariable` 把结果压成协议对象（`debugger.go:414-428`）：
+
+```go
+return &api.Variable{
+	Name:  v.Name,
+	Addr:  v.Addr,
+	Type:  v.Type.String(),
+	Value: v.String(),
+}, nil
+```
+
+`api.Variable` 只有 `Name/Addr/Type/Value` 四个字段（`pkg/service/api/types.go:105-109`），都是前端能直接显示的内容。前端 `cmd/debug/print.go` 拿到后只做一件事：
+
+```go
+v, err := Client.PrintVariable(args[0])
+if err != nil {
+	return err
+}
+fmt.Printf("%s = %s (%s)\n", v.Name, v.Value, v.Type)
+```
+
+（节选，`cmd/debug/print.go:28-39`）
+
+注意 `print` 要求 `len(args) == 1`，所以表达式里不能有空格：写 `print a+b`，不要写 `print a + b`（后者被当成三个参数）。`print a<b` 可以，`print a < b` 会报用法错误；带空格的比较适合写在 `break ... if` 或 `condition` 里，那两条命令会把剩余参数重新拼成表达式。
+
+#### print 与 condition 的两条调用链
+
+`print` 是“求值并显示”，`condition` 是“求值并判定”，两者在前端就分开了：
+
+```text
+print <expr>
+  cmd/debug/print.go → api.Client.PrintVariable
+    → rpc2.(*Client).PrintVariable             rpc2/client.go:190
+    → serverImpl.PrintVariable                 rpc2/server.go:494
+    → debugger.PrintVariable                   debugger.go:414
+    → proc.(*Target).EvalExpression            variables.go:400
+    → proc.Eval(expr, lookup, mem)             eval.go:49
+```
+
+条件断点分两步。设置时，`break ... if` 或 `condition <id> <expr>` 只把条件字符串存进断点（`proc.Breakpoint.Cond`，`breakpoints.go:55`；`SetBreakpointCondition` 见 `breakpoints.go:216-224`），后端并不解释它。命中之后由前端决定是否继续：`checkAutoResume`（`cmd/debug/continue.go:116-147`）调用 `Client.EvalCondition(bp.Cond)`，条件为假就打印 `not satisfied, auto continue` 并越过断点，为真才停留。
+
+`EvalCondition` 走另一条 RPC，最终到达 `Target.EvalCondition`（`eval.go:616-626`）：
+
+```go
+func (t *Target) EvalCondition(expr string) (bool, error) {
+	v, err := Eval(expr, t.conditionLookup, t.readTargetMemorySize)
+	if err != nil {
+		return false, err
+	}
+	bt, ok := v.Type.(*dwarf.BasicType)
+	if !ok || bt.Encoding != dwarf.DW_ATE_boolean {
+		return false, fmt.Errorf("condition %q is not a boolean expression", expr)
+	}
+	return v.Uint != 0, nil
+}
+```
+
+两条链的区别不只是入口：`conditionLookup` 比 `variableLookup` 更严格，要求标识符本身是基础类型（`eval.go:644-653`）。所以 `print pt.X==1` 能用（走 `variableLookup`，结构体字段可读），`break ... if pt.X == 1` 却会报 `variable "pt" has composite type main.Point, not supported in condition`。条件表达式只能用整型/布尔变量与常量做比较——这是刻意的保守设计，不是 bug。
+
+#### 作用域与 shadowing：当前实现的简化
+
+回到基础知识里的问题：表达式里的 `a` 到底是哪个 `a`？
+
+标识符解析的最后一跳是 `EvalVariableAddr`（`pkg/proc/variables.go:69-98`）：先用当前 PC 经 `t.bi.FuncForPC(pc)` 找到当前函数，再调 `reader.FindVariable(fn.Name, name)` 在函数里按名字找变量；`FindVariable`（`pkg/dwarf/reader.go:70-92`）定位到 `DW_TAG_subprogram` 后，对整棵子树做一次先序遍历，返回第一个名字匹配的 `DW_TAG_variable`：
+
+```go
+	reader.Seek(fn.Offset)
+	var found *stddwarf.Entry
+	if err := walkEntry(reader, false, func(e *stddwarf.Entry) bool {
+		if e.Tag == stddwarf.TagVariable && e.Val(stddwarf.AttrName) == varName {
+			found = e
+			return true
+		}
+		return false
+	}); err != nil {
+		return nil, err
+	}
+	return found, nil
+}
+```
+
+（节选）
+
+整段逻辑里没有 PC 参与：不判断 DIE 属于哪个 `lexical_block`，不比较 `[low_pc, high_pc]` 是否包含当前 PC，也没有“内层优先、外层被 shadow”的排序。后果很直接：**只要外层先被遍历到，内层同名变量就会被忽略**。
+
+本机实测。调试对象：
+
+```go
 1  package main
-2  
-3  func main() {
-4          var a string = "helloworld"
-5          var b int = 100
-6          _ = a
-7          _ = b
-8          {
-9                  var a int = 200
-10                 _ = a
-11         }
-12 }
-```
-
-假设当前执行到main.go:6，此事变量a是一个值为"helloworld"的字符串，但是当执行到main.go:10时，变量a变成了值为"200"的int类型变量。
-
-<img alt="how DWARF desc lexcial block" src="./assets/dwarf_lexicalblock.png" width="720px" />
-
-读者一看就明白了，表达式中操作数的作用域信息很关键，对，那作用域信息从何得到呢？就是要根据当前调试器执行到的指令PC，结合DWARF调试信息中DW_TAG_subprogram、DW_TAG_lexical_block的作用域范围 `[DW_AT_low_pc,DW_AT_high_pc]`，我们就可以确定当前搜索符号的定义时，应该优先从哪个作用域开始搜索。比如上面的例子，如果当前PC位于main.go:10这行，如果查找a的定义，那我们就应该优先在这个block内搜索到`var a int = 200`，而如果是搜索b，也要先搜索当前block，但是这个block没有定义，此时应该查找更上一层block，即搜索main.main这个block，进而搜索到 `var b int = 100`。
-
-至此，大家应该了解了，当我们知道了当前硬件上下文信息（PC），结合DWARF调试信息，我们不光可以推断出当前程序执行到的栈帧、函数，这部分主要是靠搜索FDEs，我们还可以通过搜索DIEs找到当前的作用域，任意给出一个符号名，还可以准确找到符号定义相关信息，DWARF不仅描述了作用域信息，也描述了某个作用域中定义了那些变量，包括变量值在内存中的位置，以及变量类型信息。
-
-OK，proc.EvalScope中就记录了一些当前的硬件上下文信息，比如proc.EvalScope.Regs。当借助DWARF确定了变量在内存中的位置之后，我们还可以通过proc.EvalScope.target去读取内存数据（实际上封装了`ptrace(PTRACE_PEEKDATA,...)`，然后再根据DWARF中记录的类型信息，借助Go reflection精准构造出对应的变量实例。最后就可以在这个变量实例上执行相应的运算符对应的计算逻辑。
-
-see: tinydbg/pkg/proc/eval.go: proc.EvalScope
-
-```go
-// EvalScope is the scope for variable evaluation. Contains the thread,
-// current location (PC), and canonical frame address.
-type EvalScope struct {
-    Location
-    Regs     op.DwarfRegisters
-    Mem      MemoryReadWriter // Target's memory
-    g        *G
-    threadID int
-    BinInfo  *BinaryInfo
-    target   *Target
-    loadCfg  *LoadConfig
-
-    frameOffset int64
-
-    // When the following pointer is not nil this EvalScope was created
-    // by EvalExpressionWithCalls and function call injection are allowed.
-    // See the top comment in fncall.go for a description of how the call
-    // injection protocol is handled.
-    callCtx *callContext
-
-    dictAddr uint64 // dictionary address for instantiated generic functions
-
-    enclosingRangeScopes []*EvalScope
-    rangeFrames          []Stackframe
-}
-```
-
-ps：proc.EvalScope还包含了一些其他的上下文信息，这里先不介绍。值得一提的是，proc.EvalScope不同于api.EvalScope，后者是为了识别调试会话命令是在哪个goroutine、哪个栈帧、哪个defer函数中执行来定义的。而proc.EvalScope是为了支持表达式计算而定义的。
-
-#### step3: 表达式计算
-
-OK，现在我们了解了如何将输入的表达式解析为AST（ast.Expr），并且了解了应该如何确定变量在源码中的定义（作用域、类型、内存地址），简单提了下内存数据读取、借助DWARF类型描述以及Go反射机制可以对表达式中的符号用对应的变量实例精准替换。有了这些之后，我们就可以了解不同的ast.Expr支持哪些运算符，然后去实现这些运算符的计算逻辑。
-
-每一种不同类型的表达式，它对应的类型、运算符也不一样，比如SliceExpr描述的是获取一个slice、string、array的subslice，而IndexExpr描述的是获取一个slice、string、array特定下标位置的元素……OK，笼统来说，剩余的就是针对每种表达式的计算逻辑。
-
-```go
-var expr ast.Expr
-expr, _ := parser.ParseExpr(s string)
-
-switch vv := expr.(type) {
-    case ast.Ident:
-    evalIdent(...)
-    case ast.Ellipsis:
-    evalEllipssis(...)
-    case ast.SliceExpr
-    evalSliceExpr(...)
-    case ast.StarExpr
-    evalStarExpr(...)
-    case ast.UnaryExpr
-    evalUnaryExpr(...)
-    case ast.BinaryExpr
-    evalBinaryExpr(...)
-    ...
-}
-```
-
-OK，你可以按照我这样的描述来理解表达式就是这样计算的，完全没问题，2015年aarzilli提交了dlv[第一版表达式计算实现](https://github.com/go-delve/delve/pull/285/commits/43b64ec39e8188cd5b215d15ec0175868c548a8b)，这个版本大致实现逻辑就是前面介绍的这样。2023年aarzilli提交了dlv[第二版表达式计算实现：基于栈机器的表达式计算](https://github.com/go-delve/delve/commit/2c700230de0db2f84c537f00b388b183d35645ac)。按aarzilli的说法是，这么做有诸多好处。
-
->之前 Delve 的表达式求值是递归实现的，涉及 goroutine 和 channel 通信，结构复杂且难以维护。新方案将表达式“编译”为一组指令，然后用栈机器顺序执行，这样结构更清晰，易于维护和扩展。这样可以更好地支持运行时函数调用注入、变量状态同步以及未来的新特性实现，比如利用 Go 1.20 的 runtime.Pin 优化。
-整体提高了可扩展性和兼容性，并简化了运行时状态同步的逻辑。
-
-OK，我们来了解下当前这个版本的实现，将表达式解析为ast.Expr，然后将其编译为一组操作指令，然后基于栈机器执行这组指令，最后计算完成得到结果。
-
-#### Put It Together
-
-##### 整体流程
-
-`proc.(*EvalScope).EvalExpression(expr string, cfg LoadConfig) (*Variable, error)` 执行了上述提及的所有操作：
-
-1. 对输入表达式 `expr string` 的AST解析，得到表达式ast.Expr实例；
-2. 然后结合上下文信息确定当前表达式中各个操作数的作用域，进而确定具体的操作数的值，
-3. 最终根据不同表达式的计算规则，完成最终结果的计算，计算结果是一个Variable。
-   ps：这里的计算，tinydbg采用了一种巧妙的办法，它将不同ast.Expr对应的处理操作编译成了一系列的操作指令。然后执行这些操作指令，最终就得到了计算结果。
-
-```go
-// EvalExpression returns the value of the given expression.
-func (scope *EvalScope) EvalExpression(expr string, cfg LoadConfig) (*Variable, error) {
-    // 解析ast.Expr，编译为一系列操作指令
-    ops, _ := evalop.Compile(scopeToEvalLookup{scope}, expr, scope.evalopFlags())
-
-    // 执行指令，最终得到结果
-    stack := &evalStack{}
-    scope.loadCfg = &cfg
-    stack.eval(scope, ops)
-
-    // 执行结束，获取执行结果
-    ev, _ := stack.result(&cfg)
-
-    // 对于表达式中的变量，查询DWARF得到了其类型信息、内存地址信息，会为其构造类型名为Variable的变量加以表示。
-    // 当将这些变量入栈时（stack.stack参数栈），才会加载内存中数据，而且还会cache，因为同一个变量可能出现多次。
-    //
-    // 但是对于计算结果，`Variable.Addr==0 && Variable.Base==0`，不用从被调试进程内存中读取数据。
-    ev.loadValue(cfg)
-    if ev.Name == "" {
-        ev.Name = expr
-    }
-    return ev, nil
-}
-```
-
-see: tinydbg/pkg/proc/evalcompile.go, evalop.Compile
-
-```go
-// Compile compiles the expression expr into a list of instructions.
-// If canSet is true expressions like "x = y" are also accepted.
-func Compile(lookup evalLookup, expr string, flags Flags) ([]Op, error) {
-    // 先解析为ast.Expr
-    t, err := parser.ParseExpr(expr)
-    if err != nil {
-        ...
-    }
-    // 将不同的ast.Expr编译为不同的操作指令序列，
-    // 每条指令有入栈、出栈、计算逻辑相关的操作指令：
-    // - 比如pushIndent只涉及到入栈，一般是入栈操作数变量，比如a+b涉及到两条指令pushIdent(a), pushIdent(b)
-    // - 比如pushBinary涉及到出栈、计算、入栈，比如从操作数栈出栈两个操作数Variable(a), Variable(b)，
-    //   然后执行计算逻辑 Variable(c) = Variable(a)+Variable(b)，然后将计算结果入栈
-    //
-    // 不同的指令有不同的操作序列，OK!
-    return CompileAST(lookup, t, flags)
-}
-
-// CompileAST compiles the expression t into a list of instructions.
-func CompileAST(lookup evalLookup, t ast.Expr, flags Flags) ([]Op, error) {
-    // 编译为一系列操作指令
-    ctx := &compileCtx{evalLookup: lookup, allowCalls: true, flags: flags}
-    _ := ctx.compileAST(t, true)
-    ...
-
-    // 栈深度校验
-    _ = ctx.depthCheck(1)
-    return ctx.ops, nil
-}
-```
-
-##### 如果你想细致掌握
-
-如果你想细致掌握每一个不同的表达式类型的详细处理过程，你可以阅读源码，也可以通过dlv调试器调试tinydbg调试器，然后在tinydbg调试会话中输入简单的表达式`whatis <expr>`来触发表达式计算过程，这样你可以单步执行的方式跟踪每一个细节，不至于淹没在巨量的分支代码逻辑中。这部分内容如果每个表达式类型我们都详细介绍的话，篇幅会非常非常大，我们不大可能在有限的篇幅内全盘介绍。所以如果你是和作者一样喜欢刨根问底、希望对每个细节了如指掌，那你可以这么做。
-
-如果真的准备这么干，可以按照下列步骤跟踪调试器的内部执行过程：
-
-首先准备一个测试程序 main.go：
-
-```go
-1  package main
-2  
-3  func main() {
-4          var a string = "helloworld"
-5          var b int = 100
-6          _ = a
-7          _ = b
-8          {
-9                  var a int = 200
-10                 _ = a
-11                 println(a+b)      // <= 我们将执行 `break main.go:11`
-12         }
+2
+3  import "fmt"
+4
+5  func main() {
+6      var a int = 100
+7      var b int = 200
+8      {
+9          a := 300
+10         _ = a
+11     }
+12     fmt.Println(a + b)
 13 }
 ```
 
-然后安装调试器tinydbg，注意要禁用优化并生成DWARF调试信息：
+在 `main.go:9` 停下（内层 `a` 已进入作用域，按源码语义 `a` 应为 300）：
 
-```bash
-$ go install -v -gcflags 'all=-N -l' github.com/hitzhangjie/tinydbg
+```text
+godbg> break main.go:9
+breakpoint 1 added at 0x4bcbc4 (/tmp/evaldemo/main.go:9)
+godbg> continue
+thread 1937542 status: stopped: trace/breakpoint trap
+> /tmp/evaldemo/main.go:9 (pc: 0x4bcbc5)
+godbg> print a
+a = 100 (int)
+godbg> print a+b
+a+b = 300 (int)
 ```
 
-然后启动调试器tinydbg进行调试：
+`a` 取到外层定义（100），`a+b` 因此是 300 而不是 500。同一程序在 `main.go:12`（内层 block 已结束）求值才是对的（`a+b = 300 (int)`），这也是简单演示往往“看起来没问题”的原因——只有同名变量在嵌套作用域同时存在时，缺口才暴露。
 
-```bash
-$ tinydbg debug main.go
-(tinydbg) break main.go:11
-...
-(tinydbg) continue
-(tinydbg) whatis a+b                // <= whatis会触发调试器表达式Eval操作
-                                    // 注意，此时先不要好敲回车键，
-                                    // 我们要用调试器调试调试器，得给调试器tinydbg加断点
-```
+> **当前实现的简化**：godbg 尚未按 PC 过滤 `lexical_block`，`FindVariable` 取的是 subprogram 子树里第一个同名 DIE。因此：
+>
+> - 内层同名变量可能取到外层定义（如上例）；
+> - 若 DIE 顺序是内层在前，外层作用域也可能取到内层定义；
+> - 变量可能“提前可见”或“失效后仍可见”，读到栈上残留值，结果不可预测。
+>
+> 正确做法：以当前 PC 为输入，筛选 `ContainsPC(pc)` 的 subprogram/lexical_block，收集同名定义，按嵌套深度与声明位置排序，取最内层那个，并把外层标记为 shadowed。delve 的 `variablesInternal` 就是这么做的。这条链路补齐前，本书不把 shadowing 当作已支持能力。
 
-OK，现在我们用另一个调试器dlv来调试上述tinydbg进程：
+还有两个同源简化：`&x` 用 `Addr == 0` 判断“不可寻址”，而地址 0 本身合法，二者不可区分；`len`/`cap` 按“结构体名以 `[]` 开头或等于 `string`”猜布局，对普通结构体调 `len` 会按偏移 8 读出一个字段值（实测 `len(pt)` 得到 2，即 `pt.Y`），不会报错。
 
-```bash
-dlv attach `pidof tinydbg`
-(dlv) break EvalExpression
-(dlv) continue
+#### 以 `a+b` 走一遍
 
-(dlv) 当whatis执行后，dlv会停在tinydbg的proc.EvalExpression函数位置，等待调试
-```
+仍以上面的程序为例，在 `main.go:12` 停下后执行 `print a+b`，实测输出就是 `a+b = 300 (int)`。一次求值的完整路径：
 
-断点创建成功后，回到tinydbg调试会话中，敲击“回车键”，触发`whatis`命令执行，此时调试器tinydbg后端逻辑会执行`proc.EvalExpression(s)`操作，dlv调试会话中会停在该函数断点处，此时你就可以通过单步执行，来了解详细的EvalExpression过程了。
+1. **前端**：`printCmd.RunE` 收到 `"a+b"`，调 `Client.PrintVariable("a+b")`，经 net/rpc（gob）到后端。
+2. **入口**：`Debugger.PrintVariable` → `Target.EvalExpression`，用 `t.variableLookup` 与 `t.readTargetMemorySize` 调 `proc.Eval`。
+3. **词法 + 语法**：`next()` 产出 `tokIdent("a")`、`tokOp("+")`、`tokIdent("b")`、`tokEOF`；`parseExpr(0)` 解析 `a`，中缀循环看到 `+`（优先级 4 ≥ 0），递归 `parseExpr(5)` 解析 `b`，组装 `binaryNode{"+", a, b}`。
+4. **求值 + 渲染**：`evalNode` 命中 `binaryNode`，递归求左：`identNode` 调 `lookup("a")`，经 `FuncForPC`、`FindVariable` 找到 DIE，位置表达式算出地址并读 8 字节得 100；右操作数同理得 200；`evalBinary("+", 100, 200)` 返回 `Value{Uint:300, Type:int}`。`EvalExpression` 把 `Uint` 填进 `Variable`，`Debugger.PrintVariable` 转成 `api.Variable{Name:"a+b", Type:"int", Value:"300"}`，前端 `fmt.Printf` 输出。
 
-##### 以 `a+b` 进行说明
+第 4 步的“位置表达式求值”不在本节范围内——那是变量定位链路（9.2.33 小节）的内容；本节只关心求值器如何调用 `lookup`，以及拿到 `Value` 之后怎么算。
 
-尽管我们不能兼顾每个细节，但是我们还是希望能对关键处理路径进行介绍，这样读者朋友们才不会觉得，“嗯，又是一本部头很大但是啥也没讲清楚的书……失望”。
+#### 如果你想细致掌握
 
-所以，我们按照上面的main.go示例，解释下执行 `whatis a+b` 时，EvalExpression逻辑是如何执行的，当读者跟随这里的描述过完这一遍的流程之后，你将彻底明白这个过程是如何工作的，以及有能力去深入探索其他表达式计算逻辑是如何执行的。
-
-还是老习惯，先列下大致的核心代码路径。
-
-**client**: client端代码比较简单，大致如下所示。
-
-```bash
-whatisCmd.cmdFn
-    \--> whatisCommand(t *Session, ctx callContext, args string) error
-            \--> val, err := t.client.EvalVariable(ctx.Scope, args, ShortLoadConfig)
-                    \--> (c *RPCClient) EvalVariable(scope api.EvalScope, expr string, cfg api.LoadConfig) (*api.Variable, error)
-                            \--> err := c.call("Eval", EvalIn{scope, expr, &cfg}, &out)
-            \--> print the variable info
-```
-
-**server**: server端涉及到的代码量非常大，我分3个关键步骤进行介绍。
-
-加载配置，并发起表达式计算：
-
-```bash
-tinydbg/service/rpc2(*RPCServer).Eval(arg EvalIn, out *EvalOut) error
-    \--> cfg = &api.LoadConfig{FollowPointers: true, ...)
-    |       \--> pcfg := *api.LoadConfigToProc(cfg)
-    \--> v, _ := s.debugger.EvalVariableInScope(arg.Scope.GoroutineID, arg.Scope.Frame, arg.Scope.DeferredCall, arg.Expr, pcfg)
-    |       \--> s, err := proc.ConvertEvalScope(d.target.Selected, goid, frame, deferredCall)
-    |       \--> return s.EvalExpression(expr, cfg)
-```
-
-编译阶段，对表达式字符串进行AST解析，并对ast.Expr编译一系列操作指令ops，这里的指令并不是机器指令 :)
-
->执行完编译之后，ctx.ops将包含3个操作，入栈ident{a}，入栈ident{b}，执行+计算，活脱脱一个后缀表达式但是这里的ctx.ops并不是最终要执行的执行。
-
-```bash
-return s.EvalExpression(expr, cfg)
-   // step1: 进行AST解析，并将其表达式求值操作编译为一系列操作指令
-   \--> ops, err := evalop.Compile(scopeToEvalLookup{scope}, expr, scope.evalopFlags())
-   |       // ast分析得到ast.Expr
-   |       \--> t, err := parser.ParseExpr(expr)
-   |       // 对ast.Expr进行编译
-   |       \--> return CompileAST(lookup, t, flags)
-   |               \--> err := ctx.compileAST(t, true)
-   |                       \--> `a+b` operator `+`: case *ast.BinaryExpr: err := ctx.compileBinary(node.X, node.Y, sop, &Binary{node})
-   |                               \--> operand `a`: err := ctx.compileAST(a, false)
-   |                                       \--> ctx.pushOp(&PushIdent{node.Name})
-   |                                           \--> ctx.ops = append(ctx.ops, op)
-   |                               \--> operand `b`: err := ctx.compileAST(b, false)
-   |                                       \--> ctx.pushOp(&PushIdent{node.Name})
-   |                                           \--> ctx.ops = append(ctx.ops, op)
-   |                                           \--> ctx.ops = append(ctx.ops, op)
-   |                               \--> operator `+`: ctx.pushOp(op) // `op` is `&Binary{node}`
-   |               // `ctx.pushOp(op OP)`放到ctx.ops里的每一个操作，都是OP接口的实现，
-   |               // OP接口要求各个操作汇报各自的popstack、pushstack的次数，
-   |               // 如：
-   |               // - pushIdent分别popstack 0次，pushstack 1次，因为仅需要入栈1个参数；
-   |               // - Binary则是popstack 2次，pushstack 1次，因为二元运算符要通过2次popstack得到2个参数，结果再入栈1次；
-   |               // 这里的栈深度检查，即校验这些操作执行完后，目标栈深度是否符合预期，如果不符合预期那设计的操作指令有问题。
-   |               \--> err = ctx.depthCheck(1)
-   |               \--> return ctx.ops
-   // step2: evalStack执行指令阶段，这个过程就是对表达式求值的过程
-   // step3: 从evalStack操作数栈栈顶获取计算结果
-   ...
-```
-
-指令执行，初始化一个evalStack（栈机器），它会执行我们前面编译expr生成的操作序列：
-
-```bash
-// step2: evalStack执行指令阶段，这个过程就是对表达式求值的过程
-stack := &evalStack{}
-stack.eval(scope, ops)
-    \--> stack.ops = ops
-    \--> stack.scope = scope
-    \--> stack.spoff = ... / stack.bpoff = ... / stack.fboff = ... / stack.curthread = ...
-    \--> stack.run()
-```
-
-OK, 我们看下这个栈机器是如何执行我们编译后的操作序列的，在我们的例子中，stack.ops 包含3个操作，前两个操作是为最后一个操作准备操作数的。
-
-1. 第1个操作、第2个操作分别是 pushIdent{a} 和 pushIdent{b}, 它们会在下面代码中的分支 `case *evalop.PushIdent` 中处理。
-   从结果来看，它们的不同之处在于：
-  - 变量 `a` 找到2个定义, 1) block 8~12, line 9； 2) main.main 3~13, line 4，最终确定其定义应为block 8~12, line 9处的定义；
-  - 变量 `b` 找到1个定义, main.main 3~13, line 5；
-2. 第3个操作是 pushBinary{+}, 下面代码分支中 `case *evalop.Binary` 中处理。
-
-```bash
-stack.run():
-    \--> foreach op in stack.ops:
-	|    for stack.opidx < len(stack.ops) && stack.err == nil,
-    |       \--> stack.executeOp()
-    |               \--> switch op := ops[stack.opidx].(type)
-                            case *evalop.PushIdent: ... // pushIdent{a}, pushIdent{b}
-                            case *evalop.Binary: ...    // pushBinary{+}
-```
-
-OK，我们先来看看pushIdent{a}, pushIdent{b}这个处理分支是如何处理的：优先搜索函数作用域以及内部作用域有没有同名变量定义，找不到再从包级别作用域查找。
-
-```bash
-op = stack.ops[stack.opidx]
-switch op := ops[stack.opidx].(type)
-...
-case *evalop.PushIdent: 
-    stack.pushIdent(scope, op.Name)
-    |   \--> step1: search `name` from function scopes and inner blocks
-    |   |    found = stack.pushLocal(scope, name, 0)
-    |   |       \--> vars, _ = scope.Locals(0, name)
-    |   |       |       \--> vars0, _ := scope.simpleLocals(flags|rangeBodyFlags, wantedName)
-    |   |       |       |       \--> dwarfTree, _ := scope.image().getDwarfTree(scope.Fn.offset)
-    |   |       |       |       \--> varEntries := reader.Variables(dwarfTree, scope.PC, scope.Line, variablesFlags)
-    |   |       |       |       |       \--> variablesInternal(nil, root, 0, pc, line, flags, true)
-    |   |       |       |       |       |        // search main.main scope and inner blocks
-    |   |       |       |       |       |        case dwarf.TagLexDwarfBlock, dwarf.TagSubprogram:
-    |   |       |       |       |       |            \--> if (... || root.ContainsPC(pc) then
-    |   |       |       |       |       |                 check each children of root.Children: 
-    |   |       |       |       |       |                 v = variablesInternal(v, child, depth+1, pc, line, flags, false)
-    |   |       |       |       |       \--> return varEntries
-    |   |       |       |       \--> vars := make([]*Variable, 0, len(varEntries))vars []
-    |   |       |       |       \--> foreach var in varEntries
-    |   |       |       |       |       var, := extractVarInfoFromEntry(scope.target, scope.BinInfo, scope.image(), ......)
-    |   |       |       |       |       |    \--> 由DIE.DW_ATTR_type读取类型信息, 由DIE.DW_ATTR_location计算地址（DWARF定义的栈字节码指令）
-    |   |       |       |       |       |    |    n, t, _ := readVarEntry(entry, image)
-    |   |       |       |       |       |    |    addr, _, _, := bi.Location(entry, dwarf.AttrLocation, regs.PC(), regs, mem)
-    |   |       |       |       |       |    \--> 创建新变量，初始化类型信息、数据地址
-    |   |       |       |       |       |    |    v := newVariable(n, uint64(addr), t, bi, mem)
-    |   |       |       |       |       |    |    return v
-    |   |       |       |       |       vars = append(vars, var)
-    |   |       |       |       \--> 按定义位置（源码上）进行排序、嵌套深度进行排序
-    |   |       |       |       |    sort.Stable(&variablesByDepthAndDeclLine{vars, depths})
-    |   |       |       |       \--> 将被shadow的外部作用域的变量标识下
-    |   |       |       |       |    mark vars `flags|=VariableShadowed` if shadowed
-    |   |       |       |       \--> return vars
-    |   |       |       \--> only keep the lastseen one in vars0
-    |   |       |       |    that's the one defined in expected scope,
-    |   |       \--> foreach var in vars
-    |   |       |       found := varflags&VariableShadowed == 0
-    |   |       |        if found then 
-    |   |       |           stack.push(vars[i]) 
-    |   |       |               \--> stack.stack = append(stack.stack, v)
-    |   |       |           break
-    |   |       \--> return found
-    |   |      
-    |   \--> step2: if `found`, then return vars
-    |   |            
-    |   \--> step3: if `!found`, then find in globals
-    |            v, err := scope.findGlobal(scope.Fn.PackageName(), name)
-    |                \--> search pacakge.variable, if found then return
-    |                \--> search package.functions, if found then returns
-    |                \--> search package.constants, if found then returns
-```
-
-第1、2个操作执行完后就完成了操作数栈stack.stack的入栈操作，入栈时的变量Variable.Type+Variable.Location都已经根据DWARF信息初始化过了，只是Variable.Value还没有加载。在evalStack这个栈机器取出二元运算符“Binary{+}"之后，会尝试从操作数栈获取操作数，这个阶段，会从被调试进程的内存中读取数据到Variable.Value，然后再进行基于运算符逻辑的加法计算。
-
-OK，我们下面来看下Binary{+}这个操作的处理逻辑：
-
-```bash
-op = stack.ops[stack.opidx]
-switch op := ops[stack.opidx].(type)
-...
-case *evalop.Binary:
-    scope.evalBinary(op, stack)
-    \--> step1: 从操作数栈stack.stack获取运算符的左右操作数
-    |    yv := stack.pop(); 
-    |    |  \--> v := s.stack[len(s.stack)-1]
-    |    |  \--> s.stack = s.stack[:len(s.stack)-1]
-    |    |  \--> return v
-    |    xv := stack.pop(): 略
-    \--> step2: 根据Variable中记录的地址信，加载其在被调试进程内存数据
-    |    xv.loadValue(...); 
-    |    |  \--> v.loadValueInternal(0, cfg)
-    |    |          \--> if v.Kind == reflect.Int, ..., reflect.Int64 then
-    |    |          |    var val int64
-    |    |          |    val, v.Unreadable = readIntRaw(v.mem, v.Addr, v.RealType.(*godwarf.IntType).ByteSize)
-    |    |          |       \--> val := make([]byte, int(size))
-    |    |          |       \--> _, err := mem.ReadMemory(val, addr)
-    |    |          |       |       \--> n, _ = processVmRead(t.ID, uintptr(addr), data)
-    |    |          |       |            uses syscall SYS_PROCESS_VM_READV, maybe failed
-    |    |          |       |       \-- if n == 0 then use syscall ptrace(PTRACE_PEEKDATA, ...)
-    |    |          |       |            t.dbp.execPtraceFunc(func() { n, err = sys.PtracePeekData(t.ID, uintptr(addr), data) })
-    |    |          |       \--> n = int64(binary.LittleEndian.Uint64(val))
-    |    |          |       \--> return n
-    |    |          |    v.Value = constant.MakeInt64(val)
-    |    yv.loadValue(...): 略
-    \--> step3: 校验运算符左右操作数类型是否一致
-         typ, err := negotiateType(node.Op, xv, yv)
-    \--> step4: 构造计算结果
-    |    rc, err := constantBinaryOp(op, xv.Value, yv.Value)
-    |    |  \--> if op isn't token.SHL, token.SHR then
-    |    |   |   r = constant.BinaryOp(x, op, y)
-    |    |   |      \--> a := int64(x), b := int64(y)
-    |    |   |      \--> if op == token.Add then c = a+b
-    |    |   |      \--> return int64Val(c)
-    |    |  \--> return r
-    \--> step5:结果变量类型应该和操作数相同，构造一个新结果变量
-    |    r := xv.newVariable("", 0, typ, scope.Mem)
-    |    r.Value = rc
-    \--> step6: 确保计算结果符合目标平台的限制, see: convertInt中符号位扩展、截断处理逻辑
-    |     switch r.Kind
-    |        case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-    |            \--> n, _ := constant.Int64Val(r.Value)
-    |             \--> r.Value = constant.MakeInt64(int64(convertInt(uint64(n), true, typ.Size())))
-    \--> step7: 最后，将计算结果放入操作数栈
-         stack.push(r)
-            \--> s.stack = append(s.stack, v)
-```
-
-已经计算完成，且已经将计算结果变量入栈，此结果变量的Variable.Value已经有只值了，且结果变量 `Variable.Addr==0 && Variable.Base==0` 。OK，接下来我们来读取计算结果。
-
-```bash
-step1: 栈机器的操作数栈栈顶就是最终计算结果，取出这个变量，这个变量是个计算结果，ev.loaded=true，不用读进程内存进行加载
-ev, err := stack.result(&cfg)
-    \--> r = stack.peek()
-    \--> r.loadValue(*cfg)
-    |       \--> v.loadValueInternal(0, cfg)
-    |               // r这个结果变量，是调试器进程构造出来的，r的结果不存储在被调试进程中,
-    |               // 所以这里 `v.Addr == 0 && v.Base == 0` 成立，无需从被调试进程内存中加载，直接返回 
-    |               \--> if v.Unreadable != nil || v.loaded || (v.Addr == 0 && v.Base == 0) then return
-    \--> return r
-step2: 这次loadValue对这里的场景来说，有点多余，前面stack.peek()过程已经loadValue过了。
-ev.loadValue(cfg)
-```
-
-最后，由于是前后端分离式架构，只有调试器后端所在进程上的数据类型定义，需要告知调试器前端，前端才能正常展示。
-
-```bash
-func (s *RPCServer) Eval(arg EvalIn, out *EvalOut) error
-	\--> v, err := s.debugger.EvalVariableInScope(arg.Scope.GoroutineID, arg.Scope.Frame, arg.Scope.DeferredCall, arg.Expr, pcfg)
-	\--> 将Eval的结果proc.Variable转换成客户端可读的信息api.Variable
-	|    out.Variable = api.ConvertVar(v)
-    |   	\--> r := Variable{Addr, Name, Kind, Len, Cap, ...}
-    |   	\--> r.Type = PrettyTypeName(v.DwarfType)
-    |         			\--> godwarf.Type.String(), 这里就是int
-    |   	\--> r.Value = VariableValueAsString(v), 这里就是a+b的结果字符串"300"
-    |   	\--> return &r
-```
-
-客户端收到响应后，得知这个结果类型是int，并且当前结果值是"300"，就可以将结果转换后，输出到调试会话窗口了。
+想把每个分支跟一遍，最有效的方法仍是“用调试器调试调试器”：用 dlv 跟踪 godbg 自身（示意，本节未在本机实跑），在 `proc.Eval`、`proc.(*parser).parseExpr`、`proc.evalNode`、`proc.evalBinary` 上下断点，然后在 godbg 会话里执行 `print a+b`，单步进入。另有一个更轻量的办法：用 `--init` 批量回放脚本（本节的实测输出都是这么得到的），每条命令的输出都会打印，适合对照验证，也适合写进回归脚本。
 
 ### 执行测试
 
-略
+**单元测试**。求值器不依赖真实进程，`pkg/proc/eval_test.go` 用假 `lookup` 与假内存覆盖主要分支。本机实跑：
+
+```text
+$ go test ./pkg/proc -run "TestEval" -v
+--- PASS: TestEvalArith (0.00s)
+--- PASS: TestEvalIdent (0.00s)
+--- PASS: TestEvalCompare (0.00s)
+--- PASS: TestEvalUnsupported (0.00s)
+--- PASS: TestEvalCondition (0.00s)
+--- PASS: TestEvalMemoryExpr (0.00s)
+PASS
+ok  	github.com/hitzhangjie/godbgv2/pkg/proc	0.001s
+```
+
+几个用例值得对照代码看：`TestEvalArith` 覆盖优先级、括号与一元负号（`1+2*3=7`、`-1+3=2`）；`TestEvalIdent` 验证 `lookup` 注入（`i+j=42`）；`TestEvalCompare` 验证比较/逻辑结果类型（`1<2`、`1==1 && 2==2`、`!0`）；`TestEvalUnsupported` 守住能力边界（`foo(1)` 必须报错）；`TestEvalCondition` 验证条件入口校验（`1+1` 报“不是布尔表达式”）；`TestEvalMemoryExpr` 用 `map[uint64]byte` 模拟内存，覆盖 `pt.X`、`(*p).X`、`sl[1]`、`len(sl)`、`cap(sl)` 与越界报错。
+
+**实跑 `print`**。在 `godbgv2/_fixtures/vars` 上断到 `main.go:28` 后依次执行（实测）：
+
+```text
+godbg> print arr[1]+arr[2]
+arr[1]+arr[2] = 50 (int)
+godbg> print pt.X+pt.Y
+pt.X+pt.Y = 3 (int)
+godbg> print *ptr
+*ptr = 10 (int)
+godbg> print &pt.X
+&pt.X = 0x566420 (*int)
+godbg> print len(arr)
+len(arr) = 3 (int)
+godbg> print pt.X==1
+pt.X==1 = true (bool)
+```
+
+**实跑 `condition`**。裁剪后的输出（略去重复的 `not satisfied` 行）：
+
+```text
+godbg> break main.go:9 if a > 25
+breakpoint 1 added at 0x4bcbdc (/tmp/evaldemo/cond/main.go:9), cond "a > 25"
+godbg> continue
+breakpoint 1 condition "a > 25" not satisfied, auto continue
+...（前几次命中条件不满足，自动越过，略）
+thread 1938869 status: stopped: trace/breakpoint trap
+> /tmp/evaldemo/cond/main.go:9 (pc: 0x4bcbdd)
+godbg> print a
+a = 30 (int)
+```
+
+**边界实测**。以下输入都应报错，可用于确认自己理解的能力边界：
+
+```text
+godbg> print int(arr[0])
+Error: function calls not supported (教学版能力边界)
+godbg> print s[0:1]
+Error: missing ]
+godbg> break main.go:28 if pt.X == 1
+Error: breakpoint 1 condition "pt.X == 1" eval error:
+       variable "pt" has composite type main.Point, not supported in condition (教学版能力边界)
+```
 
 ### 本节小结
 
-至此整个 `whatis` 等命令中涉及到的表达式计算过程就执行结束了。我们只介绍了 `a+b` 这么简单的表达式，就花去了大量的篇幅，但是好的一点是，我们把处理过程中所有重要的细节都给大家介绍到了。包括AST解析，编译ast.Expr为一系列操作序列，以及evalStack这个栈机器如何执行这个序列，并得到计算结果。最后我们还介绍了如何将目标平台数据结构，转换为调试器前端可以理解的结构样式。
+本节介绍了 godbg 的表达式求值器：
 
-如果您对其他表达式类型的设计实现感兴趣，您可以参考本文介绍的调试过程去跟踪调试，或者根据本文介绍的源代码关键路径，去阅读相关源码。OK，本文就到这里了。
+- 结构是“手写 tokenizer → Pratt 解析器 → 自建 AST → 递归解释”，没有编译阶段与操作数栈；
+- 上下文只有两个注入回调：`EvalLookup` 负责“名字 → 值/类型/地址”，`MemReader` 负责“地址 → 字节”，求值器本身不碰寄存器、ptrace 与 DWARF 树；
+- 结果是 `proc.Value{Uint, Type, Addr}`，基本类型直接取值、复合类型按地址渲染，最终压成 `api.Variable` 回前端；
+- 能力边界明确：支持标识符、字段、下标、解引用、取址、算术、比较、逻辑、`len`/`cap`；不支持函数调用（`len`/`cap` 除外）、类型转换、切片表达式、map/channel、方法调用、接口断言、`complex`/`imag`/`real`；
+- 作用域处理是当前最大的简化：`FindVariable` 取函数子树里第一个同名 DIE，不看 PC 与 `lexical_block`，嵌套作用域下可能取错变量。
+
+后续小节会补齐求值器的两端：变量定位链路（9.2.33）让 `lookup` 真正从 DWARF 与栈帧里算出地址，内存表达式与 `set`（9.2.36/9.2.37）把可寻址对象写回；条件断点的完整流程在 9.2.23 展开。
 
 ### 参考文献
 
 1. 后缀表达式, https://en.wikipedia.org/wiki/Reverse_Polish_notation
-2. Go语言文法, https://go.dev/ref/spec
+2. Go 语言规范·运算符优先级, https://go.dev/ref/spec#Operator_precedence
 3. AST Explorer, https://astexplorer.net/
 4. dwarfviewer, https://github.com/hitzhangjie/dwarfviewer
