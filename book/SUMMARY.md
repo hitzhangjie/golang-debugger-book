@@ -114,7 +114,6 @@
     * [9.2.34 godbg> bt](9-develop-sym-debugger/2-核心调试逻辑/34-debug_bt.md)
     * [9.2.38 goroutines：列举全部 goroutine](9-develop-sym-debugger/2-核心调试逻辑/100-debug_goroutines.md)
     * [9.2.40 goroutine 逻辑切换与多线程调试](9-develop-sym-debugger/2-核心调试逻辑/100-multi-threads.md)
-    * [9.2.100 how ListFunctions work](9-develop-sym-debugger/2-核心调试逻辑/100-how_listfunctions_work.md)
   * [9.3 高级功能扩展](9-develop-sym-debugger/3-高级功能扩展/README.md)
     * [9.3.100 集成starlark](9-develop-sym-debugger/3-高级功能扩展/100-howto_integrate_starlark.md)
     * [9.3.101 基于eBPF跟踪](9-develop-sym-debugger/3-高级功能扩展/101-howto_tracing_via_ebpf.md)
