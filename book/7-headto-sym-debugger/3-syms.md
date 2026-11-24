@@ -85,7 +85,7 @@ ELF 符号表收录链接器要看见的对象，包括：
 
 需要强调，我们这里所说的符号，是指 .symtab 中的表项，它与 DWARF 调试信息是两回事：前者主要服务于链接，后者才服务于调试。但 .symtab 也确实会被某些调试器使用：dlv 的符号级调试主路径是靠 DWARF，但是读取 `runtime.tlsg` 或 `runtime.tls_g` 计算 g 指针相对于线程 TLS 的偏移时依然要靠读取 .symtab。
 
-> 至于为什么这个偏移必须从 .symtab 取、DWARF 为什么给不出来，见附录 [12.18 dlv为什么从.symtab读取TLS符号](../12-appendix/95-why-dlv-reads-tls-symbols-from-symtab.md)。gdb 对 .symtab 的使用，见 [GDB为什么同时使用.symtab和DWARF](../12-appendix/92-why-gdb-uses-symtab.md)。
+> 至于为什么这个偏移必须从 .symtab 取、DWARF 为什么给不出来，见附录 [12.19 dlv为什么从.symtab读取TLS符号](../12-appendix/95-why-dlv-reads-tls-symbols-from-symtab.md)。gdb 对 .symtab 的使用，见 [GDB为什么同时使用.symtab和DWARF](../12-appendix/92-why-gdb-uses-symtab.md)。
 
 #### .symtab 与 .dynsym
 
@@ -94,12 +94,12 @@ ELF 中存储符号表的 section 常见的有 .symtab 和 .dynsym，二者分�
 - .symtab 用于静态链接时的符号解析、重定位，记录了链接器需要的全部符号，范围较广；它并非运行时必需，未 strip 时保留下来，供 nm、readelf 和调试器查看符号名与地址，可以用 strip 去掉。
 - .dynsym 供动态链接使用，由链接器在最终链接阶段生成，目标文件里没有。加载时的动态链接器（ld-linux 之类）读的就是它，动态段中的 DT_SYMTAB 指向这张表。其中只放动态链接要用的导出符号和未定义符号，0 号是空符号。
 
-内部链接的纯 Go 程序，默认 `-buildmode=exe` 不生成 .dynsym，`-buildmode=pie` 才会生成。cgo、外部链接和 `-linkshared` 即使用默认 buildmode 也会生成，见本节末尾和附录 12.17。
+内部链接的纯 Go 程序，默认 `-buildmode=exe` 不生成 .dynsym，`-buildmode=pie` 才会生成。cgo、外部链接和 `-linkshared` 即使用默认 buildmode 也会生成，见本节末尾和附录 12.18。
 
 > 需要说明的是，这里有两个容易混淆的点：
 >
 > - 一是“静态链接”并不等于“一定是 ET_EXEC”，PIE 可执行程序的 `e_type` 是 ET_DYN。有 `PT_INTERP` 时，内核按 `PT_LOAD` 选定装载基址，ld.so 在加载阶段按重定位表补上基址。即使它一个共享库都不依赖（`ldd` 显示 statically linked），也带 .interp、.dynamic、.dynsym 和重定位表 .rela（GNU ld 产物里通常是 .rela.dyn）。static-pie 自带自举代码，没有 `PT_INTERP`，可以不带 .interp；
-> - 二是这种 PIE 的 .dynsym 里往往只有 0 号空符号，没有需要跨模块解析的符号，它存在只是为了满足动态 ELF 的结构要求，真正驱动重定位的是 .rela。详见后文和附录 [12.17 PIE可执行文件为什么有.interp/.dynsym/.dynamic](../12-appendix/94-why-pie-has-dyn-sections.md)。
+> - 二是这种 PIE 的 .dynsym 里往往只有 0 号空符号，没有需要跨模块解析的符号，它存在只是为了满足动态 ELF 的结构要求，真正驱动重定位的是 .rela。详见后文和附录 [12.18 PIE可执行文件为什么有.interp/.dynsym/.dynamic](../12-appendix/94-why-pie-has-dyn-sections.md)。
 
 分清了谁在用哪张表，删表的后果也就不难推出来：
 
@@ -470,7 +470,7 @@ vim-go
 
 这里生成的 a.out 就是链接完全的可执行程序了。
 
-最后需要注意的是，在 linux/amd64、go1.24.6 上，纯go程序走内部链接且使用默认 `-buildmode=exe` 时，最终构建出的可执行程序大体仍是静态链接的 ET_EXEC，其中不存在需要动态符号解析的symbol或section。使用 `-buildmode=pie` 时会出现 `.interp`、`.dynsym`、`.dynamic`，这是因为 PIE 需要动态加载器完成自举重定位，并不代表依赖共享库，所以 `ldd` 有时仍显示 `statically linked`；外部链接、cgo、`-linkshared` 则属于真正的动态链接，同样会带上这些section。关于这些section的来龙去脉、`ldd` 输出的含义以及几种构建方式的对比，见附录 [12.17 PIE可执行文件为什么有.interp/.dynsym/.dynamic](../12-appendix/94-why-pie-has-dyn-sections.md)。
+最后需要注意的是，在 linux/amd64、go1.24.6 上，纯go程序走内部链接且使用默认 `-buildmode=exe` 时，最终构建出的可执行程序大体仍是静态链接的 ET_EXEC，其中不存在需要动态符号解析的symbol或section。使用 `-buildmode=pie` 时会出现 `.interp`、`.dynsym`、`.dynamic`，这是因为 PIE 需要动态加载器完成自举重定位，并不代表依赖共享库，所以 `ldd` 有时仍显示 `statically linked`；外部链接、cgo、`-linkshared` 则属于真正的动态链接，同样会带上这些section。关于这些section的来龙去脉、`ldd` 输出的含义以及几种构建方式的对比，见附录 [12.18 PIE可执行文件为什么有.interp/.dynsym/.dynamic](../12-appendix/94-why-pie-has-dyn-sections.md)。
 
 ```
 $ ldd -r test1 // 这是一个简单的纯go程序，默认 -buildmode=exe 构建
