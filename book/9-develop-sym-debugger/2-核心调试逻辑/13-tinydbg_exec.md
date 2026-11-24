@@ -1,164 +1,136 @@
-## Exec
+## exec：启动一个新进程并跟踪
 
-### 实现目标: `tinydbg exec ./prog`
+### 实现目标
 
-本节介绍exec这个启动调试的命令：`tinydbg exec [executable] [flags]`，exec操作将执行executable对自动attach住对应的进程。在第6章介绍指令级调试器时，我们有演示如何通过exec.Command来指定要启动的程序、启动该程序以及如何在程序启动后自动被ptracer跟踪。如果忘记了这部分内容，可以回去看看6.1, 6.2, 6.3这几个小节。
-
-demo tinydbg中的exec命令其实又是老调重弹，只不过这里tinydbg是前后端分离式架构，如果只考虑后端的target层对tracee的启动、控制部分，在需要注意的要点上是一样的。
+`godbg exec <prog> [args...]` 把一个已经构建好的可执行程序拉起来，一起手就把它停住，交给调试会话。与 9.2.11/9.2.12 的 attach 相比，这里不需要“等”谁：进程是调试器自己创建的子进程。
 
 ```bash
-$ tinydbg help exec
-Execute a precompiled binary and begin a debug session.
-
-This command will cause Delve to exec the binary and immediately attach to it to
-begin a new debug session. Please note that if the binary was not compiled with
-optimizations disabled, it may be difficult to properly debug it. Please
-consider compiling debugging binaries with -gcflags="all=-N -l" on Go 1.10
-or later, -gcflags="-N -l" on earlier versions of Go.
-
+$ ./godbg exec --help
 Usage:
-  tinydbg exec <path/to/binary> [flags]
+  godbg exec <prog> [args...] [flags]
 
 Flags:
-      --continue     Continue the debugged process on start.
-  -h, --help         help for exec
-      --tty string   TTY to use for the target program
-
-Global Flags:
-      --accept-multiclient               Allows a headless server to accept multiple client connections via JSON-RPC.
-      --allow-non-terminal-interactive   Allows interactive sessions of Delve that don't have a terminal as stdin, stdout and stderr
-      --disable-aslr                     Disables address space randomization
-      --headless                         Run debug server only, in headless mode. Server will accept JSON-RPC client connections.
-      --init string                      Init file, executed by the terminal client.
-  -l, --listen string                    Debugging server listen address. Prefix with 'unix:' to use a unix domain socket. (default "127.0.0.1:0")
-      --log                              Enable debugging server logging.
-      --log-dest string                  Writes logs to the specified file or file descriptor (see 'dlv help log').
-      --log-output string                Comma separated list of components that should produce debug output (see 'dlv help log')
-  -r, --redirect stringArray             Specifies redirect rules for target process (see 'dlv help redirect')
-      --wd string                        Working directory for running the program.
+      --disable-aslr   禁用地址空间布局随机化（ch6.80）
 ```
 
-exec操作的选项相比attach操作增加了一个 `--disable-aslr` ，我们只介绍下这个选项，其他选项我们介绍attach操作时都介绍过了，不重复描述。OK，第12章附录 12.8 节介绍过 ASLR。这个特性大家一般很少会去用到，所以我们再提一下。
-
-ASLR是一种操作系统级别的安全技术，主要作用是通过随机化程序在内存中的加载位置来增加攻击者预测目标地址、利用软件漏洞进行恶意操作的难度。其核心机制包括动态随机分配进程地址空间中各个部分的位置，例如executable基址、库文件、堆和栈等。Linux内核默认开启了完整的地址随机化，但是对于executale地址随机化必须要开启PIE编译模式。这虽然带来了一定安全性，但是如果你想做一些自动化调试的任务，而这些任务中使用指令地址进行了某些操作，那么ASLR可能会让调试失败。
-
-所以这里增加了一个选项 `--disable-aslr`，这个选项会禁用上述提及的所有地址空间随机化能力。
+- 第一个位置参数是被调试程序，其余位置参数原样传给 tracee；
+- `--` 之前的 flag 归 `godbg`，`--` 之后的一律给 tracee；程序参数不以 `-` 开头时可以省略 `--`；
+- 本地 flag 只有 `--disable-aslr`，没有 `--tty`/`--redirect`/`--wd`/`--continue`：stdio 直接继承当前终端，会话停在入口，“继续跑”交给会话里的 `continue`；成功后打印 `process <pid> launched, stopped by SIGTRAP`。
 
 ### 基础知识
 
+6.1 已经把 `PTRACE_TRACEME` 与 post-exec `SIGTRAP` 讲透，这里只补三件第 9 章才需要的东西。**停止点**：`SysProcAttr.Ptrace=true` 让子进程在 exec 前 `PTRACE_TRACEME`，exec 成功时内核投递 `SIGTRAP`，进程停在**新程序的入口**。对非 PIE 的 Go 二进制入口是 `_rt0_amd64_linux`；对动态链接的 PIE 程序，第一站是动态链接器。
+
+**stdio 继承**：`pkg/target/process.go:281-283` 把 `os.Stdin/Stdout/Stderr` 直接赋给子进程，没有重定向机制。实现简单，tracee 的打印直接落在当前终端；代价是调试器插不上手，不能给 tracee 输出加前缀或转存文件。
+
+**关闭 ASLR**（背景见附录 12.8）：godbg 不在本进程里调 `personality`，而是用 `setarch x86_64 -R` 包一层——`setarch` 先设 `ADDR_NO_RANDOMIZE` 再 exec 目标程序。副作用是被跟踪的第一层进程是 `setarch`，第一次 `SIGTRAP` 停在 setarch 的入口，此时 ASLR 还没关；必须放行 `setarch`，再等它 exec 目标程序时产生的 `PTRACE_EVENT_EXEC`，那时的停止点才是真正的 tracee。
+
 ### 代码实现
 
-主要代码执行路径如下：
-
-```bash
-main.go:main.main
-    \--> cmds.New(false).Execute()
-            \--> execCommand.Run()
-                    \--> execute(0, args, conf, "", debugger.ExecutingExistingFile, args, buildFlags)
-                            \--> server := rpccommon.NewServer(...)
-                            \--> server.Run()
-                                    \--> debugger, _ := debugger.New(...)
-                                            if attach 启动方式: debugger.Attach(...)
-                                            elif core 启动方式：core.OpenCore(...)
-                                            else 其他 debuger.Launch(...)
-                                    \--> c, _ := listener.Accept() 
-                                    \--> serveConnection(conn)
-```
-
-由于调试器后端初始化的逻辑我们之前都已经介绍过了，包括网络通信的初始化、debugger的初始化，这里我们直接看最核心的代码就好了。
-
-对于exec启动方式的话，我们直接看debugger.Launch(...)的实现：
+#### 1. 命令层：`--` 与参数透传
 
 ```go
-// Launch will start a process with the given args and working directory.
-func (d *Debugger) Launch(processArgs []string, wd string) (*proc.TargetGroup, error) {
-    ...
-
-	launchFlags := proc.LaunchFlags(0)
-	if d.config.DisableASLR {
-		launchFlags |= proc.LaunchDisableASLR
-	}
-    ...
-
-	return native.Launch(processArgs, wd, launchFlags, d.config.TTY, d.config.Stdin, d.config.Stdout, d.config.Stderr)
+// cmd/exec.go:32-38
+disableASLR, _ := cmd.Flags().GetBool("disable-aslr")
+opts := &api.LaunchOptions{DisableASLR: disableASLR}
+pid, err := Client.Launch(api.KindExec, args[0], args[1:], opts)
+if err != nil {
+	return err
 }
+fmt.Printf("process %d launched, stopped by SIGTRAP\n", pid)
+```
 
-func Launch(cmd []string, wd string, flags proc.LaunchFlags, tty string, stdinPath string, stdoutOR proc.OutputRedirect, stderrOR proc.OutputRedirect) (*proc.TargetGroup, error) {
-    ...
+透传就是 `args[1:]`：cobra 已经摘掉 `--`、并保证其后的参数进入 `args`，命令层不必自己切分；`--` 的说明写在 `Long` 里，help 直接可见。
 
-    // 输入输出重定向设置
-	stdin, stdout, stderr, closefn, err := openRedirects(stdinPath, stdoutOR, stderrOR, foreground)
-	if err != nil {
-		return nil, err
-	}
-    ...
+#### 2. 契约与门面
 
-	dbp := newProcess(0)
-    ...
-	dbp.execPtraceFunc(func() {
-        // 通过personality系统调用，禁用地址空间随机化 (只影响当前进程及其子进程）
-        // 然后再启动我们的待调试程序，此时该程序就是禁用地址空间随机化的
-		if flags&proc.LaunchDisableASLR != 0 {
-			oldPersonality, _, err := syscall.Syscall(sys.SYS_PERSONALITY, personalityGetPersonality, 0, 0)
-			if err == syscall.Errno(0) {
-				newPersonality := oldPersonality | _ADDR_NO_RANDOMIZE
-				syscall.Syscall(sys.SYS_PERSONALITY, newPersonality, 0, 0)
-				defer syscall.Syscall(sys.SYS_PERSONALITY, oldPersonality, 0, 0)
-			}
-		}
+契约签名是 `Launch(kind Kind, cmd string, args []string, opts *LaunchOptions) (int, error)`（`pkg/service/api/client.go:36`），选项结构 `api.LaunchOptions` 只有一个布尔字段 `DisableASLR`（`pkg/service/api/types.go:9-12`）。门面只做两件事：转成目标层的选项类型，调 `target.NewDebuggedProcess`，再用返回的进程建符号层：
 
-        // 启动待调试程序，此时该进程是被禁用了地址空间随机化的
-		process = exec.Command(cmd[0])
-		process.Args = cmd
-		process.Stdin = stdin
-		process.Stdout = stdout
-		process.Stderr = stderr
-		process.SysProcAttr = &syscall.SysProcAttr{
-            // Ptrace=true，go标准库中，子进程中会调用PTRACEME
-			Ptrace:     true, 
-			Setpgid:    true,
-			Foreground: foreground,
-		}
-        ...
-		err = process.Start()
-	})
+```go
+// pkg/service/debugger/debugger.go:29-43（省略错误检查）
+var top *target.LaunchOptions
+if opts != nil {
+	top = &target.LaunchOptions{DisableASLR: opts.DisableASLR}
+}
+dbp, err := target.NewDebuggedProcess(cmd, args, target.Kind(kind), top)
+d.t, err = proc.NewTarget(dbp)
+return dbp.Process.Pid, nil
+```
 
-    // 等待tracee启动完成
-	dbp.pid = process.Process.Pid
-	dbp.childProcess = true
-	_, _, err = dbp.wait(process.Process.Pid, 0)
+`api.KindExec` 与 `target.EXEC` 的取值顺序一致（`pkg/target/kind.go:6-10`），可以直接转换；Kind 真正派上用场是在退出善后：exec 杀进程、attach 分离、debug 还要删产物（`cmd/debug/exit.go`）。
 
-    // 进一步初始化，包括将tracee下的所有已有线程、未来可能创建的线程都纳入管控
-	tgt, err := dbp.initialize(cmd[0])
-	if err != nil {
-		return nil, err
-	}
-	return tgt, nil
+#### 3. 目标层：启动与两段停止
+
+```go
+// pkg/target/process.go:273-280
+var progCmd *exec.Cmd
+if opts != nil && opts.DisableASLR {
+	// util-linux ≥2.39 的 setarch 要求显式指定架构参数
+	argv := append([]string{archName(), "-R", execName}, args...)
+	progCmd = exec.Command("setarch", argv...)
+} else {
+	progCmd = exec.Command(execName, args...)
 }
 ```
 
-see go/src/syscall/exec_linux.go
+紧接着三行把 `os.Stdin/Stdout/Stderr` 赋给子进程（`:281-283`），`SysProcAttr` 设 `Ptrace=true`、`Setpgid=true`、`Foreground=false`（`:285-289`），环境里追加 `GODEBUG=asyncpreemptoff=1`（`:290-291`）。`archName()` 返回 `x86_64`：util-linux ≥ 2.39 的 `setarch` 要求显式写架构；`GODEBUG=asyncpreemptoff=1` 关掉 Go 运行时的异步抢占，否则运行时会用 `SIGURG` 抢占线程，tracee 在莫名其妙的位置停下来。
+
+`launchCommand` 末尾 `wait` 到 `SIGTRAP`；若开了 `--disable-aslr`，此时停的是 `setarch`，于是放行它并等 `PTRACE_EVENT_EXEC`：
 
 ```go
-func forkAndExecInChild1(...) {
-    ...
-	if sys.Ptrace {
-		_, _, err1 = RawSyscall(SYS_PTRACE, uintptr(PTRACE_TRACEME), 0, 0)
-		if err1 != 0 {
-			goto childerror
-		}
+// pkg/target/process.go:83-94（省略错误检查）
+if opts != nil && opts.DisableASLR {
+	syscall.PtraceCont(dbp.Process.Pid, 0)
+	_, status, _ := dbp.wait(dbp.Process.Pid, syscall.WSTOPPED)
+	if !status.Stopped() || status.TrapCause() != syscall.PTRACE_EVENT_EXEC {
+		return fmt.Errorf("unexpected status after setarch: %v", status)
 	}
-    ...
+}
 ```
 
-这样exec操作，调试器后端的目标层逻辑就执行完成了。前后端网络IO初始化也完成之后，前端就可以通过调试会话发送调试命令了。
+`TrapCause()` 取出事件号，`PTRACE_EVENT_EXEC` 由 `PTRACE_O_TRACEEXEC` 触发。此前已经设好四个 TRACE 选项（CLONE/FORK/VFORK/EXEC），这段之后 `addThread(pid, false)` 把主线程加入线程表、`currentThread` 指向它，`NewDebuggedProcess` 返回。
+
+#### 4. 关于 tag
+
+tag `ch9.2.13`（`0b1c7c0`）是**空提交**：`git diff-tree` 显示零个文件改动，提交的 tree 与父提交完全相同。exec 的启动链路在 6.1 就已落地，`--` 透传也在 6.1 的“向被调试程序传递参数”一小节讲过，这个 tag 只是给书稿挂节用。所以本节没有新增代码，写的是 tag 那棵树里已有的实现（行号以 master 为准，`process.go`、`debugger.go` 在 tag 之后有增补）。
 
 ### 执行测试
 
-略
+tracee 用一个只打印 `os.Args` 然后 `sleep` 的小程序，`--init` 脚本里放 `continue` 和 `exit`：
+
+```bash
+$ ./godbg exec /tmp/argprint-bin -- -name value
+process 1964896 launched, stopped by SIGTRAP
+godbg> continue
+tracee argv: [/tmp/argprint-bin -name value]
+```
+
+省略 `--` 也能透传，只要参数不以 `-` 开头；反之就会被当成 `godbg` 自己的 flag：
+
+```bash
+$ ./godbg exec /tmp/argprint-bin arg1 arg2
+tracee argv: [/tmp/argprint-bin arg1 arg2]
+$ ./godbg exec /tmp/argprint-bin -name value
+Error: unknown shorthand flag: 'n' in -name
+```
+
+`--disable-aslr` 的效果可以用 `pregs` 直接看。对动态链接的 `/bin/sleep`，连续启动三次、每次在会话里 `pregs` 读首次停止的 Rip：
+
+```bash
+$ ./godbg exec /bin/sleep -- 5                   # 0x7f6ecba1ede0 / 0x7f874581ede0 / 0x7f9561c1ede0
+$ ./godbg exec /bin/sleep --disable-aslr -- 5    # 0x7ffff7c1ede0（三次相同）
+```
+
+不开 ASLR 时地址每次都在变，开了之后稳定在同一个地址——正是附录 12.8 说的“记录下来的地址下次还能用”。对非 PIE 的 Go 程序，第一次 `threads` 能看到停止点在入口：
+
+```bash
+$ ./godbg exec _fixtures/loop           # 输出 process 1957459 launched, stopped by SIGTRAP
+godbg> threads
+* Thread 1957459 at 0x478120 _rt0_amd64_linux .../runtime/rt0_linux_amd64.s:8
+```
 
 ### 本节小结
 
-本文介绍了tinydbg exec命令的实现细节。exec命令用于启动一个新进程并对其进行调试，主要通过设置进程的SysProcAttr.Ptrace=true来实现。当新进程启动时，go运行时会自动调用PTRACE_TRACEME使子进程进入被跟踪状态。调试器等待子进程启动完成后，会将其所有线程纳入管控。这样就完成了exec操作的目标层逻辑，为后续的调试会话做好了准备。
+exec 自己创建进程：命令层把 `--` 之后的参数用 `args[1:]` 交给 `Client.Launch(KindExec, ...)`，门面转 `target.NewDebuggedProcess`，目标层用带 `Ptrace` 的 `exec.Command` 启动，等 post-exec 的 `SIGTRAP` 停住，再把主线程和四个 TRACE 选项安排好。
 
-另外我们也重新回顾了下ASLR的作用，以及对调试器调试的影响，介绍了下 `--disable-aslr` 的方法。
+`--disable-aslr` 经 `setarch x86_64 -R` 实现，代价是多一段“放行 setarch、等 `PTRACE_EVENT_EXEC`”的处理；没有 tty/redirect/wd/continue。tag `ch9.2.13` 是空提交。下一节 debug 在 exec 前面加一步 go build。
