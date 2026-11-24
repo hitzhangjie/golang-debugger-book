@@ -1,257 +1,175 @@
 ## 核心调试命令
 
-在第5章《调试器概貌》我们分析了下调试器的功能性需求、非功能性需求、大致的实现方案，第6章紧跟着介绍了指令级调试器的设计实现，第7章介绍了与调试器写作紧密相关的 ELF 文件格式、编译器、链接器、加载器的工作原理以及地址换算，第8章专门介绍了调试信息对源程序数据和指令、进程运行时视图的描述，以及 Go 工具链如何生成、如何读取这些信息。9.1开头对现代调试器的整体架构进行了介绍，本节就是要重点介绍每个调试功能的实现了。
+在第 5 章《调试器概貌》我们分析了调试器的功能性需求、非功能性需求和大致的实现方案；第 6 章介绍了指令级调试器的设计实现；第 7 章介绍了 ELF、编译器、链接器、加载器以及地址换算；第 8 章介绍了 DWARF 如何描述源程序的数据、指令和运行时视图。9.1 对现代调试器的整体架构做了介绍，本节开始进入具体调试命令的设计与实现。
 
-在开始前，我们再次重申下调试器的功能性需求、非功能性需求，以及大致的技术方案。对于列出的完整的功能列表，由于篇幅和时间限制，我们没法做到全部实现、逐一介绍，因此我们会特别说明各个功能会实现到什么程度。由于我们的demo tinydbg是在 `go-delve/devle` 上裁剪、修改而来，所以我们可以直接标注清楚每个功能点我们做到了什么程度、相比delve的变化，方便大家了解。
+在展开之前，先把「第 9 章到底要实现哪些命令、实现到什么程度」说清楚。godbgv2 不是 dlv 的完整复刻：它只保留 linux/amd64 的 native backend，按教学节奏逐节增加命令；有些命令是完整实现，有些是明确的能力子集，有些是桩，还有一些是书稿声明「本书不做」的范围决策。后文每个小节都会对应一个 godbgv2 tag（如 `ch9.2.22`），读者可以用 `git checkout` 复现该节完成时的代码；本节先给出一张总表，避免读者把「书里提到了」误当成「已经实现」。
+
+> 历史说明：第 9 章早期版本以 tinydbg（基于 go-delve/delve 裁剪的符号级调试器）为 demo；现在配套实现是 godbgv2。两者的命令形态有继承关系，但代码与能力边界以 godbgv2 为准。
 
 ### 支持多种调试对象
 
-| 命令         | 描述                           | 对象类型        | 是否实现 | dlv是否实现 |
-| ------------ | ------------------------------ | --------------- | -------- | ----------- |
-| godbg attach | 调试一个正在运行中的process    | process         | Y        | Y           |
-| godbg exec   | 启动并调试指定的go executable  | executable      | Y        | Y           |
-| godbg debug  | 调试当前go main module         | go main package | Y        | Y           |
-| godbg test   | 调试当前go package中的测试函数 | go test package | N        | Y           |
-| godbg core   | 启动并调试指定的coredump       | coredump        | Y        | Y           |
+| 命令 | 描述 | 对象类型 | godbgv2 状态 | 说明 |
+| --- | --- | --- | --- | --- |
+| `godbg attach <pid>` | 调试一个正在运行的进程 | process | ✅ | 支持 `--waitfor`（等待指定 pid 出现，不是按进程名匹配） |
+| `godbg exec <prog>` | 启动并调试指定的可执行文件 | executable | ✅ | 支持 `--` 之后的参数透传、`--disable-aslr` |
+| `godbg debug [dir\|file]` | 编译并调试 main 包 | go main package | ✅ | 固定 `-N -l -compressdwarf=false`，产物 `__debug_bin__` |
+| `godbg core <corefile> <executable>` | 调试 core 文件 | core dump | 🅿️ | 后端 `pkg/proc/core` 已能解析，`cmd/core.go` 仍是桩，返回明确错误 |
+| `godbg connect <addr>` | 连接 headless 调试服务端 | remote | ✅ | 仅 TCP；不支持多客户端 |
+| `godbg test` | 调试测试函数 | test package | 🚫 | 本书明确不做，可用 `go test -c` + `godbg exec` 替代 |
 
-> ps：为什么不支持 `godbg test` ？
->
-> go语言有原生的单元测试框架，`go test` 大家对此应该不陌生，对于测试包的调试，我们可以这样做：`go test -c -ldflags 'all=-N -l'` 然后再 `godbg exec ./xxxx.test`，但是如果能够一条命令 `godbg test` 搞定上述构建、运行测试的操作，会便利一点。
->
-> 尽管如此，但这个并不涉及增量的核心调试逻辑，只是一个编译构建、启动测试的优化，为了让tinydbg更加精简、节省介绍篇幅，我们移除了原来dlv的实现逻辑。
+> 关于 `godbg test`：Go 原生测试框架已经提供了 `go test`，调试测试包可以 `go test -c -gcflags 'all=-N -l'` 后 `godbg exec ./xxx.test`。单独做 `godbg test` 只是构建/启动的便利，不涉及新的核心调试逻辑，因此不纳入本书范围。
 
 ### 支持多种调试模式
 
-| 命令                               | 模式                                                   | 是否实现 | dlv是否实现           |
-| ---------------------------------- | ------------------------------------------------------ | -------- | --------------------- |
-| godbg debug/exec/attach            | 本地调试模式                                           | Y        | Y                     |
-| godbg debug/exec/attach --headless | 启动调试服务器，允许调试客户端远程连接 (JSON-RPC)      | Y        | Y                     |
-| godbg connect                      | 启动调试客户端，连接远程调试服务器                     | Y        | Y                     |
-| godbg dap                          | 启动调试服务器，且支持DAP协议，允许VSCode等通过DAP集成 | N        | Y                     |
-| godbg trace                        | 跟踪程序执行的函数                                     | bp-based | bp-based + ebpf-based |
-| godbg <...> --disable-aslr         | 禁用ASLR地址随机化                                     | N        | Y                     |
-| godbg --backend=gdb/lldb/rr        | 使用其他调试器实现代替native实现                       | N        | Y                     |
+| 模式 | 命令 | godbgv2 状态 | 说明 |
+| --- | --- | --- | --- |
+| 本地调试 | `godbg debug/exec/attach` | ✅ | 本地也走进程内 RPC（`net.Pipe`），见 9.2.16 |
+| 远程/headless 服务端 | `--headless --listen <addr>` | ✅ | 只支持 TCP，不支持 Unix socket |
+| 远程客户端 | `godbg connect <addr>` | ✅ | 只支持 TCP；服务端同一时刻只服务一个客户端 |
+| DAP | `godbg dap` | 🚫 | 不做；DAP 只在 9.3 作为扩展方向介绍 |
+| 函数跟踪 | 会话内 `trace <regexp>` | ✅ | breakpoint-based；没有 eBPF-based，也没有顶层 `godbg trace` |
+| 禁用 ASLR | `--disable-aslr` | ✅ | 通过 `setarch -R` 实现 |
+| 其他 backend | `--backend=gdb/lldb/rr` | 🚫 | 只有 native backend；backend 抽象是扩展方向 |
+| 多客户端 | `--accept-multiclient` | 🚫 | 所有连接共享同一个 `debugger.Debugger` 单例，未实现会话隔离 |
 
-> ps: 描述下这里的裁剪逻辑？
+> **命令形态注意**：godbgv2 **没有顶层 `trace` 命令**。`trace` 是进入调试会话后的断点族命令（`godbg> trace main.*`），见 9.2.17（后端）和 9.2.25（命令）。
+
+### 命令能力矩阵
+
+> 图例：✅ 可用 ｜ ⚠️ 可用但有明确边界 ｜ 🅿️ 桩/未接线 ｜ 🚫 本书有意不做 ｜ ❌ 未实现（未规划）。能力判定以「命令可用性」为准，不以「代码存在」为准。
+
+#### 执行控制
+
+| 命令 | 别名 | 状态 | 说明 | 代码定位 |
+| --- | --- | --- | --- | --- |
+| `continue` | `c` | ✅ | 运行到下一个断点或进程结束；all-stop | `cmd/debug/continue.go`、`pkg/target/continue.go` |
+| `step` | `s` | ✅ | **指令级**单步，不是源码行单步 | `cmd/debug/step.go`、`pkg/target/step.go` |
+| `stepout` | `so`、`finish` | ✅ | 执行到当前函数返回；`finish` 别名存在，但被同名桩遮蔽（见 9.2.39） | `cmd/debug/stepout.go`、`pkg/proc/backtrace.go` |
+| `call` | — | ⚠️ | 调试期函数调用；仅整型实参、最多 9 个 | `cmd/debug/call.go`、`pkg/proc/call.go` |
+| `next` | `n` | 🅿️ | 桩：打印 `TODO(ch9.2.28)` 后返回；源码级单步未实现 | `cmd/debug/next.go` |
+| `step-instruction` / `next-instruction` | `si`/`ni` | 🚫 | 不单独提供；`step` 本身即指令级 | — |
+
+#### 断点体系
+
+| 命令 | 别名 | 状态 | 说明 | 代码定位 |
+| --- | --- | --- | --- | --- |
+| `break` | `b`、`breakpoint` | ✅ | locspec 全形式；`--name/-n` 命名；`if <cond>` 条件 | `cmd/debug/break.go`、`pkg/proc/location.go` |
+| `breakpoints` | `bp`、`bs` | ✅ | 列出逻辑断点、地址、命中计数、启用状态 | `cmd/debug/breakpoints.go` |
+| `clear` | — | ✅ | 按编号删除断点 | `cmd/debug/clear.go` |
+| `clearall` | — | ✅ | 删除全部断点 | `cmd/debug/clearall.go` |
+| `condition` | `cond` | ✅ | 设置/清除条件断点条件 | `cmd/debug/condition.go` |
+| `toggle` | — | ✅ | 启用/禁用断点；禁用时还原物理指令并回退 PC | `cmd/debug/toggle.go` |
+| `trace` | `t` | ✅ | 按正则批量设置跟踪点，命中打印后自动继续 | `cmd/debug/trace.go`、`pkg/proc/trace.go` |
+| `watch` | `wa` | ✅ | 硬件监视点；DR0-DR3/DR6/DR7，固定 4 字节窗口（DR7 LEN=0b11；源码注释写 8 字节有误） | `cmd/debug/watch.go`、`pkg/target/hwbreakpoint.go` |
+| `on` | — | 🚫 | 断点命中自动执行命令，依赖 starlark，本书不做 | — |
+
+#### 数据查看与修改
+
+| 命令 | 别名 | 状态 | 说明 | 代码定位 |
+| --- | --- | --- | --- | --- |
+| `print` | `p` | ⚠️ | 表达式求值；支持标识符/字段/下标/解引用/取址/算术/比较/逻辑/`len`/`cap` | `cmd/debug/print.go`、`pkg/proc/eval.go` |
+| `set` | — | ⚠️ | 修改变量；教学版仅支持基本类型，支持 `pt.X`、`arr[1]` 等 lvalue | `cmd/debug/set.go` |
+| `pmem` | — | ✅ | 查看内存；`--count/--fmt/--size` | `cmd/debug/pmem.go` |
+| `setmem` | — | ✅ | 写内存 | `cmd/debug/set_mem.go` |
+| `pregs` | — | ✅ | 查看寄存器 | `cmd/debug/pregs.go` |
+| `setreg` | — | ✅ | 修改寄存器 | `cmd/debug/set_reg.go` |
+| `args` / `locals` / `vars` | — | ❌ | 未实现；目前用 `print` 逐个取 | — |
+| `whatis` | — | ❌ | 未实现；`ptypes` 是桩 | `cmd/debug/ptypes.go` |
+| `display` | — | 🅿️ | 桩：每次停止时打印表达式的能力未实现 | `cmd/debug/display.go` |
+
+> `print` 不支持函数调用、复合字面量、map/channel 操作、方法调用、接口断言、切片表达式；具体边界见 9.2.18 与 9.2.36。
 >
-> 1. 为什么去掉 `godbg dap` 支持？
->
->    - 也是以--headless模式启动调试器服务端，只是协议编解码逻辑不是使用JSON-RPC，而是使用DAP；
->    - 尽管DAP是VSCode等IDE与调试器进行集成的一个流行的协议，但是它并不是调试器核心逻辑，我们知道它的用途即可；
-> 2. 为什么去掉 `godbg tracepoint` 的ebpf-based实现？
->
->    - ebpf-based tracing这部分细节非常多，介绍Linux ebpf子系统、ebpf程序编写会花非常多篇幅；
->    - breakpoint-based tracing在内容上更紧凑，也可以实现tracing能力，尽管它性能比较差；
->    - 我们在扩展阅读部分提到了 ebpf-based tracing工具 [go-ftrace] 的设计实现，读者可以在这里了解更多；
-> 3. 为什么去掉对禁用ASLR的支持？
->
->    - 这个之前我们介绍过ASLR是什么；
->    - 大家了解它对程序加载、程序调试（特别是保存会话并进行自动化调试）的影响即可。
-> 4. 为什么去掉 `godbg --backend` 的实现？
->
->    - 支持不同backend实现涉及到gdbserial支持，以及与gdb、mozillar rr对接，代码量大、介绍起来篇幅大；
->    - 支持lldb和支持gdb类似，而且我们对dlv项目已经裁剪到只支持linux/amd64，保留macOS lldb支持没意义；
->    - 先让大家掌握linux/amd64下的native backend实现，才是本书重点，我们会在扩展部分介绍如何进行这方面的扩展；
->
-> 通过这里的部分裁剪，我们保留了符号级调试器的核心设计实现，而且篇幅也不会拉的很长，比较适合读者朋友学习。
+> 类型转换也按「不支持」处理：`pkg/proc/eval.go` 顶部注释和 `docs/FEATURE-MATRIX.md` §4 曾把类型转换列为支持，但 `print int(i)` 实测报 `function calls not supported (教学版能力边界)`；以代码和实测为准，这一项记为 ❌（文档订正另见 storyboard §7）。
 
-### 支持常见调试操作
+#### 线程与 goroutine
 
-#### 执行相关操作
+| 命令 | 别名 | 状态 | 说明 | 代码定位 |
+| --- | --- | --- | --- | --- |
+| `goroutines` | `grs` | ✅ | 列出全部 goroutine（goid、状态、入口） | `cmd/debug/goroutines.go`、`pkg/proc/goroutines.go` |
+| `goroutine` | `gr` | ⚠️ | 选中/切换 goroutine 作为调试上下文；跨 M 运行中的 goroutine 有限制 | `cmd/debug/goroutine.go` |
+| `threads` | — | ✅ | 列出全部线程（tid、PC、位置，`*` 标当前事件线程） | `cmd/debug/threads.go` |
+| `thread` | `tr` | ✅ | 切换调试上下文到指定线程；`thread -r` 复位 | `cmd/debug/thread.go` |
 
-| 命令             | 别名 | 描述                                                         | 是否实现 | dlv是否实现 |
-| ---------------- | ---- | :----------------------------------------------------------- | -------- | ----------- |
-| call             | -    | Resumes process, injecting a function call.                  | Y        | Y           |
-| continue         | c    | Run until breakpoint or program termination.                 | Y        | Y           |
-| next             | n    | Step over to next source line.                               | Y        | Y           |
-| restart          | r    | Restart process.                                             | Y        | Y           |
-| step             | s    | Single step through program.                                 | Y        | Y           |
-| step-instruction | si   | Single step a single cpu instruction.                        | Y        | Y           |
-| stepout          | so   | Step out of the current function.                            | Y        | Y           |
-| rewind           |      | Run backwards until breakpoint or start of recorded history. | N        | Y           |
-| checkpoints      |      | Print out info for existing checkpoints.                     | N        | Y           |
-| rev              |      | 类似gdb rnext, rstep...改变next、step、continue的direction   | N        | Y           |
+#### 调用栈
 
-> ps: 描述下这里不支持 rewind、checkpoints、rev 操作的原因？
->
-> mozilla rr，使得一次录制后就可以稳定重放调试过程、确定性地进行调试，方便我们定位到故障源头，移除它的原因主要有：
->
-> 1) 尽管在此基础上构建起确定性调试很美好，但是设计实现也会让调试器本身变得很复杂；
->    - 通过gdbserial与rr通信；
->    - 必要时与rr进行交互改变程序执行方向；
->    - 代码实现上要补充大量正向执行、反向执行的控制逻辑；
-> 2) rev改变程序执行方向的操作（影响命令next/step的方向），以及continue的反向版本rewind，这些功能的实现依赖rr backend；
-> 3) checkpoints的功能实现也依赖rr；
->
-> 我们会在扩展阅读部分介绍 mozilla rr 的录制、重放原理，以及如何集成它，但是我们不会在 demo tinydbg 中保留这部分实现逻辑。
+| 命令 | 别名 | 状态 | 说明 | 代码定位 |
+| --- | --- | --- | --- | --- |
+| `backtrace` | `bt` | ✅ | 按 `.debug_frame` CFI 逐帧回溯 | `cmd/debug/backtrace.go`、`pkg/proc/backtrace.go` |
+| `bt` / `stack` | — | 🅿️ | 同名桩；输入 `bt` 会先命中 `backtrace` 的别名，`stack` 则命中桩 | `cmd/debug/bt.go` |
+| `frame` | — | 🅿️ | 桩：选择栈帧未实现 | `cmd/debug/frame.go` |
+| `up` / `down` | — | ❌ | 未实现 | — |
+| `deferred` | — | ❌ | 未实现；defer 相关能力在 9.3 作为扩展方向 | — |
 
-#### 断点相关操作
+> `cmd/debug/bt.go` 里的 `bt` 桩与 `backtrace` 的 `bt` 别名冲突，正常输入 `bt` 会命中 `backtrace`，而 `stack` 会命中桩；这个桩属于待清理代码，详见 `godbgv2/docs/FEATURE-MATRIX.md` §11。
 
-| 命令        | 别名 | 描述                                         | 是否实现 | dlv是否实现 |
-| ----------- | ---- | -------------------------------------------- | -------- | ----------- |
-| break       | b    | Sets a breakpoint.                           | Y        | Y           |
-| breakpoints | bp   | Print out info for active breakpoints.       | Y        | Y           |
-| clear       |      | Deletes breakpoint.                          | Y        | Y           |
-| clearall    |      | Deletes multiple breakpoints.                | Y        | Y           |
-| condition   | cond | Set breakpoint condition.                    | Y        | Y           |
-| on          |      | Executes a command when a breakpoint is hit. | Y        | Y           |
-| toggle      |      | Toggles on or off a breakpoint.              | Y        | Y           |
-| trace       | t    | Set tracepoint.                              | Y        | Y           |
+#### 源码与符号
 
-这些断点相关的操作，是比较常用的核心调试命令，这些操作的实现都会予以保留、介绍。
+| 命令 | 别名 | 状态 | 说明 | 代码定位 |
+| --- | --- | --- | --- | --- |
+| `list` | `ls`、`l` | ✅ | 按当前上下文或 locspec 展示源码，±5 行、`=>` 标当前行 | `cmd/debug/list.go`、`pkg/proc/source.go` |
+| `disass` | `dis`、`disassemble` | ✅ | 反汇编；`--count`、`--syntax`、`--clearall` | `cmd/debug/disass.go`、`pkg/target/disassemble.go` |
+| `funcs` | `fn` | ✅ | 按正则列出函数（名称/入口；`Function` 有声明位置字段，但批量路径未填、命令不打印） | `cmd/debug/funcs.go` |
+| `types` | — | ❌ | 未实现 | — |
+| `libraries` | — | ❌ | 未实现；动态库支持不在本书范围 | — |
+| `sources` | — | ❌ | 未实现 | — |
 
-#### 数据读写操作
+#### 会话与其他
 
-| 命令       | 别名 | 描述                                             | 是否实现 | dlv是否实现 |
-| ---------- | ---- | ------------------------------------------------ | -------- | ----------- |
-| args       |      | Print function arguments.                        | Y        | Y           |
-| display    |      | Disassembler.                                    | Y        | Y           |
-| examinemem | x    | Examine raw memory at the given address.         | Y        | Y           |
-| locals     |      | Print local variables.                           | Y        | Y           |
-| print      | p    | Evaluate an expression.                          | Y        | Y           |
-| regs       |      | Print contents of CPU registers.                 | Y        | Y           |
-| set        |      | Changes the value of a variable.                 | Y        | Y           |
-| vars       |      | Print package variables.                         | Y        | Y           |
-| whatis     |      | Prints type of an expression.                    | Y        | Y           |
-| ptype      |      | Print type details, including fields and methods | Y        | N           |
-
-这些读写寄存器、读写内存、查看实参、查看局部变量、打印变量、查看表达式类型、查看类型细节相关的操作，是调试过程中比较常用的核心调试命令，这些操作的实现我们也会予以保留、介绍。值得一提的是，gdb中的调试操作ptype可以打印一个变量的类型细节信息，dlv中的类似操作是whatis，但是whatis只能打印类型的字段信息，不能打印出类型上定义的方法集，这样的话就不是很方便。
-
-所以我们希望支持一个新的调试命令ptype，这个过程中也可以让读者朋友们活学活用DWARF来进行调试器的功能扩展。
-
-#### 线程协程切换
-
-| 命令       | 别名 | 描述                                    | 是否实现 | dlv是否实现 |
-| ---------- | ---- | --------------------------------------- | -------- | ----------- |
-| goroutine  | gr   | Shows or changes current goroutine      | Y        | Y           |
-| goroutines | grs  | List program goroutines.                | Y        | Y           |
-| thread     | tr   | Switch to the specified thread.         | Y        | Y           |
-| threads    |      | Print out info for every traced thread. | Y        | Y           |
-
-不同编程语言提供的并发编程接口也不同，如C、C++、Java、Rust等提供了面向线程的并发编程接口，而Go不同它提供的是面向协程goroutine的并发编程接口。但是软件调试在支持保护模式的操作系统上，调试的实现本质上是利用了内核提供的能力，比如Linux下基于ptrace操作实现对进程指令、数据的读写控制，实现对进程调度的控制、状态获取等等。Go比较特殊的是它实现了一个面向goroutine的调度系统，俗称GMP调度。P这个虚拟处理器资源上的任务队列（待调度执行的G），最终是由M执行的。G的调度由Go运行时GMP调度器调度，线程M的调度则由内核调度器控制，而调试器就是通过ptrace系统调用来影响内核对目标调试线程的调度，从而实现调试。
-
-所以，对于Go调试器，为了更灵活地控制，需要知道当前有哪些线程 `threads`、有哪些协程 `goroutines`，以及在此基础上实现线程切换 `thread n`、协程切换 `goroutine m`。
-
-#### 调用栈相关操作
-
-| 命令     | 别名 | 描述                                                            | 是否实现 | dlv是否实现 |
-| -------- | ---- | --------------------------------------------------------------- | -------- | ----------- |
-| stack    | bt   | Print stack trace.                                              | Y        | Y           |
-| frame    |      | Set the current frame, or execute command on a different frame. | Y        | Y           |
-| up       |      | Move the current frame up.                                      | Y        | Y           |
-| down     |      | Move the current frame down.                                    | Y        | Y           |
-| deferred |      | Executes command in the context of a deferred call.             | Y        | Y           |
-
-这部分是跟调用栈相关的操作，bt查看调用栈、frame选择栈帧查看栈帧内的参数、变量状态，up、down方便我们在调用栈中移动，本质上和frame操作一样。deferred比较特殊，是面向Go语言defer函数的特别支持，我们一个函数可以有多个defer函数调用，`defer <n>` 可以方便对第n个defer函数添加断点，并且能够在执行到该处时执行特定的命令，如打印locals。
-
-这些对于Go语言来说是比较常用的核心调试命令，我们均保留并予以介绍。
-
-#### 源码相关操作
-
-| 命令        | 别名   | 描述                          | 是否实现 | dlv是否实现 |
-| ----------- | ------ | ----------------------------- | -------- | ----------- |
-| list        | ls / l | Show source code.             | Y        | Y           |
-| disassemble | disass | Disassembler.                 | Y        | Y           |
-| types       |        | Print list of types.          | Y        | Y           |
-| funcs       |        | Print list of functions.      | Y        | Y           |
-| libraries   |        | List loaded dynamic libraries | Y        | Y           |
-
-这部分是跟源代码相关的操作，如查看源码、反汇编源码、查看类型列表、函数列表，以及源码依赖的共享库列表。这部分中list、disassemble是比较常用的操作，是我们重点介绍的对象。types、funcs在我们介绍通过DWARF可以获取什么的用例演示时已经介绍过了。
-
-#### 脚本自动化调试
-
-| 命令    | 别名 | 描述                                                | 是否实现               | dlv是否实现                                 |
-| ------- | ---- | --------------------------------------------------- | ---------------------- | ------------------------------------------- |
-| source  |      | Executes a file containing a list of delve commands | script of dlv commands | script of dlv commands + script of starlark |
-| sources |      | Print list of source files.                         | Y                      | Y                                           |
-
-自动化调试过程中，我们会写好一些调试命令，然后调试会话中source后执行，这个用的可能不多，但是在特定场景下还是有点用处的，我们也需要简单介绍下。
-
-> ps: 为什么移除了source对starlark脚本的支持？
->
-> 1) 自动化调试可以通过编写了dlv commands的普通脚本来执行，这样也拥有了一定的自动化测试能力；
-> 2) 但是1）中方法没有starlark语言脚本灵活，starlark语言类似于python语言，starlark脚本中可以通过starlark binding代码直接调用debugger的内置调试操作。
-> 3) 在2）基础上配合starlark的可编程能力对调试命令的输入、输出的处理，可以玩出更多花样，有更多的可探索的自动化调试空间；
->
-> 我们会介绍Go语言程序中如何集成starlark，但是因为这个功能还不算是特别核心的调试能力，不过在demo tinydbg中，我们保留了两个分支：
->
-> - 分支tinydbg：移除了linux/amd64无关代码，移除了backend gdb、lldb、mozilla rr代码，移除了record&replay、reverse debugging代码，移除了dap代码，……，但是保留了starlark实现，并且在examples目录中提供了一个starlark自动化测试的demo `starlark_demo`。如果您对此感兴趣，可以执行相关的测试；
-> - 分支tinydbg_minimal：在tinydbg分支裁剪现状的基础上，更加激进地进行了裁剪、重构，使得它的功能实现更向本章要介绍的内容靠拢 …… 一切从简，也包括删了starlark脚本支持；
->
-> 您可以按需选择上述分支进行学习、测试，请知悉。
-
-#### 其他一些操作
-
-| 命令    | 别名     | 描述                                               | 是否实现 | dlv是否实现 |
-| ------- | -------- | -------------------------------------------------- | -------- | ----------- |
-| config  |          | Changes configuration parameters.                  | Y        | Y           |
-| dump    |          | Creates a core dump from the current process state | Y        | Y           |
-| edit    | ed       | Open where you are in$DELVE_EDITOR or $EDITOR    | Y        | Y           |
-| rebuild | -        | Rebuild the target executable and restarts it.     | Y        | Y           |
-| exit    | quit / q | Exit the debugger.                                 | Y        | Y           |
-| help    | h        | Prints the help message.                           | Y        | Y           |
-
-这些调试命令涉及到自定义配置、生成核心转储、查看或者修改源码、修改后重新编译，以及查看帮助、退出操作。这里的dump是我们要介绍的，它和core命令息息相关，一个生成、一个读取并调试。edit、rebuild有点亮点，解决了调试时发现问题后切换编辑器窗口编辑修改、再次调试的不便。exit、help就比较常规了。
-
-上述调试命令能力大致是一个现代go符号级调试器所要支持的功能全集，可以达到工程上的应用要求了。如果读者有使用过go-delve/delve，你会发现上面的功能基本上全是go-delve/delve的调试命令？没错，我这里就是罗列了go-delve/delve的调试命令，额外增加了一个受gdb启发的ptype打印类型详情的命令。
-
-> 写这本书的初衷是为了解释如何开发一款符号级调试器，而非为了写一个新的调试器，考虑到调试功能完整度、相关知识的覆盖度、工程的复杂度、个人时间有限等诸多因素，我最终采用了一种非常“开源”的方式，借鉴并裁剪了go-delve/delve中的代码，保留核心功能，删减与linux/amd64无关架构扩展代码，将rr （record and play）、dap（debugger adapter protocol）迁移至额外的阅读章节（可能放在附录页、扩展阅读）中进行介绍。
->
-> 这样作者可以保证在2022年让这本书完成初稿，以尽快与读者以电子书形式见面（纸质的也会考虑）。
+| 命令 | 别名 | 状态 | 说明 | 代码定位 |
+| --- | --- | --- | --- | --- |
+| `exit` | `quit`、`q` | ✅ | 退出调试会话，按启动方式执行清理（kill/detach） | `cmd/debug/exit.go`、`cmd/debug/shell.go` |
+| `help` | `h` | ✅ | 按分组显示命令帮助 | `cmd/debug/shell.go` |
+| `core`（顶层） | — | 🅿️ | 解析后端已有，命令未接线 | `cmd/core.go`、`pkg/proc/core/core.go` |
+| `source` | — | 🚫 | 没有通用 `source`；只有 `--init` 批量回放（测试用） | `cmd/debug/shell.go` 的 `replay()` |
+| `config` / `edit` / `dump` / `rebuild` | — | 🚫 | 本书不做；相关设计见 9.3 | — |
 
 ### 还需要注意什么
 
-做一个产品需要注重用户体验，做一个调试器也一样，需要站在开发者角度考虑如何让开发者用的方便、调试的顺利。我们梳理了这么多需要支持的调试命令，正是关注产品体验的体现。
-
-我们提供了很多的调试命令，功能上是够用的。但是一个基于命令行实现的调试器，调试命令越丰富反而可能更像是负担，因为实现命令输入并不是一件轻松的事情。
-
-我们要特别注意以下几点：
+做一个产品需要注重用户体验，做一个调试器也一样。我们梳理了这么多调试命令，正是关注产品体验的体现。但命令并不是越多越好：基于命令行的调试器，命令太多反而会增加记忆和输入负担。除了功能本身，还要特别注意以下几点：
 
 - 简化命令行输入，尤其是需要连续多次输入的情况；
-- 方便查看命令帮助，相关的命令合理分组，编写精简有用的帮助信息；
-- 方便观测多个变量，如执行期间观察、命中断点时观察、或者执行到某个defer函数时观察；
-- 保证健壮性，调试期间调试器崩溃、导致进程崩溃、发现DWARF数据、Go AST不兼容等等，导致无法顺利完成调试，应尽早发现并抛出问题，避免浪费开发者宝贵的时间。
+- 方便查看命令帮助，相关命令合理分组，编写精简有用的帮助信息；
+- 方便观测多个变量，如执行期间观察、命中断点时观察；
+- 保证健壮性：调试器崩溃、tracee 崩溃、DWARF 数据不兼容等问题应尽早暴露，避免浪费开发者时间。
 
 #### 调试器的易用性
 
 ##### 调试命令众多，需要降低记忆、使用成本
 
-- 首先调试器有很多调试命令，如何记忆这些命令是有一定的学习成本的，而基于命令行的调试器会比基于GUI的调试器学习曲线更陡；
-- 基于命令行的调试器需考虑调试命令输入效率的问题，比如输入命令以及对应的参数。GUI调试器在源码某行处添加一个断点通常是很简单的事情，鼠标点一下即可，但基于命令行的调试器则需要用户显示提供一个源码位置，如"break main.go:15"，或者"break main.main"；
-- 调试器诸多调试命令，需要考虑自动补全命令、自动补全参数，如果支持别名，将会是一个不错的选项。调试器还需要记忆上次刚使用过的调试命令，以方便重复使用，例如频繁地逐语句执行命令序列 <next, next, next>，可以通过命令序列 <next, enter, enter> 代替，回车键默认使用上次的命令，这样对用户来说更方便；
-- 每一个命令、命令参数都应该有明确的help信息，用户可以通过 `help cmd`来方便地查看命令cmd是做什么的，包含哪些选项、各个选项是做什么的。
+- 调试命令有学习成本，命令行调试器比 GUI 调试器曲线更陡；
+- 命令行调试器需要考虑输入效率：GUI 里点一下就能加的断点，命令行需要显式给出位置，如 `break main.go:15`、`break main.main`；
+- 需要命令/参数补全、别名、历史记录。godbgv2 用 cobra + liner 实现了命令名与别名补全、单会话历史、回车重复上一条命令；参数级补全（函数名、变量名）尚未实现；
+- 每个命令、参数都应有 `help` 信息，用户可以通过 `help cmd` 查看用法。
 
-##### 命令行调试器，需要能同时显示多个观测值
+##### 命令行调试器需要能同时显示多个观测值
 
-- 基于命令行的调试器，其UI基于终端的文本模式进行显示，而非图形模式，这意味着它不能像GUI界面一样非常灵活方便地展示多种信息，如同时显示源码、断点、变量、寄存器、调用栈信息等；
-- 但是调试器也需要提供类似的能力，这样用户执行一条调试命令（如next、step）后能观测到多个变量、寄存器的状态。且在这个过程中，用户应该是不需要手动操作的。且多个观测变量、寄存器值的刷新动作耗时要短，要和执行next、step的耗时趋近。
+- 命令行 UI 基于终端文本模式，不能像 GUI 那样同时铺开源码、断点、变量、寄存器、调用栈；
+- 但调试器仍应提供类似能力，让用户执行 `next`/`step` 后能观测到多个变量、寄存器状态，且刷新耗时要短。
 
 #### 调试器的扩展性
 
 ##### 命令、选项的扩展要有良好简洁的支持
 
-- 调试器有多种启动方式，对应多个启动命令，如 `godbg exec <prog>`、`godbg debug <module>`、`godbg attach <pid>`、`godbg core <coredump>`，各自有不同的参数。此外调试器也有多种交互式的调试命令，如 `break <locspec>`、`break <locspec> cond <expression>`等，各自也有不同的参数。如何可扩展地管理这些命令及其选项是需要仔细考虑的；
-- 命令的选项，尽量遵循GNU/POSIX选项风格，这更符合大家的使用习惯，且选项在可以消除歧义的情况下尽量同时支持长选项、短选项，给开发输入时提供更多的便利；
+- 调试器有多种启动方式，对应多个启动命令（`exec`、`debug`、`attach`、`core`、`connect`），各有不同参数；会话内又有 `break`、`condition`、`trace` 等命令。如何可扩展地管理这些命令及选项，需要仔细考虑；
+- 选项尽量遵循 GNU/POSIX 风格，在消除歧义的前提下同时支持长选项、短选项。
 
-##### 调试器应满足个性化定义以满足不同调试习惯
+##### 调试器应满足个性化定义
 
-- 好的产品塑造用户习惯，但是更好的习惯应该只有用户自己知道，一个可配置化的调试器是比较合适的，如允许用户自定义命令的别名信息，等等；
+- 允许用户自定义命令别名、配置输出格式等，是提升体验的方向；godbgv2 目前只支持 liner 的内存历史与命令补全，没有配置文件系统（见 9.3.107）。
 
-##### 跨平台、支持不同调试后端、支持与IDE集成
+##### 跨平台、支持不同调试后端、支持与 IDE 集成
 
-- 调试器本身，可能需要考虑未来的应用情况，其是否具备足够的适应性以在各种应用场景中使用，如能否在GoLand、VSCode等IDE中使用，或者可能的远程调试场景等。这些也对调试器本身的软件架构设计提出了要求；
-- 应该考虑将来扩展到darwin/windows以及powerpc、i386等不同的系统、平台上，在软件设计时应提供必要的抽象设计，将抽象、实现分离；
-- 调试器实现不是万能的，存在这样的场景我们需要借助其他调试器实现，来完成某种功能，原因可能是我们的实现不支持被调试程序所在的系统、平台，或者其他调试器实现方法更优，举个例子，Mozillar rr（record and replay），记录重放的实现比较复杂，gdb、lldb、dlv的逆向调试基本上都是在rr基础上构建的。这就要求调试器要实现前后端分离式架构，而且后端部分接口与实现要分离，满足可替换，如能轻松地从dlv切换成Mozillar rr；
+- 需要考虑将来扩展到 Darwin/Windows、arm64 等平台，设计时应做必要的抽象；
+- 需要考虑与 GoLand、VSCode 等 IDE 集成，或远程调试场景；
+- 某些能力可以借助其他调试器实现（如 Mozilla rr 的录制重放、反向调试），这要求前后端分离且后端接口可替换。godbgv2 目前只有 native backend，`--backend`/rr 都是扩展方向，见 9.3.110。
 
 #### 调试器的健壮性
 
-- 调试器本身是依赖于一些操作系统能力的支持的，如Linux ptrace系统调用的支持，该系统调用的使用是有些约束条件的，比如ptrace_attach之后的tracee后续接收到的ptrace requests必须来自同一个tracer。还有syscall.Wait系统调用时Linux平台的一些特殊情况…这类情况有不少，调试器应该考虑到这些情况做兼容处理；
-- go调试器也依赖go编译工具链生成的一些调试信息，不同的go版本编译出的产物数据类型表示上、信号处理方面会有差异，调试器实现时应该考虑到这些情况做必要的处理，尽可能做到健壮。比如可以限制当前支持的go工具链版本，如果编译产物对应的go版本不匹配就放弃调试；
+- 调试器依赖操作系统能力（如 Linux ptrace），ptrace attach 后的 tracee 后续 ptrace 请求必须来自同一个 tracer；`wait4` 等系统调用还有平台特殊性，调试器应做兼容处理；
+- Go 调试器依赖 Go 工具链生成的调试信息，不同 Go 版本的 DWARF 表示、信号处理可能有差异，应限制支持的 Go 版本或在版本不匹配时明确报错。
 
-非功能性需求很多，我们从易用性，到命令管理的可维护性，到选型的规范性，到如何扩展到不同的操作系统、硬件平台、调试器后端实现，自身的健壮性等方面进行了描述。除了调试功能本身，这也是影响一个调试器能否被大家接受的很重要的因素。
+非功能性需求很多，从易用性、命令管理的可维护性、选型规范性，到跨平台/多 backend 扩展、自身健壮性，都会影响一个调试器能否被接受。
 
 ### 本节小结
 
-本节实际上是对接下来的go符号级调试器demo tinydbg的功能型需求、非功能性需求进行了详细的一个分析，这个就是我们的一个目标了。OK，接下来我们进入这些调试命令的设计实现部分，Let's Go !!!
-
-ps: 本节中仍然接着指令级调试章节内容，将调试器命名为godbg，为了方便读者对指令级调试器demo、符号级调试器demo进行独立测试，我们后续的指令级调试器go module修改为tinydbg（而tinydbg裁剪自go-delve/delve）。这样读者可以方便地安装这两个调试器进行测试。
+本节是对第 9 章符号级调试器 godbgv2 的功能型需求与非功能性需求的总体分析：哪些命令已经可用、哪些只是桩、哪些是本书有意不做。后面的小节会按 tag 逐个展开实现，读者可以把本节当作「能力地图」，也可以把 `godbgv2/docs/FEATURE-MATRIX.md` 当作更细的对照表。接下来进入具体命令的设计实现，Let's Go！
