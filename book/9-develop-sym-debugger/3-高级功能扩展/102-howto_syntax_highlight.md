@@ -1,10 +1,21 @@
 ## 语法高亮
 
+> **状态**：godbgv2 未实现（❌）。本节为扩展阅读，设计思路可迁移，代码不并入本仓。
+> 能力状态以 `godbgv2/docs/FEATURE-MATRIX.md` 为准。
+
+> **代码出处与净室声明**
+>
+> - 本节讲解的设计与代码来自 [go-delve/delve](https://github.com/go-delve/delve) 的 `pkg/terminal/colorize`（MIT 许可）。这里把它当作“用 `go/ast` 给终端输出上色”的教学示例，**不并入 godbgv2**，也不代表本书实现过该功能。
+> - godbgv2 当前**没有**语法高亮：`pkg/terminal` 只有 `TabWriter`、`Printf`、`Errorf` 三个输出辅助（`pkg/terminal/print.go`），没有 colorize、没有分页、没有 transcript，也没有 `pkg/config`。`pkg/terminal/doc.go` 里“分页、语法高亮、会话转录”的注释是超前声明，`godbgv2/docs/FEATURE-MATRIX.md` §11③ 已记录。
+> - 下面的三个文件是 delve 某一历史版本的快照（当时的 `Print` 自己读文件），为可读性与可编译性做了最小修正，**未在 godbgv2 仓库内验证**；修正点逐条列在“示意：运行测试”一节。
+
 软件开发过程中对源代码进行语法高亮是非常有必要的，通过这种方式可以将程序中不同的要素进行有效地区分，如关键字、保留字、标识符、括号匹配、注释、字符串等等。开发人员使用的IDE一般都支持语法高亮，在vscode中通过gopls机制可以识别每个token所属的类别以及配合颜色主题便可以实现语法高亮，像vim、sublime等的编辑器也可以通过插件对不同编程语言的源代码进行语法高亮支持。
 
 在我们使用调试器进行调试时，也经常需要查看源码，比如：1）使用list命令主动查看源码，`list main.main` or `list main.go:20` 以方便查看查看源码，或进一步确定要添加下个断点的位置；2）在逐语句 `next` 、逐指令知识 `step` 时，我们还希望展示当前已经执行到的源码位置、指令位置；3）在跟踪调用栈 `bt` 时，希望展示当前的函数调用栈 …… 这些时候如果能够对特定的源码位置的函数调用、语句、表达式、操作数、运算符、变量名、类型名等进行语法高亮显示，无疑会让可读性更好一点。
 
 这个小节我们就来介绍下如何做到这点。
+
+先交代一下现状，免得读者误以为本书已经做到了：godbgv2 的 `list` 输出的是纯文本——`=>` 箭头、行号、`\t`，后面直接跟源码（`cmd/debug/list.go`），没有任何颜色转义。下面讲的 colorize，就是给这条链路补上颜色的一种做法。
 
 ### 如何实现
 
@@ -20,7 +31,7 @@
 - colorize.go，负责读取源文件并对其进行AST分析，将其中我们要高亮的一些程序构造提取出来，如关键字package、var、func等作为token提取出来，并构造一个colorTok（包含了token本身位置信息、属于哪一类别，这里的类别决定了最终的颜色风格）；
 - style.go，即高亮显示风格，不同类别对应着不同的终端颜色；
 
-下面就是具体的源码实现了，其实这里的源码源自go-delve/delve，我在编写debugger101相关的demo时发现了go-delve/delve中存在的bug，并对其进行了修复，这里也算是简单记录分享一下吧。同学们真正有机会去尝试这个的也不多。
+需要再次强调：下面这三个文件是 **delve 的实现**（`pkg/terminal/colorize`），把它们放在一节里，是为了让读者看清“AST → token → 着色 → 按行输出”这条主线；它们不随本书演进，也不并入 godbgv2。delve 后来的版本把入口改成了 `Print(out, path, reader, startLine, endLine, arrowLine, colorEscapes, altTabStr)`——由调用方传入 `io.Reader`，并增加了 `TabStyle` 与制表符替换。本书保留的是更早的形态（`Print` 自己 `ioutil.ReadFile`），因为它更短，也更容易和 `list` 的行号窗口对上。
 
 #### file: colorize.go
 
@@ -40,7 +51,6 @@ import (
 	"go/token"
 	"io"
 	"io/ioutil"
-	"path/filepath"
 	"reflect"
 	"sort"
 )
@@ -48,7 +58,7 @@ import (
 // Print prints to out a syntax highlighted version of the text read from
 // path, between lines startLine and endLine.
 func Print(out io.Writer, path string, startLine, endLine, arrowLine int, colorEscapes map[Style]string) error {
-    buf, err := ioutil.ReadFile(path)
+	buf, err := ioutil.ReadFile(path)
 	if err != nil {
 		return err
 	}
@@ -180,7 +190,6 @@ func Print(out io.Writer, path string, startLine, endLine, arrowLine int, colorE
 
 	return nil
 }
-
 ```
 
 #### file: style.go
@@ -347,9 +356,22 @@ func (w *lineWriter) Write(style Style, data []byte, last bool) {
 }
 ```
 
-### 运行测试
+### 示意：运行测试（代码来自 delve，未在本仓验证）
 
-下面是测试文件，我们定义了一个表示源码内容的字符串，并通过gomonkey mock掉了ioutil.ReadFile(...)的操作让其返回定义的源码字符串，然后执行colorize.Print(...)对其进行高亮显示。
+原作者用一个测试文件验证过 colorize：把待高亮的源码放进字符串，用 gomonkey 把 `ioutil.ReadFile` 换成返回这段字符串，再调用 `colorize.Print` 看输出。
+
+这个思路可以照搬，但原样例有三处硬伤（读者在 issue #68 里指出），先逐条说明修正，再给代码：
+
+1. **`colorize.Print` 的实参个数与签名不一致**。本节的签名是 `Print(out, path, startLine, endLine, arrowLine, colorEscapes)`，6 个参数，函数内部自己读文件；而样例按 delve 后期的形态写成了 `Print(buf, "main.go", bytes.NewBufferString(src), 1, 30, 10, colors)`，多传了一个 `bytes.NewBufferString(src)`——那个参数属于“由调用方传入 `io.Reader`”的版本。这里按 6 参数调用。
+2. **测试文件用了 `os.Stdout` 却没有 `import "os"`，同时 `reflect` 引入后没有使用**。补 `os`、删 `reflect`。
+3. **`colorize.go` 里的 `path/filepath` 引入未使用**（上游在 `Print` 开头有一段 `.go` 后缀判断，本节这份快照没有保留那段）。删掉这个 import。
+
+还有两点需要读者心里有数：
+
+- 这个测试只做冒烟——它调用一次 `Print`，**没有断言输出内容**；上游 delve 的版本会逐字节比对期望输出。
+- gomonkey 靠运行期改写函数入口工作，一般要加 `-gcflags=all=-l` 关掉内联，不同 Go 版本上行为并不一致；不想引 gomonkey 的话，也可以把 `src` 写进临时文件，让 `Print` 自己 `ioutil.ReadFile` 读——这正是本节这个签名的工作方式。
+
+本节没有在 godbgv2 仓库里创建这个包，也没有执行过 `go test`，因此**不对运行结果作任何保证**。可以确定的范围只有：下面包内三个文件（`colorize.go`、`style.go`、`line_writer.go`）在 go1.26.7 下通过了 `go build` 与 `go vet`；测试文件因为依赖 gomonkey，未做同样的检查。另外它 import 的是 `github.com/go-delve/delve/pkg/terminal/colorize`（delve 的路径）；若要在本地复现，把三个文件和测试放进任意模块的 `pkg/terminal/colorize/` 下，再把 import 改成你自己的模块路径即可。
 
 file: colorize_test.go
 
@@ -360,12 +382,12 @@ import (
 	"bytes"
 	"fmt"
 	"io/ioutil"
-	"reflect"
+	"os"
 	"testing"
 
 	"github.com/agiledragon/gomonkey/v2"
 
-	"github.com/hitzhangjie/dlv/pkg/terminal/colorize"
+	"github.com/go-delve/delve/pkg/terminal/colorize"
 )
 
 var src = `package main
@@ -433,26 +455,33 @@ func TestPrint(t *testing.T) {
 	defer p.Reset()
 
 	buf := &bytes.Buffer{}
-	colorize.Print(buf, "main.go", bytes.NewBufferString(src), 1, 30, 10, colors)
+	colorize.Print(buf, "main.go", 1, 30, 10, colors)
 
-	colorize.Print(os.Stdout, "main.go", bytes.NewBufferString(src), 1, 30, 10, colors)
+	colorize.Print(os.Stdout, "main.go", 1, 30, 10, colors)
 }
-
 ```
 
-现在运行这个测试用例 `go test -run TestPrint`，程序运行结果如下：
+原作者博客里给出的运行效果如下（2022 年，delve 版 colorize；本节未复现，仅作示意）：
 
 <img alt="highlight" src="https://www.hitzhangjie.pro/blog/assets/2022-02-09-%E5%A6%82%E4%BD%95%E5%AE%9E%E7%8E%B0%E6%BA%90%E4%BB%A3%E7%A0%81%E8%AF%AD%E6%B3%95%E9%AB%98%E4%BA%AE/highlight.png" class="myimg"/>
 
-我们看到程序中的部分程序元素被高亮显示了，当然我们只识别了简单的一小部分，关键字、字符串、注释，实际IDE中会分析的更加的细致，大家在使用IDE的时候应该也都有这方面的体会。
+从截图中能看到关键字、字符串、注释、行号、箭头分别被着色；实现只覆盖了简单的一小部分程序构造，实际IDE中会分析的更加细致，大家在使用IDE的时候应该也都有这方面的体会。
+
+### 若要移植到 godbgv2（设计讨论，未实现）
+
+- **颜色表放输出层**。godbgv2 的架构铁律是“`cmd/` 之外的包不得打印”（`pkg/terminal/doc.go`），所以转义序列、颜色常量应集中在 `pkg/terminal`，业务侧只传“这一行/这一段属于哪个类别”，不要把 ANSI 码散落到 `cmd/debug/list.go`。
+- **复用现有版式**。`cmd/debug/list.go` 现在是 `=> %4d:\t%s`，而 colorize 的 `lineWriter` 恰好也是“箭头 + `%4d:` + `\t` + 行内容”这一套；移植时直接把这十来行写入逻辑换成带 style 的版本，输出格式可以保持不变。
+- **解析整文件，只写出窗口**。这一段容易想反：`list` 一次只显示十几行，但 `Print` 必须对整个文件做 AST 分析——token 的偏移是相对整个文件算的，只解析窗口附近会算错位置；靠 `lineWriter.lineRange` 决定哪些行真正写到终端。
+- **开关与降级**。非 TTY、`NO_COLOR`、`TERM=dumb` 时应直接输出纯文本；colorize 在 `parser.ParseFile` 失败时也是这么降级的（`w.Write(NormalStyle, buf, true)`）。否则重定向到日志文件时会把一堆转义序列写进去。
 
 ### 本节小结
 
-本文简单总结了如何基于go ast对源代码进行语法分析并进行高亮显示，希望读者能了解到这里的知识点，并能认识到编译原理的相关知识真的是可以用来做些有价值、有意思的东西的。再比如，我们实现一些linters对源码进行检查（如golangci-linter），作者之前还写过一篇文章是讲述如何对go程序进行可视化，有些IDE还支持自动生成classgram、callgraph等等，这些也是对go ast的另一种应用。
+本节以 delve 的 colorize 为例，说明了如何基于go ast对源代码进行语法分析并进行高亮显示：先用 `ast.Inspect` 走一遍语法树，把关键字、字面量、注释的位置收集成 token 列表，再按位置把源码切片、分段着色，最后由 `lineWriter` 按行输出并对齐行号与箭头。希望读者能借这个例子体会到，编译原理的相关知识真的可以用来做些有价值、有意思的东西——实现 linters（如 golangci-lint）、生成调用图/类图、做源码可视化，都是 `go/ast` 的另一种用法。
 
-新的一年与大家共勉，做有追求的工程师，知其然知其所以然 :)
+需要再次提醒的是：这段代码属于 delve（MIT），本节只借它讲原理，不并入 godbgv2；godbgv2 目前既没有颜色，也没有分页和 transcript，能力状态请以 `godbgv2/docs/FEATURE-MATRIX.md` 为准。
 
 ### 参考文献
 
 1. [如何实现源代码语法高亮](https://www.hitzhangjie.pro/blog/2022-02-09-%E5%A6%82%E4%BD%95%E5%AE%9E%E7%8E%B0%E6%BA%90%E4%BB%A3%E7%A0%81%E8%AF%AD%E6%B3%95%E9%AB%98%E4%BA%AE/)
 2. [语法高亮实现pkg/colorize](https://github.com/go-delve/delve/tree/master/pkg/terminal/colorize)
+3. [go-delve/delve 许可证（MIT）](https://github.com/go-delve/delve/blob/master/LICENSE)
