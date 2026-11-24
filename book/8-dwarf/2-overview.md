@@ -155,6 +155,14 @@ AST 里没有地址，因为那会儿还没有地址可填；DIE 是编译、链
 
 所以 DIE 之间除了父子关系，还有这种跨节点的引用。读 DWARF 的代码，基本就是两件事：顺着树往下走，遇到引用跳到另一个 DIE。
 
+**这些类型都记在 `runtime` 名下。** 顺着 `0x9ad1e` 跳过去，落在一个长度 `0x2509b` 的编译单元里：`DW_AT_name: runtime`，5876 个 DIE，其中 `structure_type` 735 个、`typedef` 584 个、`pointer_type` 550 个，而 `subprogram` 只有 1 个。`main.Greeter` 的两个 DIE（`0xb8669` 的 typedef、`0xb8644` 的 structure_type）也在这里，离那个只有 `0x10c` 字节的 `main` 编译单元很远。
+
+这是链接器的做法，不是编译器的：`cmd/link` 把所有类型 DIE 攒进一棵全局树（`var dwtypes dwarf.DWDie`），收尾时 `movetomodule(ctxt, &dwtypes)` 把整棵树接到 `ctxt.runtimeCU` 下面，而这个字段的注释只有一句——"One of the runtime CUs, the last one seen"。挑一个现成的 CU 当容器而已，没有语义考量。这套写法是从 C 版链接器原样搬过来的，那边同样是 `movetomodule(&dwtypes)`。
+
+后果是 **CU 名不能当包归属看**：按编译单元分组的工具会把整个程序的类型都算到 `runtime` 头上，那个 CU 自己的 `DW_AT_low_pc`、`DW_AT_ranges` 也和内容对不上。
+
+**往哪改。** 正路是让类型 DIE 由编译器生成：静态链接时每个编译单元只生成本单元定义的类型，类型自然回到自己的包里；动态链接时每个编译单元生成全量，顺带解决 `-linkshared` 下动态库没法调试的问题。这项工作在 [golang/go#52209](https://github.com/golang/go/issues/52209)，2022 年就开了，原型和一系列 CL 都有，但一直没合入，类型仍由链接器生成。在它落地之前，一个成本很低的部分改进是给类型区单独开一个编译单元（名字如 `dwtypes`、不带 `DW_AT_low_pc`），而不是挂在某个真实包的 CU 下面。
+
 ### 一棵树，几张表
 
 DIE 树能回答：程序里有哪些编译单元、函数、变量、类型，它们怎么嵌套，每个名字在哪个地址区间有效、运行时到哪里去取。但调试器还要回答两个问题，这棵树答不了：
