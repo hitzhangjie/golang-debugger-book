@@ -1,6 +1,6 @@
 > 阅读提示：本节是本章最深入链接器、也最枯燥乏味的一节，第一遍可以只记住两句话：链接时地址不等于运行时地址；动态链接器在加载时还要做一次重定位。等第9章遇到 PIE、cgo、plugin，或者想搞清楚 `.rela.dyn`/`.rela.plt` 时，再回来细读。
 >
-> 另外，调试器读取 DWARF 时还会遇到一种 reader-side relocation（如 `debug/elf` 的 `applyRelocations`）：它修正的是 `.debug_*` 数据内部的偏移和地址，只在读取非 `ET_EXEC` 文件时触发，和这里链接器对代码/数据的重定位不是同一层；8.8 介绍 `debug/elf` 读 DWARF 时会再看到它。
+> 另外，调试器读取 DWARF 时还会遇到一种 reader-side relocation（如 `debug/elf` 的 `applyRelocations`）：它修正的是 `.debug_*` 数据内部的偏移和地址，常见于未链接的 `.o`；Go 的 `debug/elf` 对 `ET_EXEC` 会直接跳过，和这里链接器对代码/数据的重定位不是同一层。8.8 介绍 `debug/elf` 读 DWARF 时会再看到它。
 
 ## 符号解析 & 重定位
 
