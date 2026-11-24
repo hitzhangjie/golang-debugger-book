@@ -1,265 +1,257 @@
-## Trace
+## Trace：跟踪点后端
 
 ### 实现目标
 
-trace命令用于对go进程中的特定函数调用进行跟踪，适合性能分析、异常检测和安全审计等场景。
+`trace` 用来回答一个问题：某个函数到底被调用了没有、什么时候被调用。在 godbgv2 里它不是一个独立的顶层命令，而是调试会话里的一条断点族命令——顶层根本没有 `trace`：
 
-本节介绍 `trace` 命令的实现，它能够对某个package下的函数名匹配regexp的函数进行跟踪，并且支持对函数体内fanout出去的函数调用自动进行跟踪。在某些场景下希望检查特定函数是否有被执行、执行代码路径如何以及执行耗时如何，trace命令就会非常有用。
-
-```bash
-$ tinydbg help trace
-Trace program execution.
-
-The trace sub command will set a tracepoint on every function matching the
-provided regular expression and output information when tracepoint is hit.  This
-is useful if you do not want to begin an entire debug session, but merely want
-to know what functions your process is executing.
-
-The output of the trace sub command is printed to stderr, so if you would like to
-only see the output of the trace operations you can redirect stdout.
-
-Usage:
-  tinydbg trace <regexp> [flags]
-
-Flags:
-  -e, --exec string        Binary file to exec and trace.
-      --follow-calls int   Trace all children of the function to the required depth.
-  -h, --help               help for trace
-  -p, --pid int            Pid to attach to.
-  -s, --stack int          Show stack trace with given depth.
-      --timestamp          Show timestamp in the output.
-
-Global Flags:
-      --disable-aslr           Disables address space randomization
-      --log                    Enable debugging server logging.
-      --log-dest string        Writes logs to the specified file or file descriptor (see 'dlv help log').
-      --log-output string      Comma separated list of components that should produce debug output (see 'dlv help log')
-  -r, --redirect stringArray   Specifies redirect rules for target process (see 'dlv help redirect')
-      --wd string              Working directory for running the program.
+```text
+$ godbg help trace
+Unknown help topic [`trace`]
 ```
 
-和dlv相比，我们移除了对package、源文件进行构建并测试的功能，仅保留核心功能逻辑，下面介绍下仍支持的选项：
+顶层 `godbg` 的子命令只有 `attach/connect/core/debug/exec` 这一族（外加 `completion`/`help`/`version`）；`trace` 注册在会话内的根命令 `debugRootCmd` 上（`cmd/debug/trace.go:48-50`），必须先 `godbg exec`/`attach`/`debug` 进入会话才能用。会话内 `help trace` 只列出 `trace <regexp>` 和一个 `-h`，没有别的 flag；命令只接受一个位置参数（匹配函数名的正则），别名 `t`。
 
-- --pid，跟踪已经在运行的进程，不能搭配--disable-aslr使用
-- --exec，启动并跟踪一个可执行程序，可配合--disable-aslr使用
-- --follow-calls，跟踪函数调用时限制函数体fanout函数调用的深度
-- --stack，trace命令在regexp匹配的各个函数名的入口地址、返回地址都设置了断点，每次执行到这里时，打印堆栈
+> 历史说明：本书初版这一节写的是 tinydbg 的顶层 `trace` 命令——自带启动/附加参数、逐函数 fanout、返回地址断点、耗时与栈打印。godbgv2 没有沿用这套设计。
+
+本节只讲后端：正则如何变成跟踪点（`pkg/proc/trace.go`），以及命中跟踪点后进程为什么不停下来（`cmd/debug/continue.go`）。命令形态、输出格式与使用取舍放在 9.2.25。
 
 ### 基础知识
 
-对函数调用进行跟踪，有两种实现思路:
+跟踪点（tracepoint）本质上是断点：在函数入口把指令首字节改成 `int3`（0xCC），执行到那里时进程收到 SIGTRAP 停下。和用户断点的唯一区别是"停下之后怎么办"：
 
-- breakpoint-based：通过ptrace系统调用跟踪进程后，在目的函数地址处添加断点，恢复执行，等到命中断点后ptracer可读取函数参数信息、计算调用栈信息--stack，也可以在函数返回地址处添加断点，这样就可以函数进入、从函数返回时的时间戳来计算函数执行耗时--timestamp。
-- ebpf-based：通过编写在要跟踪的函数地址处添加uprobe，在程序执行到此位置时，触发已经加载的ebpf程序，ebpf程序中收集事件信息，如函数参数信息，用户态程序接收事件并进一步完成统计，如输出调用栈--stack、输出函数执行耗时--timestamp。
+- 用户断点：停下来，把控制权交回命令行，等用户决定 `next`/`step`/`continue`；
+- 跟踪点：打印一行"谁被调用了"，然后立刻恢复执行，用户几乎感觉不到中断。
 
-这两种方案都有一个共同的问题需要解决，那就是：
-1、先通过DWARF调试信息计算出定义了哪些函数，指定的正则表达式将与定义的函数列表进行匹配，匹配到的函数将被作为顶层函数追踪；
-2、其次是分析函数调用栈，这个都需要通过执行到的pc来反推当前调用栈，这个和调试命令 `bt` 实现方案一致，要借助于 Call Frame Information;
-3、再者要分析目标函数的函数体内的函数调用并通过 `--follow-calls=<depth>`控制调用深度，分析有哪些函数调用要借助对源码的AST分析；
+所以实现一条跟踪点只需要三样东西：一份函数清单、一个筛选条件、一套"命中后自动越过"的机制。前两样属于后端，第三样横跨服务层与命令层。godbgv2 的链路如下（括号内是本节要讲的函数）：
 
-OK，trace调试命令，对于前后端分离式的调试器架构，前后端交互流程如下：
+```text
+cmd/debug/trace.go  trace <regexp>
+  └─ api.Client.Trace(pattern)                     契约：pkg/service/api/client.go
+       └─ rpc2.Client.Trace → Debugger.Trace        RPC 与服务层
+            └─ proc.Target.SetTracepoints(pattern)  后端：pkg/proc/trace.go
+                 ├─ regexp.Compile + ListFunctions  候选函数全集
+                 └─ createBreakpoint(fn.Entry, fn.Name, TracepointBreakpoint)
 
-1. 用户在前端输入 `tinydbg trace <regexp> [flags]` 命令。
-2. 调试器后端初始化，如启动executable，或者通过ptrace操作attach目标进程，并等待进程停止；
-3. 调试器前端初始化，初始化client，RPC获取函数定义列表，通过正则筛选匹配的函数，然后：
-   - 如果是基于断点的方案，需要对每个函数的入口地址、返回地址添加断点；
-   - 如果是基于ebpf的方案，需要对每个函数的入口地址、返回地址添加uprobes，并关联对应的ebpf事件信息收集、统计程序；
-4. 
-5. 调试器前端初始化调试会话，如果是基于断点实现，需要执行ptrace、wait程序暂停、设置好断点后，continue让程序恢复执行，并通过RPC从调试器后端不断请求、接受最新的函数跟踪数据，并打印出来显示给用户；
-6. 调试器前端ctrl+c结束时通过RPC通知调试器后端结束对目标进程的跟踪操作，如移除断点 or 移除uprobes、卸载ebpf程序；
+命中：Client.Continue() → StopInfo → checkAutoResume(stop)
+      发现 bp.Tracepoint 后打印 "> <函数名>() <源码位置> (tracepoint)"，
+      再 passOverStop() 还原指令 → PC-- → 单步 → 恢复断点
+```
 
-由于trace的结果数据是源源不断的，理论上更合理的设计应该是上面这样的。但是考虑到tinydbg前后端交互缺少对流式调用的支持，而且执行trace操作时是不需要执行交互式的调试命令的，所以可以直接让调试器后端来输出结果。OK，这样的话，尽管我们还是前后端分离式架构，但具体来说是仅工作在通过net.Pipe通信这种模式下，不支持指定--headless模式下通过net.TCPConn或者net.UnixConn来进行网络通信
+函数清单来自符号层：`ListFunctions` 遍历 DWARF 的 `DW_TAG_subprogram`，得到每个函数的 `Name/Entry/End`，按入口地址升序缓存在 `BinaryInfo` 上（`pkg/proc/funcs.go`，详见 9.2.32/9.2.100）。其中 `Entry` 就是 `DW_AT_low_pc`，这解释了为什么跟踪点只落在函数入口——"一个函数一条符号记录"能表达的只有这个地址。
+
+返回点和参数不是一条记录能表达的：同一个函数有很多调用点，返回地址因此有很多个；参数和返回值要先按 ABI 找到寄存器或栈槽，再按类型解析。做这两件事需要完整的表达式求值栈，代价远超"打印一行"。godbgv2 选择只做最便宜的那件事。
 
 ### 代码实现
 
-下面看下关键的函数执行流程，篇幅原因注意我们只保留了breakpoint-based实现方案，ebpf-based方案我们在 “3-高级功能扩展” 中进行介绍。
+#### 命令层到后端：一条 RPC 完成批量设置
 
-#### 前后端准备阶段
-
-```bash
-main.go:main.main
-    \--> cmds.New(false).Execute()
-            \--> traceCommand.Run()
-                    \--> traceCmd(...)
-                            // serverside
-                            \--> server := rpccommon.NewServer(...)
-                            \--> err := server.Run()
-                                    \--> s.debugger, err = debugger.New(&config, s.config.ProcessArgs)
-                                    \--> forloop
-                                            \--> c, err := s.listener.Accept()
-                                            \--> go s.serveConnection(c)
-                                                    \--> only `continue` will be received, let the ptracee continue
-                                                    \--> forloop with wait4(pid, ....)
-                                                            \--> print func info, including name, args, address, ...
-                            // clientside
-                            \--> client := rpc2.NewClientFromConn(clientConn)
-                            \--> funcs, err := client.ListFunctions(regexp, traceFollowCalls)
-                            \--> for range funcs
-                                    \--> client.CreateBreakpoint(...), create bp at func entry
-                                    \--> client.CreateBreakpoint(...), create bp at func return
-                            \--> cmds := debug.NewDebugCommands(client)
-                            \--> err = cmds.Call("continue", t)
-```
-
-下面看下traceCmd源码：
+**file：cmd/debug/trace.go:26-45（节选）**
 
 ```go
-func traceCmd(cmd *cobra.Command, args []string, conf *config.Config) int {
-    status := func() int {
-        ...
-        var regexp string
-        var processArgs []string
+pattern := args[0]
+if strings.HasPrefix(pattern, "/") && strings.HasSuffix(pattern, "/") && len(pattern) > 1 {
+    pattern = pattern[1 : len(pattern)-1] // 兼容 locspec 的 /regexp/ 定界符
+}
 
-        dbgArgs, targetArgs := splitArgs(cmd, args)
-        ...
-
-        // Make a local in-memory connection that client and server use to communicate
-        listener, clientConn := service.ListenerPipe()
-        ...
-
-        client := rpc2.NewClientFromConn(clientConn)
-        ...
-
-        funcs, err := client.ListFunctions(regexp, traceFollowCalls)
-        if err != nil {
-            fmt.Fprintln(os.Stderr, err)
-            return 1
-        }
-        success := false
-        for i := range funcs {
-            // Fall back to breakpoint based tracing if we get an error.
-            var stackdepth int
-            // Default size of stackdepth to trace function calls and descendants=20
-            stackdepth = traceStackDepth
-            if traceFollowCalls > 0 && stackdepth == 0 {
-                stackdepth = 20
-            }
-            _, err = client.CreateBreakpoint(&api.Breakpoint{
-                FunctionName:     funcs[i],
-                Tracepoint:       true,
-                Line:             -1,
-                Stacktrace:       stackdepth,
-                LoadArgs:         &debug.ShortLoadConfig,
-                TraceFollowCalls: traceFollowCalls,
-                RootFuncName:     regexp,
-            })
-
-            ...
-            // create breakpoint at the return address
-            addrs, err := client.FunctionReturnLocations(funcs[i])
-            if err != nil {
-                fmt.Fprintf(os.Stderr, "unable to set tracepoint on function %s: %#v\n", funcs[i], err)
-                continue
-            }
-            for i := range addrs {
-                _, err = client.CreateBreakpoint(&api.Breakpoint{
-                    Addr:             addrs[i],
-                    TraceReturn:      true,
-                    Stacktrace:       stackdepth,
-                    Line:             -1,
-                    LoadArgs:         &debug.ShortLoadConfig,
-                    TraceFollowCalls: traceFollowCalls,
-                    RootFuncName:     regexp,
-                })
-                ...
-            }
-        }
-        ...
-
-        // set terminal to non-interactive
-        cmds := debug.NewDebugCommands(client)
-        cfg := &config.Config{
-            TraceShowTimestamp: traceShowTimestamp,
-        }
-        t := debug.New(client, cfg)
-        t.SetTraceNonInteractive()
-        t.RedirectTo(os.Stderr)
-        defer t.Close()
-
-        // resume ptracee
-        err = cmds.Call("continue", t)
-        if err != nil {
-            fmt.Fprintln(os.Stderr, err)
-            if !strings.Contains(err.Error(), "exited") {
-                return 1
-            }
-        }
-        return 0
-    }()
-    return status
+tps, err := Client.Trace(pattern) // 一次 RPC 拿回全部跟踪点
+if err != nil {
+    return err
+}
+for _, tp := range tps {
+    fmt.Printf("tracepoint %d set at %s (%#x)\n", tp.ID, tp.Name, tp.Addr)
 }
 ```
 
-关于client.ListFunctions(...)的工作过程，我们在how_listfunctions_work小节进行了详细介绍，感兴趣的读者可以先阅读相关小节了解下。这里我们先不过多介绍。
+命令层没有"循环建断点"的逻辑：正则原样交给后端，拿回结果集再逐条打印。契约是 `Trace(pattern string) ([]Tracepoint, error)`（`pkg/service/api/client.go:104`），结果元素只有三个标量：`Name`（函数名）、`Addr`（函数入口地址）、`ID`（对应断点编号）。RPC 一层只做转接：`rpc2.Client.Trace` 调 `"Debugger.Trace"`，`serverImpl.Trace` 直接转给 `Debugger.Trace`（`pkg/service/rpc2/client.go:176`、`server.go:480`）。十个匹配函数也只走一次 RPC，而不是前端为每个函数各发一次 `CreateBreakpoint`。
 
-#### 函数跟踪结果输出
+#### 服务层：内部类型转契约类型
 
-在breakpoint-based方案下，当ptracee命中断点时，ptracer会执行什么操作呢？执行什么操作，与对该断点的一些“修饰”有关。
-
-
-在函数入口处添加断点的RPC操作如下：
+**file：pkg/service/debugger/debugger.go:177（省略 d.t == nil 的判空）**
 
 ```go
-_, err = client.CreateBreakpoint(&api.Breakpoint{
-	FunctionName:     funcs[i],
-	Tracepoint:       true,
-	Line:             -1,
-	Stacktrace:       stackdepth,
-	LoadArgs:         &debug.ShortLoadConfig,
-	TraceFollowCalls: traceFollowCalls,
-	RootFuncName:     regexp,
-})
+func (d *Debugger) Trace(pattern string) ([]api.Tracepoint, error) {
+	tps, err := d.t.SetTracepoints(pattern)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]api.Tracepoint, len(tps))
+	for i, tp := range tps {
+		out[i] = api.Tracepoint{Name: tp.Fn.Name, Addr: tp.Bp.Addr, ID: tp.Bp.ID}
+	}
+	return out, nil
+}
 ```
 
-在函数返回地址处添加断点的RPC操作如下：
+后端的 `*proc.Tracepoint` 绑定的是 `*Function` 与 `*Breakpoint` 两个内部对象，服务层在这里"翻译"成三个标量，把符号层与断点层挡在契约之外。
+
+#### 后端核心：SetTracepoints
+
+**file：pkg/proc/trace.go**（tag `ch9.2.17` 引入的后端，`kind` 参数由 9.2.25 补齐）
 
 ```go
-_, err = client.CreateBreakpoint(&api.Breakpoint{
-	Addr:             addrs[i],
-	TraceReturn:      true,
-	Stacktrace:       stackdepth,
-	Line:             -1,
-	LoadArgs:         &debug.ShortLoadConfig,
-	TraceFollowCalls: traceFollowCalls,
-	RootFuncName:     regexp,
-})
+// Tracepoint 跟踪点（ch9.2.17）：命中时打印位置后自动恢复执行，
+// 与断点的区别是不中断用户流程
+type Tracepoint struct {
+	Fn *Function
+	Bp *Breakpoint
+}
+
+// SetTracepoints 为名称匹配 pattern（正则）的函数批量设置跟踪点
+// （ch9.2.17 后端）。
+func (t *Target) SetTracepoints(pattern string) ([]*Tracepoint, error) {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid trace pattern %q: %v", pattern, err)
+	}
+
+	fns, err := t.ListFunctions()
+	if err != nil {
+		return nil, err
+	}
+
+	tps := []*Tracepoint{}
+	for _, fn := range fns {
+		if !re.MatchString(fn.Name) {
+			continue
+		}
+		// 跟踪点以 TracepointBreakpoint 类型创建：命中处理时据此
+		// 区分普通断点（打印位置后自动恢复，ch9.2.25）
+		bp, err := t.createBreakpoint(fn.Entry, fn.Name, TracepointBreakpoint)
+		if err != nil {
+			return nil, fmt.Errorf("set tracepoint at %s: %v", fn.Name, err)
+		}
+		tps = append(tps, &Tracepoint{Fn: fn, Bp: bp})
+	}
+	if len(tps) == 0 {
+		return nil, fmt.Errorf("no function matches %q", pattern)
+	}
+	return tps, nil
+}
 ```
 
-注意这两个RPC请求参数的不同：
-- 在函数入口添加断点，指定的是函数名；而在返回地址处添加断点，却需要指定地址，而且这个地址还不止一个，同一个函数会在多处被调用，返回地址自然不止一个；
-- Tracepoint=true, TraceReturn=true，这是和常规断点的不同之处，在tracee命中断点暂停，ptracer根据当前pc-1处断点的这俩标识就可以确定是停在函数入口，还是函数返回地址处
-  - 获取参数：如果是函数入口，就可以根据go函数传参规则，以及DWARF、AST信息，来获取内存数据、参数在target中的类型和源码类型，并进行必要转换；
-  - 计算耗时：如果是函数入口，就可以记录当前进入时间戳ts1，如果是出口就可以记录退出时间戳ts2，ts2-ts1进而就可以计算出耗时信息；
+上面是当前 HEAD 的版本：`createBreakpoint` 比 tag 时多了一个 `kind` 参数。tag `ch9.2.17` 落地时这一行还是 `bp, err := t.CreateBreakpoint(fn.Entry, fn.Name)`——那时 `Breakpoint` 结构里连 `Kind` 字段都还没有，跟踪点与普通断点无从区分；类型位和命中后的自动续跑都是 9.2.25 补上的。
 
-大致如此，在介绍到断点相关细节时，我们会进行进一步介绍，这里先不过多展开，读者先了解核心逻辑即可。
+几个要点：
+
+1. `ListFunctions()` 是**无参**的（`pkg/proc/target.go:46`），返回全部函数；正则过滤在后端做。这和 `funcs` 命令"后端给全量、前端过滤"正好相反（9.2.32），是有意的取舍：trace 本来就要为每个匹配项建断点，往返次数比传输量更值钱。
+2. 匹配对象是 DWARF 里的完整函数名（`main.main`、`runtime.main.func1`），`MatchString` **不锚定**：`trace main` 会同时命中 `main.main` 和 `runtime.main` 一族（实测 4 个）。要精确匹配必须自己写 `^main\.main$`。
+3. 每个匹配函数只建一个断点，地址是 `fn.Entry`，位置描述 `loc` 直接取函数名——所以命中时打印出来的是函数名而不是源码行。
+4. 断点类型是 `TracepointBreakpoint`（`pkg/proc/breakpoints.go:18`），它是位集 `BreakpointKind` 的一位，记录"这条断点是谁创建的"，命中处理完全依赖这一位。
+5. 一个都没匹配上时返回 `no function matches "<pattern>"`，而不是静默成功；正则非法时在 `regexp.Compile` 就报错。也没有数量上限：正则宽到包级，就会给成千上万个函数各打一个 `int3`。
+
+#### 命中恢复：Tracepoint 布尔量与自动续跑
+
+`int3` 命中后进程停下，`Continue` 返回 `StopInfo`。命令层判断"这次停是不是跟踪点"的依据是契约里的一个布尔字段：
+
+**file：pkg/service/debugger/debugger.go:226**
+
+```go
+Tracepoint: bp.Kind&proc.TracepointBreakpoint != 0,
+```
+
+**file：cmd/debug/continue.go:116（省略条件断点分支）**
+
+```go
+func checkAutoResume(stop *api.StopInfo) (bool, error) {
+	bp := findBreakpointAt(stop.PID)
+	if bp == nil {
+		return false, nil
+	}
+
+	// 跟踪点（ch9.2.25）：打印命中信息后总是自动继续
+	if bp.Tracepoint {
+		fmt.Printf("> %s() %s (tracepoint)\n", bp.Loc, bp.Pos)
+		if err := passOverStop(); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	return false, nil
+}
+```
+
+`findBreakpointAt` 读寄存器后用 `PC-1` 反查逻辑断点（int3 执行后 PC 已指向下一条指令），与 target 层 `ThreadStoppedAtBreakpoint` 的判定口径一致。打印用的是 `bp.Loc`（trace 传入的函数名）与 `bp.Pos`（`PCToLine` 算出的 `文件:行号`）。
+
+越过断点复用 `continue` 的既有流程 `passOverBreakpoints`：还原原始指令 → PC 回退 1 → 单步执行那条被覆盖的指令 → 重新打上 `int3`。每一步都是独立的 RPC，由客户端编排——后端并没有"命中跟踪点"这个原子操作，只有断点原语。
+
+`continueRun` 的循环因此长这样：`Continue` → `checkAutoResume` 为真就接着 `Continue`，直到遇到真正的用户断点、条件满足的断点或其他停止事件。跟踪点命中时打出的 `thread N stopped at breakpoint 0x…`、`restored breakpoint at 0x…` 两行就是 `passOverStop` 越点时打印的，属于调试器自身的噪音。
+
+#### 跟踪点撞上用户断点时
+
+`createBreakpoint` 的判重规则是：地址上已有物理断点、且新类型**不能重叠**时，直接复用既有逻辑断点（`pkg/proc/breakpoints.go:71-98`）。而 `canOverlap` 只放行 `NextBreakpoint|StepBreakpoint` 这类步进临时断点（同文件 `:31-33`），`TracepointBreakpoint` 不在其中。于是先 `break main.main` 再 `trace /main.main/`：
+
+```text
+godbg> break main.main
+breakpoint 1 added at 0x4b3940 (…/debuggee/loop/main.go:13)
+godbg> trace /main.main/
+tracepoint 1 set at main.main (0x4b3940)
+godbg> breakpoints
+breakpoint[1] addr:0x4b3940, loc:…/debuggee/loop/main.go:13
+```
+
+`trace` 报告"设置成功"，但断点记录里没有 `, tracepoint` 后缀，命中时也不会自动续跑——它复用了既有用户断点，逻辑语义以先创建者为准。物理指令只有一处，这是重叠策略的必然结果；想要跟踪语义，就别在同一地址上再放用户断点。
+
+### 执行测试
+
+用仓库自带的调试目标 `_fixtures/loop`（每秒打印一次计数）实跑，`--init` 脚本里依次是下面这些命令。先看正则匹配多个函数的效果：
+
+```text
+$ ./godbg exec _fixtures/loop --init trace.txt
+process 1964766 launched, stopped by SIGTRAP
+godbg> trace main.*
+tracepoint 1 set at runtime.main (0x4405e0)
+tracepoint 2 set at runtime.main.func2 (0x440980)
+tracepoint 3 set at runtime.main.func1 (0x46d1e0)
+tracepoint 4 set at main.main (0x4b3940)
+godbg> breakpoints
+breakpoint[1] addr:0x4405e0, loc:…/runtime/proc.go:147, tracepoint
+breakpoint[4] addr:0x4b3940, loc:…/debuggee/loop/main.go:13, tracepoint
+```
+
+上面只列了第 1、4 条，2、3 两条同样带 `, tracepoint`。`main.*` 顺带命中了 `runtime.main` 一族，可见匹配的是完整函数名、且不带锚定。再看命中（换一个只设 `main.main` 的会话，便于观察单次命中）：
+
+```text
+godbg> trace /main.main/
+tracepoint 1 set at main.main (0x4b3940)
+godbg> continue
+> main.main() …/debuggee/loop/main.go:13 (tracepoint)
+thread 1964725 stopped at breakpoint 0x4b3940
+restored breakpoint at 0x4b3940
+thread 1964725 status: stopped: interrupt
+> …/runtime/sys_linux_amd64.s:558 (pc: 0x4788a3)
+stop all threads now
+continue ok
+```
+
+（输出里省略了被调试进程自己打印的 `pid: … loop: N`。）关键在最后几行的顺序：命中跟踪点后 `continue` **没有返回**，程序继续在自己的循环里跑，直到外部 SIGINT 才停下并打印 `status: stopped: interrupt`。这验证了"打印后自动续跑"；紧跟命中行的 `stopped at breakpoint`/`restored breakpoint` 是 `passOverStop` 越点时的输出，不是新的断点。
+
+手敲 `continue` 需要 Ctrl+C 收尾，仓库的 smoke 脚本把这一步自动化了（`testdata/script/ch9.2.25.txt`）：
+
+```bash
+$ ./scripts/smoke.sh ch9.2.25
+smoke: running testdata/script/ch9.2.25.txt
+smoke: all passed
+```
+
+脚本断言：`trace /main.main/` 输出 `tracepoint <id> set at main.main (0x4b3940)`；`breakpoints` 行尾带 `tracepoint`；`continue` 命中后打印 `> main.main() … main.go:13 (tracepoint)`；最后外部 SIGINT 让线程停在 `stopped: interrupt`。错误分支也实测过（cobra 的 Usage 段省略）：`trace /NoSuchFunctionZZZ/` 返回 `Error: no function matches "NoSuchFunctionZZZ"`。
 
 ### 本节小结
 
-trace适合性能分析、异常检测和安全审计等场景，是非常有用的一种调试方法。但是需要注意一下breakpoint-based方案对性能的影响，如果考虑对性能影响最小，应该考虑ebpf-based方案。另外，有些读者也发现trace命令并不能将函数参数给完整打印出来（类似print vars）那样，这是很好理解的，因为这里考虑了对性能的影响。如果要将完整参数打印出来，包括跟踪参数内部的指针解引用，这将会包括非常多的类型解析、内存数据读取操作，程序暂停时间会很明显。
+godbgv2 的 trace 后端只有一个不到 50 行的文件，却把"符号 → 断点 → 自动续跑"这条链路串完了：`SetTracepoints` 把正则变成一批 `int3`，`TracepointBreakpoint` 这一位让命中处可以被识别，`checkAutoResume` 让进程透明地继续。跟踪点不是后端的一个独立概念，它只是断点的一个 kind。
 
-所以trace仅仅支持字符串类型的参数打印，关于这个不能打印参数的问题，也有网友在go-delve/delve讨论区进行了讨论，see: [Can dlv trace print the value of the arguments passed to a function?](https://github.com/go-delve/delve/issues/3586) 。
+能力边界（命令形态与输出细节见 9.2.25）：
 
-根据我的实践经验、心得，我认为即使trace当前不能打印参数，trace命令也仍然很有用。
+| 能力 | godbgv2 |
+|---|---|
+| 入口跟踪点 | 有：`trace <regexp>` 批量设置，别名 `t` |
+| 函数返回点 / 耗时统计 | 无：只有入口，`FunctionReturnLocations` 之类不存在 |
+| 参数 / 返回值打印 | 无：`api.Breakpoint` 只有 `Tracepoint bool`，连字符串参数也不打 |
+| `--follow-calls`（fanout 深度） | 无：没有调用关系分析，正则只匹配函数名 |
+| `--stack`（命中时打印调用栈） | 无：没有帧展开 |
+| eBPF / uprobe | 无：未实现 |
+| 自带目标（启动/附加参数） | 无：必须先在会话内 |
 
-> see: https://github.com/go-delve/delve/issues/3586#issuecomment-2911771133，翻译过来
->
-> 即使trace命令当前不能打印参数，trace命令也仍然很有用，比如，我们想做一些服务负载测试:
->
-> 1) 通常情况下，微服务框架报告的RPC耗时已经足够了，但有时候还不够。
->    - 耗时可能通过time.Duration指标或者Tracing span中的time.Duration来报告
->    - 或者记录在日志文件中
->      但是为了避免压力，报告和日志记录逻辑可能都被禁用了。
->      或者opentelemetry后端不太好用,无法很好地可视化跟踪和span。
-> 2) 可能我们知道特定RPC处理有瓶颈，比如某个函数调用(不是对callee的RPC调用)，
->    但我们不想手动使用golang runtime/trace包创建span，所以性能分析也帮不上忙。
-> 3) 最糟糕的是，我们知道有瓶颈，但不知道是哪个函数调用导致的。
->    而且我们不想修改代码来添加日志。
->    可能CI/CD系统太耗时了，我们不想等它就绪...可能我们要重复多次。
->    ...
->    好吧，我需要一个跟踪工具来报告调用了哪些函数以及耗时多少。而且跟踪不应该给目标进程增加明显的时间开销。在这种情况下，我们不关心是否打印参数。另请参阅:[hitzhangjie/go-ftrace](https://github.com/hitzhangjie/go-ftrace)和[jschwinger233/gofuncgraph](https://github.com/jschwinger233/gofuncgraph)，它们使用基于ebpf的解决方案，就像 `dlv trace`一样。
->
-> - 如果我们不想影响性能，应该使用基于ebpf的解决方案。我们仍然可以打印参数，但有限制，比如我们不解引用结构体字段以避免更多的PTRACE_PEEKDATA...
-> - 如果我们不关心性能影响，可以使用基于断点的解决方案，并添加一些代码来详细打印参数。
->   但正如aarzilli提到的，`trace <id>`和 `on <id> print <args>`可以做到这一点。
+在"做多少"这件事上，delve 的顶层 `dlv trace <regexp>` 给出了另一个极端：它支持 `-e/--exec`、`-p/--pid` 自带目标，`--follow-calls` 按深度展开函数体里的调用，`-s/--stack` 打印调用栈，`--timestamp` 用入口/返回两个断点的时间差算耗时，另外还有实验性的 `--ebpf`。这些能力各自都要一整套配套（AST 或反汇编分析、CFI 栈展开、ABI 与类型解析），godbgv2 一件都没做——这是有意收窄，不是欠债。读者在 9.2.25 看到命令为什么这么"素"时，答案就在这里。
 
-OK，关于trace我们就先介绍到这里，
+最后是一个实践提醒：正则要写窄。`SetTracepoints` 对每个匹配函数都创建一个断点，没有数量上限；在我们的测试环境里，`trace ^fmt\.`（57 个函数）约 0.2 秒完成，而 `trace ^runtime\.`（该二进制里 1893 个函数）长时间不返回。跟踪点适合钉住少数几个热点函数，不适合当包级过滤器用。
