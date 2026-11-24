@@ -116,7 +116,7 @@ readelf --debug-dump=info greet | less
 │  └─<2><1a200>  DW_TAG_variable  DW_AT_name: g
 └─<1><1a21e>  DW_TAG_variable  DW_AT_name: main.greeting  DW_AT_location: DW_OP_addr: 0x57e1b0
 
-（以下两个 DIE 不在 main 这个 CU 里，是上面 g 的 DW_AT_type: <0xb8669> 指过去的地方）
+（这两个 DIE 不在 main 的 CU 里，而在链接器汇总的类型区：0x9a2e9 起、名为 runtime 的那个 CU，上面 g 的 DW_AT_type: <0xb8669> 指到这里）
 <1><b8669>  DW_TAG_typedef  DW_AT_name: main.Greeter  DW_AT_type: <0xb8644>
 └─<2><b8644>  DW_TAG_structure_type  DW_AT_name: main.Greeter  DW_AT_byte_size: 16
    └─<3><b865c>  DW_TAG_member  DW_AT_name: name  DW_AT_data_member_location: 0  DW_AT_type: <0x9ad1e>
