@@ -19,7 +19,7 @@ CPU 只认识指令、寄存器和内存。调试信息是编译器额外写进�
 
 ### stabs：借用符号表的调试信息
 
-“stabs” 是 symbol table strings 的缩写：它不新增调试 section，而是把调试信息编码成特殊格式的字符串，塞进符号表。a.out 没有为调试信息预留位置，这既是 stabs 的起点，也是它的限制——它必须借用符号表，解析规则靠约定，而不是一份独立的标准文档。
+“stabs” 是 symbol table strings 的缩写：它最初不新增调试 section，而是把调试信息编码成特殊格式的字符串，塞进符号表。a.out 没有为调试信息预留位置，这既是 stabs 的起点，也是它的限制——它必须借用符号表，解析规则靠约定，而不是一份独立的标准文档。
 
 stabs 最初很简单，后来 Sun 和 GCC 各自加扩展，GCC 甚至要逆向 Sun 的扩展才能兼容。结果是：能表达的东西越来越多（类型、作用域、行号、宏），方言也越来越多，文档却长期匮乏。它没有正式标准，却因为 GCC、BSD、Solaris 的广泛使用而活了很久；Linux 和 Solaris 都出现过 stabs-in-ELF。直到 DWARF 成熟，GCC 才逐步转向 DWARF：GCC 12 将 stabs 标记为废弃，GCC 13（2023 年 4 月）移除了 `-gstabs`/`-gxcoff`。
 
@@ -27,11 +27,11 @@ stabs 最初很简单，后来 Sun 和 GCC 各自加扩展，GCC 甚至要逆向
 
 COFF（Common Object File Format）是 AT&T 在 Unix System V 中引入的对象文件格式，用来替代能力不足的 a.out；System V Release 3 使用的就是它，之后的 XCOFF（IBM RS/6000）、ECOFF（MIPS、Alpha）都是它的变体。COFF 的主要进步是支持任意命名 section，调试信息因此可以作为独立 section 存放，也可以容纳 stabs 这类外部格式。
 
-但 COFF 自带的调试信息很有限：符号名、地址和行号，缺少对头文件、复杂类型和作用域的描述，设计上也不可扩展。实际实现往往要突破规范、各自加扩展，这也让“Common”名不副实。SVR4 最终用 ELF 取代了 COFF；COFF 在 Unix 世界退居二线，但它的 Windows 分支以 PE-COFF 的形式活了下来。
+但 COFF 自带的调试信息很有限：符号名、地址和行号，缺少对头文件、复杂类型和作用域的描述，设计上也不可扩展。现实中的实现大多会超出原规范、各自加扩展，这也让“Common”名不副实。SVR4 最终用 ELF 取代了 COFF；COFF 在 Unix 世界退居二线，但它的 Windows 分支以 PE-COFF 的形式活了下来。
 
 ### PE-COFF 与 CodeView：Windows 的私有路线
 
-Windows NT 和 Windows 95 之后，PE-COFF 成为 Windows 平台的主流对象和可执行文件格式。PE-COFF 可以携带 COFF 调试数据，也可以携带微软自己的 CodeView（CV）格式。CodeView 最早在 1985 年出现，随后随 Microsoft C 4.0 提供；CV4 规范的修订版标注于 1995 年 12 月。再往后，调试信息更多被拆到独立的 PDB 文件里，PE 中只留一个指向 PDB 的调试目录。
+Windows NT 和 Windows 95 起，PE-COFF 成为 Windows 平台的主流对象和可执行文件格式。PE-COFF 可以携带 COFF 调试数据，也可以携带微软自己的 CodeView（CV）格式。CodeView 最早在 1985 年出现，随后随 Microsoft C 4.0 提供；CV4 规范的修订版标注于 1995 年 12 月。再往后，调试信息更多被拆到独立的 PDB 文件里，PE 中只留一个指向 PDB 的调试目录。
 
 这条路线的问题不在技术能力，而在开放性：格式由微软控制，文档长期不完整，非微软工具链要实现 CodeView/PDB 读写，往往得靠逆向和社区整理。LLVM 的 CodeView/PDB 支持就是这么一点点补出来的。
 
@@ -57,7 +57,7 @@ IEEE-695 由 Microtec Research 和 HP 在 1980 年代末为嵌入式环境联合
 
 ### DWARF 为什么胜出
 
-DWARF 最早由 Bell Labs 为 System V 的 sdb 调试器开发，1992 年由 PLSIG 标准化为 v1.0。它的设计正好对着上面几条：
+DWARF 最早由 Bell Labs 为 System V 的 sdb 调试器开发，1992 年由 PLSIG 标准化为 DWARF v1。它的设计正好对着上面几条：
 
 - **描述程序结构，而不只是符号**：DIE 树用 Tag/Attribute 描述编译单元、类型、变量、函数和作用域，能表达嵌套作用域和复杂类型；行号表负责源码位置，CFI 负责栈帧展开。
 - **可扩展**：新的 Tag、Attribute、Form 可以加进标准，旧解析器遇到不认识的条目可以跳过，不会直接失败。
@@ -65,7 +65,7 @@ DWARF 最早由 Bell Labs 为 System V 的 sdb 调试器开发，1992 年由 PLS
 - **标准化**：DWARF 委员会维护版本化规范，工具链有共同的目标。
 - **生态正循环**：GCC、Clang、Go 等编译器生成 DWARF，GDB、LLDB、Delve 等调试器消费 DWARF。
 
-DWARF 官方 FAQ 对“DWARF 比 stabs 强在哪”的回答很直接：DWARF 是块结构、可扩展的程序描述，能描述不连续作用域、栈结构和栈展开；而 stabs 依赖预定义的符号和类型定义，表达能力受限，也不容易扩展。这段话基本概括了前面那些格式被取代的原因。
+DWARF 官方 FAQ 对“DWARF 比 stabs 强在哪”有一段很直接的回答：DWARF 是块结构、可扩展的程序描述，能描述不连续作用域、栈结构和栈展开；而 stabs 依赖预定义的符号和类型定义，表达能力受限，也不容易扩展。这段话基本概括了前面那些格式被取代的原因。
 
 当然，DWARF 也不是没有代价：调试信息体积大、优化后代码的映射复杂、不同版本和扩展之间存在兼容性问题。这些正是第8章后续要处理的内容。
 
