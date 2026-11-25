@@ -1,672 +1,389 @@
-## Disassemble
+## 从 locspec 到源码：LineToPC 与源码列表
 
-这一节我们先介绍这个命令分组中的第一各命令 `disassemble` 的设计及实现。
+本节由 tag `ch9.2.20`（commit `b605fcf`）追溯。这个提交只动了两个文件、63 行：`pkg/dwarf/line.go` 增加 `LineToPC`（+12），`pkg/proc/source.go` 新增行号表获取、`LineToPC` 封装与源码读取（+51）。**反汇编相关代码一行未改**——`disass` 命令、`pkg/target/disassemble.go`、`x86asm` 解码都是第 6 章 6.6 的交付物。
 
-```bash
-(tinydbg) help
-...
-Viewing source and disassembly, Listing pkgs, funcs, types:
-    disassemble (alias: disass)  Disassembler.
-    funcs ---------------------- Print list of functions.
-    list (alias: ls | l) ------- Show source code.
-    packages ------------------- Print list of packages.
-    types ---------------------- Print list of types
-...
+所以本节不写反汇编器，而写它旁边那条更基础、也更容易被忽略的链路：**源码位置 ↔ 指令地址**。一条是正向的 `PCToLine`（地址 → 文件:行号），第 8 章解析行号表时已经具备；另一条是本节新增的反向 `LineToPC`（文件:行号 → 地址）。有了这一对，`list [loc]` 才能把 `main.go:16` 这样的输入变成一条可下断点、可展示的地址，并把该行上下各 5 行源码连同 `=>` 标注一起还给前端。文件名沿用 `20-debug_disassemble.md` 只是历史原因，不随标题改；旧稿以 tinydbg 的 `disassemble` 为主角，本版按 tag 的实际交付物重新定主题。
+
+### 实现目标
+
+`list`（别名 `ls`、`l`）显示某个位置附近的源码：
+
+| 输入 | 示例 | 定位方式 |
+|---|---|---|
+| 无参数 | `list` | 当前调试上下文的 PC → `PCToLine` |
+| 文件:行号 | `list main.go:16` | `LineToPC` 反查 |
+| 相对偏移 | `list +1` / `list -- -2` | 当前行 ± N 后再 `LineToPC` |
+| 函数名 | `list main.main` | 函数入口地址 |
+| 绝对地址 | `list *0x4b3971` | 原样使用 |
+| 正则 | `list /main/` | 多命中时报歧义 |
+
+要交付的东西可以拆成三块：
+
+1. **反查**：给定 `file:line`，在 `.debug_line` 的行记录里找到地址（`dwarf.LineTable.LineToPC`）；
+2. **取值**：按行号窗口把源码文件切片，返回首行行号与行文本（`proc.Target.SourceLines`）；
+3. **串联**：`list` 命令 → `api.Client.ListSource` → `Debugger.ListSource`，把 PC、行号、窗口与"是否当前行"组装成 `ListSourceResult`。
+
+溯源补一句：tag 的交付物就是**行号表反查**与**源码列表**。提交里这两个函数分别叫 `LineToPC` 和 `SourceList(fn *Function)`（按函数把整个源文件读成 `[]string`），提交信息也是 `LineToPC 与源码列表 SourceList`；当前代码里它已演进为按行窗口切片的 `SourceLines(file, line, context)`，`LineTable` 也从 `proc` 层直接读节改成了 `BinaryInfo` 缓存。下文以当前代码为准。
+
+#### 反汇编命令在 6.6，本节不重复
+
+需要先划清界限：godbgv2 的 `disass` 是一个**只认地址**的简单命令（`cmd/debug/disass.go:11-14`，别名 `dis`、`disassemble`），实跑的 help 如下：
+
+```text
+godbg> help disass
+反汇编机器指令（缺省从当前停止位置开始）
+
+disass [address]
+      --clearall        反汇编时排除已有断点的影响
+  -h, --help            help for disass
+  -n, --max uint        反汇编指令数量 (default 10)
+  -s, --syntax string   反汇编指令语法，支持：go, gnu, intel (default "gnu")
 ```
 
-### 实现目标: `disassemble [-a <start> ，end>] [-l <locspec>]`
+与 dlv 的 `disassemble [-a <start> <end>] [-l <locspec>]` 不同，godbgv2 既没有地址区间 `-a`，也不接受 locspec：无参时取 `Client.CurrentPC()`，有参时经 `disassStartAddress` 调 `parseAddress`（`disass.go:51-67`），所以 `disass main.main` 的结果是：
 
-```bash
-(tinydbg) help disass
-Disassembler.
-
-        [goroutine <n>] [frame <m>] disassemble [-a <start> <end>] [-l <locspec>]
-
-If no argument is specified the function being executed in the selected stack frame will be executed.
-
-        -a <start> <end>        disassembles the specified address range
-        -l <locspec>            disassembles the specified function
+```text
+godbg> disass main.main
+Error: parse address err: invalid address: strconv.ParseUint: parsing "main.main": invalid syntax
 ```
 
-解释下这里的反汇编命令选项：
-
-- `-a <start> <end>`：指定要反汇编的指令地址范围，由于x86指令集是变长编码，不是固定长度编码，意味着指令地址不是某个数字的整数倍，输入这个地址范围的时候必须是准确的，如果错了就可能得到错误的反汇编指令，或者反汇编出错。但是可以借助DWARF调试信息，比如查看某个函数的开始、结束指令地址范围，然后再指定。当然了有了函数名后，直接用 `-l <locspec>` 就可以了，也不一定有这个必要使用 `-a <start> <end>` 这种形式了；
-- `-l <locspec>`：这个是指定位置，tinydbg中定义了一系列的描述位置的方式，常见的比如函数名，文件名:行号，这些都是合法的locspec，详细的受支持的locspec列表我们会在接下来介绍。
-
-程序在执行过程中，具体到某个线程、协程，它执行过程中，一定是有自己的系统栈、协程栈的，协程的函数调用栈，要么在这个协程栈上，要么特殊场景涉及到部分系统栈上，但是不管怎么样，总是有个调用栈的。而每个调用栈都对应着一个函数调用，而且我们根据Call Frame Information，是可以拿到调用栈中任意一个栈帧对应的函数信息的，包含函数的指令地址范围。这样就方便了，我们可以直接执行 `disass` 不带任何参数，此时会直接将当前goroutine当前在执行函数的当前语句行进行反汇编。`goroutine <n>`, `frame <m>` 表示在输入 `disass` 之前的调试活动，我们已经切换到了goroutine n，并且选中了栈帧frame m。
+反汇编的解码、语法风格、断点字节还原与 `disass` 命令本体都在 [6.6 反汇编](../../6-develop-inst-debugger/6-disassemble.md)。本节只在需要说明"地址拿去干什么"时提到它。
 
 ### 基础知识
 
-在实现指令级调试器时，我们介绍了一些反汇编相关的知识。这里在符号级调试器中实现反汇编，所不同的一个是我们反汇编操作指定地址的方式，不仅仅有尅直接指定地址范围的 `disass a <start> <end>`，还有 `disass -l <locspec>`。在前一节我们介绍了支持的locspec类型以及它们是如何结合进程上下文信息将字符串位置描述转换为内存地址的。
+#### 行号表：地址 → 文件:行号
 
-在接下来的反汇编操作中，少不了要用到，解析locspec，并利用它来转换为内存地址的操作 …… 再然后，才是从指定内存地址处开始反汇编的动作。
+`.debug_line` 按编译单元存一组行号程序，执行后得到"地址 → 文件、行号"的记录。godbgv2 把每条记录压成三字段（`pkg/dwarf/line.go:22-26`）：
+
+```go
+type LineEntry struct {
+	File    string // 源文件
+	Line    int    // 行号
+	Address uint64 // 对应的机器地址
+}
+```
+
+解析完所有单元后按地址升序排序（`line.go:124`），正向查询就退化成一次倒序扫描（`line.go:34-41`）：
+
+```go
+// LineForPC 返回地址 pc 对应的源码位置（取 <= pc 的最近一行）
+func (lt *LineTable) LineForPC(pc uint64) (file string, line int, err error) {
+	for i := len(lt.rows) - 1; i >= 0; i-- {
+		if lt.rows[i].Address <= pc {
+			return lt.rows[i].File, lt.rows[i].Line, nil
+		}
+	}
+	return "", 0, fmt.Errorf("no line entry for pc %#x", pc)
+}
+```
+
+取"`<= pc` 的最近一行"而不是"相等的一行"，是因为一条源码行通常对应多条指令，PC 停在其中任意一条上都应归到同一行；断点命中时 PC 还会比断点地址大 1（`int3` 已被执行），正靠这个"最近且不超过"的语义才落回原行。
+
+这层映射是**多对一**的：同一个 `file:line` 可以有多条记录。`loop/main.go` 的行表里，第 16 行就有 `0x4b3971`、`0x4b3977` 两个地址（`readelf --debug-dump=decodedline _fixtures/loop`）。这正是反向查询必须先回答"多个地址取哪个"的原因。
+
+#### 反查不是正向的逆
+
+正向是函数，反向就得在多值里挑一个。`LineToPC` 的约定是**返回行表中的第一条命中**（`pkg/dwarf/line.go:50-57`）：
+
+```go
+// LineToPC 返回文件 file 行号 line 对应的首个地址（ch9.2.20）。
+// 文件匹配采用后缀匹配（行号表中的路径可能带编译目录前缀）。
+func (lt *LineTable) LineToPC(file string, line int) (uint64, error) {
+	for _, row := range lt.rows {
+		if row.Line == line && strings.HasSuffix(row.File, file) {
+			return row.Address, nil
+		}
+	}
+	return 0, fmt.Errorf("no address for %s:%d", file, line)
+}
+```
+
+三个决定都藏在这 7 行里：
+
+- **全表线性扫描**：没有建 `map[file:line][]addr` 索引。行记录动辄数万条，而 `list`/`break` 是交互命令，一次线性扫描（毫秒级）比维护索引更划算，也避免了索引与行表两份数据不一致；
+- **后缀匹配**：行记录里的 `File` 是"编译目录 + 文件名"（`emitRow` 用 `directories[didx] + "/" + name` 拼出来），用户很少愿意敲全路径，于是 `main.go:16` 用 `HasSuffix` 匹配 `…/examples/debuggee/loop/main.go`。代价是误命中：`list in.go:16` 同样成立，因为 `main.go` 以 `in.go` 结尾；
+- **第一条即返回**：由于 `rows` 已按地址升序，第一条就是该行**地址最低**的记录，通常也是语句的起点。对 `break` 来说这是对的；对"我已经停在这里"的语义则不够——这正是后端不用反查结果判断"当前行"的原因。
+
+于是两者只满足一个方向的不等式：`PCToLine(pc)` 得到 `file:line` 后再 `LineToPC`，地址只会 `<= pc`；反过来，`LineToPC` 只给出该行第一份副本的地址，其余副本（泛型实例化、内联展开、同一源文件被多个编译单元引用）永远轮不到。
+
+#### 只有语句行，且不带 prologue 信息
+
+行号程序的状态机为每条指令维护 `is_stmt`、`prologue_end`、`discriminator` 等寄存器，但 `emitRow` 只把 `is_stmt` 为真的状态写成行记录，第一句就是 `if !p.isStmt { return }`（`pkg/dwarf/line.go:629-632`）。`prologueEnd` 在 `DW_LNS_set_prologue_end` 时置位（`line.go:612-613`），随后被丢弃——`LineEntry` 里没有这个字段。带来的直接后果：
+
+- 注释行、空行、部分右花括号在行号表里没有记录，`LineToPC` 找不到地址：`loop/main.go` 的行表只有 13–17 行，`}` 所在的 18、19 行没有记录，所以从第 16 行 `+2` 会报 `no address for …/main.go:18`。这类行可能压根没被行号程序生成，也可能生成后因 `is_stmt` 为假被 `emitRow` 丢弃，两种都会让该行查不到；
+- 没有"跳过序言"的能力：`break main.main` 落在函数入口 `0x4b3940`，对应第 13 行（`func main() {` 的声明行），而不是第一条可执行语句。delve 用 `prologue_end` 把函数断点前移到序言之后，godbgv2 没有这一步；Go 的函数入口是栈检查、没有帧指针序言，教学版停在这里仍然可用，但与 dlv 的落点不同。
+
+另外，同一地址若产生多行记录，`emitRow` 保留最后一条（`line.go:656-660`）：一条指令对应多行语句时以最后一条为准，避免同一地址出现互相矛盾的行号。
 
 ### 代码实现
 
-#### client端实现
+从敲下 `list` 到打印源码，链路如下（每一步后面是文件:行）：
 
-client端核心代码路径如下：
-
-```bash
-disassembleCmd.cmdFn
-    \--> disassCommand(t *Session, ctx callContext, args string) error
-            \--> parse command flag `-a <start> <end>` and `-l <locspec>`
-            \--> read disassemble flavor **intel**, **go**, **plan9**
-            \--> if no flag `-a` or `-l` specified, then disassemble **current statement**
-                    \--> locs, _, _ := t.client.FindLocation(ctx.Scope, "+0", true, t.substitutePathRules())
-                    \--> instructions, _ = t.client.DisassemblePC(ctx.Scope, locs[0].PC, flavor)
-            \--> if `-a <start> <end>` specified, then disassemble **range start,end**
-                    \--> instructions, _ = t.client.DisassembleRange(ctx.Scope, uint64(startpc), uint64(endpc), flavor)
-            \--> if `-l <locspec>` specified, then 
-                    \--> locs, _, _ := t.client.FindLocation(ctx.Scope, locspec, true, t.substitutePathRules())
-                    \--> instructions, _ = t.client.DisassemblePC(ctx.Scope, locs[0].PC, flavor)
-            \--> disasmPrint, print the instructions
+```text
+godbg> list main.go:16
+ └─ cmd/debug/list.go:40                                  Client.ListSource(loc)
+     └─ pkg/service/api/client.go:150 → pkg/service/debugger/debugger.go:458   ListSource
+         ├─ loc==""   → d.t.Registers().PC()             debugger.go:468-473
+         ├─ loc!=""   → d.t.FindLocation(loc)            pkg/proc/location.go:19
+         │                └─ file:line / +N → t.LineToPC pkg/proc/source.go:47 → pkg/dwarf/line.go:50
+         ├─ PCToLine(pc)                                 pkg/proc/funcs.go:178 → line.go:34
+         └─ t.SourceLines(file, line, 5)                 pkg/proc/source.go:16
 ```
 
-下面看下各部分实现:
+#### 命令层：只负责打印
 
-反汇编命令disass对应的command定义，其执行逻辑就是disassCommand：
-
-```go
-var disassembleCmd = func(c *DebugCommands) *command {
-	return &command{
-		aliases: []string{"disassemble", "disass"},
-		cmdFn:   disassCommand,
-		group:   sourceCmds,
-		helpMsg: `Disassembler.
-
-	[goroutine <n>] [frame <m>] disassemble [-a <start> <end>] [-l <locspec>]
-
-If no argument is specified the function being executed in the selected stack frame will be executed.
-
-	-a <start> <end>	disassembles the specified address range
-	-l <locspec>		disassembles the specified function`,
-	}
-}
-```
-
-看下这个disassCommand的执行逻辑：
+`cmd/debug/list.go` 不解析 locspec，也不读文件，只把 `loc` 原样交给后端，再按下标还原行号（`list.go:40-52`）：
 
 ```go
-func disassCommand(t *Session, ctx callContext, args string) error {
-    // cmd其实就是flag `-a` or `-l`, rest为flag对应的选项值
-	var cmd, rest string
-	if args != "" {
-		argv := config.Split2PartsBySpace(args)
-		cmd = argv[0]
-		rest = argv[1]
-	}
-
-    // 获取反汇编偏好，intel, go, gnu格式汇编
-	flavor := t.conf.GetDisassembleFlavour()
-
-	var disasm api.AsmInstructions
-	var disasmErr error
-
-    // 根据指定的选项，进行反汇编处理
-	switch cmd {
-	case "": // 未指定选项，则反汇编当前函数当前语句
-		locs, _, err := t.client.FindLocation(ctx.Scope, "+0", true, t.substitutePathRules())
-		if err != nil {
-			return err
-		}
-		disasm, disasmErr = t.client.DisassemblePC(ctx.Scope, locs[0].PC, flavor)
-	case "-a": // -a start end，反汇编这个地址范围内的指令
-		v := config.Split2PartsBySpace(rest)
-		if len(v) != 2 {
-			return errDisasmUsage
-		}
-		startpc, err := strconv.ParseInt(v[0], 0, 64)
-		if err != nil {
-			return fmt.Errorf("wrong argument: %q is not a number", v[0])
-		}
-		endpc, err := strconv.ParseInt(v[1], 0, 64)
-		if err != nil {
-			return fmt.Errorf("wrong argument: %q is not a number", v[1])
-		}
-		disasm, disasmErr = t.client.DisassembleRange(ctx.Scope, uint64(startpc), uint64(endpc), flavor)
-	case "-l": // -l locspec，反汇编这个位置描述处的指令
-		locs, _, err := t.client.FindLocation(ctx.Scope, rest, true, t.substitutePathRules())
-		if err != nil {
-			return err
-		}
-		if len(locs) != 1 {
-			return errors.New("expression specifies multiple locations")
-		}
-		disasm, disasmErr = t.client.DisassemblePC(ctx.Scope, locs[0].PC, flavor)
-	default:
-		return errDisasmUsage
-	}
-
-	if disasmErr != nil {
-		return disasmErr
-	}
-
-    // 打印汇编指令
-	disasmPrint(disasm, t.stdout, true)
-
-	return nil
-}
-```
-
-观察上面的函数实现，会发现 client要实现反汇编，一来几个基础的RPC操作：
-
-```go
-// FindLocation returns concrete location information described by a location expression
-// loc ::= <filename>:<line> | <function>[:<line>] | /<regex>/ | (+|-)<offset> | <line> | *<address>
-// * <filename> can be the full path of a file or just a suffix
-// * <function> ::= <package>.<receiver type>.<name> | <package>.(*<receiver type>).<name> | <receiver type>.<name> | <package>.<name> | (*<receiver type>).<name> | <name>
-// * <function> must be unambiguous
-// * /<regex>/ will return a location for each function matched by regex
-// * +<offset> returns a location for the line that is <offset> lines after the current line
-// * -<offset> returns a location for the line that is <offset> lines before the current line
-// * <line> returns a location for a line in the current file
-// * *<address> returns the location corresponding to the specified address
-// NOTE: this function does not actually set breakpoints.
-// If findInstruction is true FindLocation will only return locations that correspond to instructions.
-FindLocation(scope api.EvalScope, loc string, findInstruction bool, substitutePathRules [][2]string) ([]api.Location, string, error)
-
-// DisassemblePC disassemble code of the function containing PC
-DisassemblePC(scope api.EvalScope, pc uint64, flavour api.AssemblyFlavour) (api.AsmInstructions, error)
-
-// DisassembleRange disassemble code between startPC and endPC
-DisassembleRange(scope api.EvalScope, startPC, endPC uint64, flavour api.AssemblyFlavour) (api.AsmInstructions, error)
-```
-
-- FindLocation操作支持查找指定locspec对应的指令地址，有可能对应多个指令地址，这个好理解，比如用regexp匹配了多个函数，每个函数对应一个入口指令地址。
-- DisassemblePC，对包含此PC的函数，这个要靠调试器后端查找CIE列表找到CIE，然后再在这个CIE包含的FDE列表找到对应的FDE，然后确定对应的函数的起始地址，然后可以从PC到结束地址处的指令进行反汇编。
-- DisassembleRange，这个直接指定了start，end地址，需要调试器后端读取进程内存start,end中的指令数据，然后进行反汇编。输入地址可能包含无效地址，不过无所谓，读内存报错 or 反汇编报错，直接返回错误就ok。
-
-这几个操作的详细实现，我们会在server端实现部分予以介绍。
-
-#### client端RPC
-
-client端发起RPC调用的时候，第一个参数都是 `api.EvalScope`，这个向服务器指明了接下来的操作要在哪个协程、栈帧 or defer函数栈帧中执行。
-
-举几个例子：
-
-- `args`，打印函数参数，当然得知道哪个goroutine执行的函数，不同协程执行该函数时、该函数被调多次调用时参数可能不同；
-- `locals`，打印局部变量，当然也得知道不同goroutine执行的函数，而且同一个函数局部变量值在不同协程中执行时可能会不同；
-- `print <expr>`，打印表达式的值，表达式中可能包含变量名，相同变量名可能在不同函数中、全局函数中定义，自然需要知道是哪个函数定义的，需要这个作用域来进一步确定定义的位置，进而确定变量类型、存储位置；
-- etc.
-
-
-see: tinydbg/service/api/types.go: api.EvalScope
-
-```go
-// EvalScope is the scope a command should
-// be evaluated in. Describes the goroutine and frame number.
-type EvalScope struct {
-	GoroutineID  int64
-	Frame        int
-	DeferredCall int // when DeferredCall is n > 0 this eval scope is relative to the n-th deferred call in the current frame
-}
-```
-
-OK，介绍清楚了api.EvalScope，我们来看下反汇编期间，client端使用到的几个RPC调用。这里我们主要是了解下它的请求参数，也就了解了这个RPC可被调用的场景。
-
-**FindLocation**:
-
-```go
-type FindLocationIn struct {
-	Scope                     api.EvalScope
-	Loc                       string
-	IncludeNonExecutableLines bool
-
-	// SubstitutePathRules is a slice of source code path substitution rules,
-	// the first entry of each pair is the path of a directory as it appears in
-	// the executable file (i.e. the location of a source file when the program
-	// was compiled), the second entry of each pair is the location of the same
-	// directory on the client system.
-	SubstitutePathRules [][2]string
-}
-
-type FindLocationOut struct {
-	Locations         []api.Location
-	SubstituteLocExpr string // if this isn't an empty string it should be passed as the location expression for CreateBreakpoint instead of the original location expression
-}
-
-// Location holds program location information.
-// In most cases a Location object will represent a physical location, with
-// a single PC address held in the PC field.
-// FindLocations however returns logical locations that can either have
-// multiple PC addresses each (due to inlining) or no PC address at all.
-type Location struct {
-	PC       uint64    `json:"pc"`
-	File     string    `json:"file"`
-	Line     int       `json:"line"`
-	Function *Function `json:"function,omitempty"`
-	PCs      []uint64  `json:"pcs,omitempty"`
-	PCPids   []int     `json:"pcpids,omitempty"`
-}
-
-func (c *RPCClient) FindLocation(scope api.EvalScope, loc string, findInstructions bool, substitutePathRules [][2]string) ([]api.Location, string, error) {
-	var out FindLocationOut
-	err := c.call("FindLocation", FindLocationIn{scope, loc, !findInstructions, substitutePathRules}, &out)
-	return out.Locations, out.SubstituteLocExpr, err
-}
-```
-
-注意这了查找指令地址时，有个参数 FindLocationIn.IncludeNonExecutableLines会被设置为false，目的是排除空行、注释等不包含可执行指令的源码行。
-
-**DisassemblePC**:
-
-```go
-type DisassembleIn struct {
-	Scope          api.EvalScope
-	StartPC, EndPC uint64
-	Flavour        api.AssemblyFlavour
-}
-
-type DisassembleOut struct {
-	Disassemble api.AsmInstructions
-}
-
-// DisassemblePC disassembles function containing pc
-func (c *RPCClient) DisassemblePC(scope api.EvalScope, pc uint64, flavour api.AssemblyFlavour) (api.AsmInstructions, error) {
-	var out DisassembleOut
-	err := c.call("Disassemble", DisassembleIn{scope, pc, 0, flavour}, &out)
-	return out.Disassemble, err
-}
-```
-
-**DisassembleRange**:
-
-```go
-// DisassembleRange disassembles code between startPC and endPC
-func (c *RPCClient) DisassembleRange(scope api.EvalScope, startPC, endPC uint64, flavour api.AssemblyFlavour) (api.AsmInstructions, error) {
-	var out DisassembleOut
-	err := c.call("Disassemble", DisassembleIn{scope, startPC, endPC, flavour}, &out)
-	return out.Disassemble, err
-}
-```
-
-DisassemblePC 和 DisassembleRange 的区别，对应的服务端实现其实是同一个接口 `(s *RPCServer) Disassemble(...)`，区别只是DisassembleIn.EndPC是否为0.
-
-OK，客户端调用的RPC我们介绍完了，接下来介绍下服务器侧是如何实现上述RPC操作的。
-
-#### server端实现
-
-**FindLocation**:
-
-server端的FindLocation实现，其实就是前面咱们介绍过的locspec的内容，涉及到客户端输入的locspec的解析，解析成具体的LocationSpec实现之后，再用它来执行查找 `LocationSpec.Find(....)`，拿到找到的指令地址信息[]*api.Location。locspec小节我们也举了几个不同的LocationSpec实现是如何来查找对应的指令地址的。这部分内容我们将在 [19-locspec解析与地址转换](./19-how_locspec_works.md) 进行想介绍，感兴趣的话，你也可以先睹为快。
-
-```go
-// FindLocation returns concrete location information described by a location expression.
-//
-//	loc ::= <filename>:<line> | <function>[:<line>] | /<regex>/ | (+|-)<offset> | <line> | *<address>
-//	* <filename> can be the full path of a file or just a suffix
-//	* <function> ::= <package>.<receiver type>.<name> | <package>.(*<receiver type>).<name> | <receiver type>.<name> | <package>.<name> | (*<receiver type>).<name> | <name>
-//	  <function> must be unambiguous
-//	* /<regex>/ will return a location for each function matched by regex
-//	* +<offset> returns a location for the line that is <offset> lines after the current line
-//	* -<offset> returns a location for the line that is <offset> lines before the current line
-//	* <line> returns a location for a line in the current file
-//	* *<address> returns the location corresponding to the specified address
-//
-// NOTE: this function does not actually set breakpoints.
-func (s *RPCServer) FindLocation(arg FindLocationIn, out *FindLocationOut) error {
-	var err error
-	out.Locations, out.SubstituteLocExpr, err = s.debugger.FindLocation(
-            arg.Scope.GoroutineID, 
-            arg.Scope.Frame, 
-            arg.Scope.DeferredCall, 
-            arg.Loc, 
-            arg.IncludeNonExecutableLines, 
-            arg.SubstitutePathRules)
+res, err := Client.ListSource(loc)
+if err != nil {
 	return err
 }
-
-// FindLocation will find the location specified by 'locStr'.
-func (d *Debugger) FindLocation(goid int64, frame, deferredCall int, locStr string, ...) {
-    ...
-	loc, _ := locspec.Parse(locStr)
-	return d.findLocation(goid, frame, deferredCall, locStr, loc, includeNonExecutableLines, substitutePathRules)
-}
-
-func (d *Debugger) findLocation(goid int64, frame, deferredCall int, 
-    locStr string, 
-    locSpec locspec.LocationSpec, 
-    includeNonExecutableLines bool, 
-    substitutePathRules [][2]string,
-) ([]api.Location, string, error) {
-
-	locations := []api.Location{}
-	t := proc.ValidTargets{Group: d.target}
-	subst := ""
-	for t.Next() {
-		pid := t.Pid()
-		s, _ := proc.ConvertEvalScope(t.Target, goid, frame, deferredCall)
-        // 不同的LocationSpec有不同的Find实现
-		locs, s1, _ := locSpec.Find(t.Target, d.processArgs, s, locStr, includeNonExecutableLines, substitutePathRules)
-		if s1 != "" {
-			subst = s1
-		}
-		for i := range locs {
-			if locs[i].PC == 0 {
-				continue
-			}
-			file, line, fn := t.BinInfo().PCToLine(locs[i].PC)
-			locs[i].File = file
-			locs[i].Line = line
-			locs[i].Function = api.ConvertFunction(fn)
-			locs[i].PCPids = make([]int, len(locs[i].PCs))
-			for j := range locs[i].PCs {
-				locs[i].PCPids[j] = pid
-			}
-		}
-		locations = append(locations, locs...)
+fmt.Printf("Showing %s:%d (PC: %#x)\n", res.File, res.Line, res.PC)
+for i, text := range res.Lines {
+	ln := res.StartLine + i
+	if res.Current && ln == res.Line {
+		fmt.Printf("=> %4d:\t%s\n", ln, text)
+	} else {
+		fmt.Printf("   %4d:\t%s\n", ln, text)
 	}
-	return locations, subst, nil
 }
 ```
 
-现在我们拿到了输入的位置描述字符串locspec对应的指令地址了，然后咱们就可以从这个指令地址处开始读取进程指令数据，然后按照指定的汇编flavor开始反汇编了（反汇编到函数结束）。当然了，我们可能直接通过 `-a <start> <end>` 指定了地址范围，那咱们就读取进程内存地址 `<start,end>` 范围内的数据，然后开始反汇编就可以了。
+注意 `ln := res.StartLine + i`：后端返回的是行文本数组，首行行号单独给出。这样切片可以越界钳制（下文 `list` 只显示 11–19 行），前端仍能打印真实行号，不需要知道文件总行数。
 
-**Disassemble**:
+#### 契约：`ListSourceResult`
+
+前后端之间只传这份快照（`pkg/service/api/types.go:142-149`）：
 
 ```go
-// Disassemble code.
-//
-// If both StartPC and EndPC are non-zero the specified range will be disassembled, otherwise the function containing StartPC will be disassembled.
-//
-// Scope is used to mark the instruction the specified goroutine is stopped at.
-//
-// Disassemble will also try to calculate the destination address of an absolute indirect CALL if it happens to be the instruction the selected goroutine is stopped at.
-func (s *RPCServer) Disassemble(arg DisassembleIn, out *DisassembleOut) error {
-	insts, err := s.debugger.Disassemble(arg.Scope.GoroutineID, arg.StartPC, arg.EndPC)
-	if err != nil {
-		return err
-	}
-	out.Disassemble = make(api.AsmInstructions, len(insts))
-	for i := range insts {
-		out.Disassemble[i] = api.ConvertAsmInstruction(
-            insts[i], 
-            s.debugger.AsmInstructionText(&insts[i], 
-            proc.AssemblyFlavour(arg.Flavour)))
-	}
-	return nil
+type ListSourceResult struct {
+	File      string   // 源码文件
+	PC        uint64   // 定位所用地址
+	Line      int      // 目标行（当前 PC 行或 locspec 解析到的行）
+	StartLine int      // Lines[0] 对应的行号
+	Lines     []string // 源码行（Line 上下各 5 行）
+	Current   bool     // Line 是否为当前调试位置
 }
+```
 
-// Disassemble code between startPC and endPC.
-// if endPC == 0 it will find the function containing startPC and disassemble the whole function.
-func (d *Debugger) Disassemble(goroutineID int64, addr1, addr2 uint64) ([]proc.AsmInstruction, error) {
-    ...
-	if addr2 == 0 {
-		fn := d.target.Selected.BinInfo().PCToFunc(addr1)
-		if fn == nil {
-			return nil, fmt.Errorf("address %#x does not belong to any function", addr1)
-		}
-		addr1 = fn.Entry
-		addr2 = fn.End
-	}
+六个字段各司其职：`PC` 让前端能显示地址（`Showing … (PC: 0x4b3971)`），`StartLine`/`Lines` 负责窗口，`Current` 决定是否加箭头。`Current` 是**后端**判断的，前端不看"PC 是否等于行首地址"。
 
-	g, err := proc.FindGoroutine(d.target.Selected, goroutineID)
+#### 门面：`Debugger.ListSource`
+
+门面负责三件事：定位 PC、把 PC 转成文件行、取窗口（`pkg/service/debugger/debugger.go:458-520`）。定位部分：`loc` 为空时读 `d.t.Registers().PC()` 并把 `current` 置真；否则交给 `d.t.FindLocation(loc)`，返回多个地址时不猜，直接报歧义并列出前 3 个函数名。
+
+无参形态读的是 `Target.Registers()`，它按"选中线程 > 选中 goroutine > 当前事件线程"的顺序取寄存器（`pkg/proc/goroutines.go:300`）。两种形态在拿到 PC 后汇合：
+
+```go
+file, line, err := d.t.BinaryInfo().PCToLine(pc)
+if err != nil {
+	return nil, err
+}
+if file == "" {
+	return nil, fmt.Errorf("no source file for pc %#x", pc)
+}
+// 无行号信息（line<1）：从文件首行展示但不标注箭头
+if line < 1 {
+	line, current = 1, false
+}
+start, lines, err := d.t.SourceLines(file, line, listContextLines)
+```
+
+`listContextLines` 就是 5（`debugger.go:524`），与 dlv 的 `source-list-line-count` 默认值一致。`line < 1` 是防御分支：`LineForPC` 正常至少返回 1，真拿到 0 时从第 1 行开始且不标箭头，避免负数下标。
+
+`FindLocation` 里与本节相关的只有两个分支（`pkg/proc/location.go:49-70`）：
+
+```go
+case ls.File != "":
+	addr, err := t.LineToPC(ls.File, ls.Line)
 	if err != nil {
 		return nil, err
 	}
+	return []uint64{addr}, nil
 
-	curthread := d.target.Selected.CurrentThread()
-	if g != nil && g.Thread != nil {
-		curthread = g.Thread
-	}
-	regs, _ := curthread.Registers()
-
-	return proc.Disassemble(d.target.Selected.Memory(), regs, d.target.Selected.Breakpoints(), d.target.Selected.BinInfo(), addr1, addr2)
-}
-```
-
-see: tinydbg/pkg/dwarf/op/regs.go 这里先看下这个，DwarfRegisters记录了CFA计算需要用到的信息，这里面的寄存器是些伪寄存器，不一定对应着真实物理寄存器。执行CFA相关的计算时，你还有印象吗？当我们有了调用栈信息表，给我们一个指令地址PC，我们执行CIE.initial_instructions，然后执行找到对应的FDE并执行FDE.instructions，一直执行到nextPC>该指令地址PC，我们的DwarfRegisters里就得到了帧地址、函数返回地址等信息。
-
-```go
-/ DwarfRegisters holds the value of stack program registers.
-type DwarfRegisters struct {
-	StaticBase uint64
-
-	CFA       int64
-	FrameBase int64
-	ObjBase   int64
-	regs      []*DwarfRegister
-
-	ByteOrder  binary.ByteOrder
-	PCRegNum   uint64
-	SPRegNum   uint64
-	BPRegNum   uint64
-	LRRegNum   uint64
-	ChangeFunc RegisterChangeFunc
-
-	FloatLoadError   error // error produced when loading floating point registers
-	loadMoreCallback func()
-}
-```
-
-see: tinydbg/pkg/proc/disasm.go
-
-```go
-// Disassemble disassembles target memory between startAddr and endAddr, marking
-// the current instruction being executed in goroutine g.
-// If currentGoroutine is set and thread is stopped at a CALL instruction Disassemble
-// will evaluate the argument of the CALL instruction using the thread's registers.
-// Be aware that the Bytes field of each returned instruction is a slice of a larger array of size startAddr - endAddr.
-func Disassemble(mem MemoryReadWriter, regs Registers, breakpoints *BreakpointMap, bi *BinaryInfo, startAddr, endAddr uint64) ([]AsmInstruction, error) {
-	if startAddr > endAddr {
-		return nil, fmt.Errorf("start address(%x) should be less than end address(%x)", startAddr, endAddr)
-	}
-	return disassemble(mem, regs, breakpoints, bi, startAddr, endAddr, false)
-}
-
-func disassemble(memrw MemoryReadWriter, regs Registers, breakpoints *BreakpointMap, bi *BinaryInfo, startAddr, endAddr uint64, singleInstr bool) ([]AsmInstruction, error) {
-    // 需要用物理寄存器值来初始化它，后面执行CFA计算逻辑时会用到并更新这里的值
-	var dregs *op.DwarfRegisters
-	if regs != nil {
-		dregs = bi.Arch.RegistersToDwarfRegisters(0, regs)
-	}
-
-    // 从内存读取指令数据
-	mem := make([]byte, int(endAddr-startAddr))
-	_, err := memrw.ReadMemory(mem, startAddr)
+case ls.Offset != 0:
+	// 当前 PC → 当前行 → 偏移行 → 地址
+	pc, err := t.currentPC()
 	if err != nil {
 		return nil, err
 	}
-
-	r := make([]AsmInstruction, 0, len(mem)/bi.Arch.MaxInstructionLength())
-	pc := startAddr
-
-	var curpc uint64
-	if regs != nil {
-		curpc = regs.PC()
-	}
-
-	for len(mem) > 0 {
-        // 检查下一条待decode的指令开头字节是否是0xCC，是的话表明之前添加了断点，先恢复原始指令数据
-        // 反汇编完了之后，再恢复添加断点
-		bp, atbp := breakpoints.M[pc]
-		if atbp {
-			copy(mem, bp.OriginalData)
-		}
-
-        // 根据指令地址拿到源文件位置，这个表是根据DWARF行号表建立起来的
-		file, line, fn := bi.PCToLine(pc)
-
-        // 反汇编指令
-		var inst AsmInstruction
-		inst.Loc = Location{PC: pc, File: file, Line: line, Fn: fn}
-		inst.Breakpoint = atbp
-		inst.AtPC = (regs != nil) && (curpc == pc)
-		bi.Arch.asmDecode(&inst, mem, dregs, memrw, bi)
-
-		r = append(r, inst)
-
-        // 下一条待decode的指令地址
-		pc += uint64(inst.Size)
-		mem = mem[inst.Size:]
-
-        // 如果是decode单条指令的化，就可以结束了
-		if singleInstr {
-			break
-		}
-	}
-	return r, nil
-}
-```
-
-另外这里有一层抽象设计，不同处理器架构有不同的指令集，这里的Arch.asmDecode是一个函数引用，对应着不同处理器架构上的实现。
-
-#### target层实现
-
-哎对了，现代调试器的前后端分离式架构中，调试器后端的服务层，符号层，目标层，前面locspec之类查找指令地址的操作就是符号层逻辑，而与目标操作系统、硬件架构相关的就属于target层了。
-
-比如：
-
-- 反汇编，与指令集架构相关；
-- 进程的执行控制，不同硬件、指令集断点指令也不一样，比如amd64架构下是0xcc，有些有硬件断点，有些没有；
-- 进程的内存读写，不同操作系统可能系统调用也不同；
-- ...
-
-这些与具体的操作系统、硬件架构相关的（GOOS/GOARCH) 就在目标层进行实现，我们的demo tinydbg只支持 linux/amd64 组合。
-
-see: tinydbg/pkg/proc/amd64_arch.go
-
-```go
-// AMD64Arch returns an initialized AMD64
-// struct.
-func AMD64Arch(goos string) *Arch {
-	return &Arch{
-		Name:                             "amd64",
-		ptrSize:                          8,
-		maxInstructionLength:             15,
-		breakpointInstruction:            amd64BreakInstruction, // 断点操作
-		breakInstrMovesPC:                true,
-		derefTLS:                         goos == "windows",
-		prologues:                        prologuesAMD64,
-		fixFrameUnwindContext:            amd64FixFrameUnwindContext,
-		switchStack:                      amd64SwitchStack,
-		regSize:                          amd64RegSize,
-		RegistersToDwarfRegisters:        amd64RegistersToDwarfRegisters,
-		addrAndStackRegsToDwarfRegisters: amd64AddrAndStackRegsToDwarfRegisters,
-		DwarfRegisterToString:            amd64DwarfRegisterToString,
-		inhibitStepInto:                  func(*BinaryInfo, uint64) bool { return false },
-		asmDecode:                        amd64AsmDecode,       // 反汇编操作
-		PCRegNum:                         regnum.AMD64_Rip,
-		SPRegNum:                         regnum.AMD64_Rsp,
-		BPRegNum:                         regnum.AMD64_Rbp,
-		ContextRegNum:                    regnum.AMD64_Rdx,
-		asmRegisters:                     amd64AsmRegisters,
-		RegisterNameToDwarf:              nameToDwarfFunc(regnum.AMD64NameToDwarf),
-		RegnumToString:                   regnum.AMD64ToName,
-		debugCallMinStackSize:            256,
-		maxRegArgBytes:                   9*8 + 15*8,
-		argumentRegs:                     []int{regnum.AMD64_Rax, regnum.AMD64_Rbx, regnum.AMD64_Rcx},
-	}
-}
-```
-
-这里我们先收一下，看下它的反汇编操作是如何实现的：
-
-```go
-func amd64AsmDecode(asmInst *AsmInstruction, mem []byte, regs *op.DwarfRegisters, memrw MemoryReadWriter, bi *BinaryInfo) error {
-	return x86AsmDecode(asmInst, mem, regs, memrw, bi, 64)
-}
-
-// AsmDecode decodes the assembly instruction starting at mem[0:] into asmInst.
-// It assumes that the Loc and AtPC fields of asmInst have already been filled.
-func x86AsmDecode(asmInst *AsmInstruction, mem []byte, regs *op.DwarfRegisters, memrw MemoryReadWriter, bi *BinaryInfo, bit int) error {
-	inst, err := x86asm.Decode(mem, bit)
+	file, line, err := t.bi.PCToLine(pc)
 	if err != nil {
-		asmInst.Inst = (*x86Inst)(nil)
-		asmInst.Size = 1
-		asmInst.Bytes = mem[:asmInst.Size]
-		return err
+		return nil, fmt.Errorf("cannot resolve current line: %v", err)
 	}
-
-	asmInst.Size = inst.Len
-	asmInst.Bytes = mem[:asmInst.Size]
-	patchPCRelX86(asmInst.Loc.PC, &inst)
-	asmInst.Inst = (*x86Inst)(&inst)
-	asmInst.Kind = OtherInstruction
-
-	switch inst.Op {
-	case x86asm.JMP, x86asm.LJMP:
-		asmInst.Kind = JmpInstruction
-	case x86asm.CALL, x86asm.LCALL:
-		asmInst.Kind = CallInstruction
-	case x86asm.RET, x86asm.LRET:
-		asmInst.Kind = RetInstruction
-	case x86asm.INT:
-		asmInst.Kind = HardBreakInstruction
+	addr, err := t.LineToPC(file, line+ls.Offset)
+	if err != nil {
+		return nil, err
 	}
-
-	asmInst.DestLoc = resolveCallArgX86(&inst, asmInst.Loc.PC, asmInst.AtPC, regs, memrw, bi)
-	return nil
-}
-
-`x86asm.Decode(...)` 是在 `golang.org/x/arch/x86/x86asm/decode.go` 中实现的，这了我们知道就行。
+	return []uint64{addr}, nil
 ```
 
-题外话，现在要从0到1实现一个反汇编器disassembler，是一个非常庞大的工程，为了解决这个难题capstone反汇编引擎诞生。感兴趣的可以看下 [capstone](https://www.capstone-engine.org/) 这个项目，现在也有开发者将其PORT到了[Go Gapstone](https://github.com/bnagy/gapstone)。我们这里使用的是 `golang.org/x/arch/x86/x86asm` 这个包，大家了解即可，学习过《计算机组成原理》的对变长指令编码、解码应该都不陌生。我们只是提一下工程上，要实现一个反汇编器并不容易。
+`file:line` 分支是纯反查；`+N/-N` 分支是"读当前 PC → 正向查行 → 行号加偏移 → 再反查"，一个来回。locspec 的字符串解析（`pkg/locspec.Parse`）与其余分支见 [9.2.19](19-how_locspec_works.md)，这里不重复。
 
-> From [Dissecting Go Binaries](https://www.grant.pizza/blog/dissecting-go-binaries/):
->
-> First of all, in order to build a disassembler we need to know what all of the binary machine code translates to in assembly instructions. To do this we must have a reference for all assembly instructions for the architecture of the compiled binary. If you’re not familiar with this task you wouldn’t think it’d be so difficult. However, there are multiple micro-architectures, assembly syntaxes, sparsely-documented instructions, and encoding schemes that change over time. If you want more analysis on why this is difficult I enjoy this article.
->
-> Thankfully all of the heavy lifting has been done for us by the authors and maintainers of Capstone, a disassembly framework. Capstone is widely accepted as the standard to use for writing disassembly tools. Reimplementing it would be quite a daunting, albeit educational, task so we won’t be doing that as part of this post. Using Capstone in Go is as simple as importing its cleverly named Go bindings, gapstone.
-
-#### 最后一步
-
-OK，当调试器后端，将locspec转换成指令地址，然后读取出指令数据，并根据特定架构的指令反汇编函数进行反汇编之后，我们就得到了一系列的汇编指令。这些汇编指令列表，就这样最终返回给了客户端。客户端只需要遍历指令，然后打印出来即可。
+`Target.LineToPC` 本身只是薄封装，解析与缓存都在 `BinaryInfo` 上（`pkg/proc/source.go:42-53`）：
 
 ```go
-// AsmInstructions is a slice of single instructions.
-type AsmInstructions []AsmInstruction
-
-// AsmInstruction represents one assembly instruction.
-type AsmInstruction struct {
-	Loc        Location
-	DestLoc    *Location
-	Bytes      []byte
-	Breakpoint bool
-	AtPC       bool
-
-	Size int
-	Kind AsmInstructionKind
-
-	Inst archInst
-}
-
-func disasmPrint(dv api.AsmInstructions, out io.Writer, showHeader bool) {
-	bw := bufio.NewWriter(out)
-	defer bw.Flush()
-	if len(dv) > 0 && dv[0].Loc.Function != nil && showHeader {
-		fmt.Fprintf(bw, "TEXT %s(SB) %s\n", dv[0].Loc.Function.Name(), dv[0].Loc.File)
+func (t *Target) LineToPC(file string, line int) (uint64, error) {
+	lt, err := t.LineTable()
+	if err != nil {
+		return 0, err
 	}
-	tw := tabwriter.NewWriter(bw, 1, 8, 1, '\t', 0)
-	defer tw.Flush()
-	for _, inst := range dv {
-		atbp := ""
-		if inst.Breakpoint {
-			atbp = "*"
-		}
-		atpc := ""
-		if inst.AtPC {
-			atpc = "=>"
-		}
-		fmt.Fprintf(tw, "%s\t%s:%d\t%#x%s\t%x\t%s\n", atpc, filepath.Base(inst.Loc.File), inst.Loc.Line, inst.Loc.PC, atbp, inst.Bytes, inst.Text)
-	}
+	return lt.LineToPC(file, line)
 }
 ```
 
-打印操作将服务器返回的汇编指令进行打印，操作码、操作数，并进行适当的缩进、对齐操作。`disass` 的完整处理过程到此就结束了。
+`BinaryInfo.LineTable` 用 `sync.Once` 缓存解析结果（`pkg/proc/bininfo.go:37-41`、`:122`）：读 `.debug_line` 节、`SHF_COMPRESSED` 时先解压、再 `ParseLine(data, 8)`。tag 提交当时的 `LineTable` 直接写在 `proc` 层且没有缓存；现在这一步收进了 `BinaryInfo`，`list`、`break`、`bt` 共用同一份行表。
+
+#### 源码窗口：`SourceLines`
+
+拿到 `file:line` 之后，取窗口的逻辑只有二十来行（`pkg/proc/source.go:16-38`，文档注释略）：
+
+```go
+func (t *Target) SourceLines(file string, line, context int) (start int, lines []string, err error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return 0, nil, err
+	}
+	all := strings.Split(string(data), "\n")
+	if len(all) > 0 && all[len(all)-1] == "" {
+		all = all[:len(all)-1]
+	}
+
+	start = line - context
+	if start < 1 {
+		start = 1
+	}
+	if start > len(all) {
+		return 0, nil, nil
+	}
+	end := line + context
+	if end > len(all) {
+		end = len(all)
+	}
+	return start, all[start-1 : end], nil
+}
+```
+
+四个细节：
+
+1. **按行文本切片，不按字节**：`strings.Split` 后丢弃末尾换行产生的空元素，行号与编辑器一致；
+2. **窗口钳制**：`start` 不小于 1、`end` 不超过总行数。`list` 停在 16 行时窗口是 11–19，不是 11–21，因为文件只有 19 行；
+3. **目标行越界返回空**：`start > len(all)` 时返回 `(0, nil, nil)`，`list` 只打印 `Showing` 头、没有正文。这通常意味着二进制与源码不同步（行号表来自旧编译），而不是文件读失败——后者在 `os.ReadFile` 处报错；
+4. **文件路径来自行号表**：编译期记录的绝对路径被 `os.ReadFile` 直接使用，源码被移动或删除时报 `no such file or directory`，godbgv2 没有 dlv 的 `substitute-path` 映射。
+
+`SourceLines` 向上返回 `start` 与 `lines` 两个值，而不是把它们塞进一个结构体：`lines[i]` 的行号恒等于 `start+i`，前端只需一个整数就能补齐所有行号。
+
+#### `=>` 只属于"当前行"
+
+`Current` 在两种情况下为假：有参定位（`FindLocation` 的任意分支），以及 `line < 1` 的兜底。所以同样是第 16 行，两种问法结果不同：
+
+```text
+godbg> list
+Showing …/loop/main.go:16 (PC: 0x4b3972)
+=>   16:			fmt.Printf("pid: %d, loop: %d\n", pid, i)
+
+godbg> list main.go:16
+Showing …/loop/main.go:16 (PC: 0x4b3971)
+     16:			fmt.Printf("pid: %d, loop: %d\n", pid, i)
+```
+
+地址差 1 的原因在断点：`break main.go:16` 把 `0x4b3971` 的首字节换成 `int3`，命中后 PC 停在 `0x4b3972`。无参 `list` 用真实 PC 走 `PCToLine(0x4b3972)`，落回第 16 行并标箭头；`list main.go:16` 用反查得到 `0x4b3971`，语义是"查看这一行"，不是"我正在这一行"，于是不标箭头。若反查结果也拿来判"当前行"，断点命中时反而会判错。
 
 ### 执行测试
 
-略。
+调试对象是 `_fixtures/loop`（源码 `examples/debuggee/loop/main.go`，go1.24.13 构建，`main.main` 入口 `0x4b3940`）。用 `--init` 批量回放，脚本内容如下：
+
+```text
+break main.go:16
+continue
+list
+list main.go:16
+list +1
+list -- -2
+list main.main
+list *0x4b3971
+exit
+```
+
+启动与线程状态行、路径前缀省略后，输出为：
+
+```text
+godbg> break main.go:16
+breakpoint 1 added at 0x4b3971 (…/loop/main.go:16)
+godbg> continue
+> …/loop/main.go:16 (pc: 0x4b3972)
+godbg> list
+Showing …/loop/main.go:16 (PC: 0x4b3972)
+     11:	)
+     12:
+     13:	func main() {
+     14:		pid := os.Getpid()
+     15:		for i := 0; ; i++ {
+=>   16:			fmt.Printf("pid: %d, loop: %d\n", pid, i)
+     17:			time.Sleep(time.Second)
+     18:		}
+     19:	}
+```
+
+其余写法的首行如下，正文与上例同源、窗口不同：
+
+```text
+godbg> list main.go:16
+Showing …/loop/main.go:16 (PC: 0x4b3971)
+godbg> list +1
+Showing …/loop/main.go:17 (PC: 0x4b3a47)
+godbg> list -- -2
+Showing …/loop/main.go:14 (PC: 0x4b395a)
+godbg> list main.main
+Showing …/loop/main.go:13 (PC: 0x4b3940)
+godbg> list *0x4b3971
+Showing …/loop/main.go:16 (PC: 0x4b3971)
+godbg> list in.go:16
+Showing …/loop/main.go:16 (PC: 0x4b3971)
+```
+
+这些地址都能在行表里对上：第 13 行 `0x4b3940`、第 14 行 `0x4b395a`、第 15 行 `0x4b3964`、第 16 行 `0x4b3971`、第 17 行 `0x4b3a47`。`list in.go:16` 是后缀误命中的现场——文件参数写的是 `in.go`，反查却命中了 `main.go` 的记录。
+
+错误用例必须一条命令一个脚本：回放遇到第一条报错即中止，后续命令不会执行。实跑得到：
+
+```text
+godbg> list +2
+Error: no address for …/loop/main.go:18
+godbg> list +0
+Error: function "" not found
+godbg> list -2
+Error: unknown shorthand flag: '2' in -2
+godbg> list main
+Error: function "main" not found
+godbg> list /main/
+Error: location "/main/" is ambiguous: runtime.main, runtime.main.func2, runtime.main.func1 (and 1 more)
+```
+
+五条错误分别对应五种边界：`+2` 落到没有行记录的第 18 行；`+0` 因 `ls.Offset != 0` 不成立、掉进函数名分支；`-2` 被 cobra 当成 flag（要写成 `list -- -2`）；`list main` 少了包名（locspec 的函数名是全名 `main.main`）；`/main/` 命中多个函数，`ListSource` 拒绝在多地址上猜一个，列出前 3 个候选。
+
+行表本身也能直接看：`readelf --debug-dump=decodedline _fixtures/loop` 显示 `main.go` 只有 13–17 行有记录，第 16 行有 `0x4b3971`、`0x4b3977` 两个地址。
+
+切片逻辑的边界由单元测试固化（`pkg/proc/source_test.go`，六种窗口加缺失文件，输出有省略）：
+
+```text
+$ go test ./pkg/proc -run TestSourceLines -v
+--- PASS: TestSourceLines (0.00s)
+    --- PASS: TestSourceLines/mid (0.00s)
+    ...
+--- PASS: TestSourceLinesMissingFile (0.00s)
+PASS
+ok  	github.com/hitzhangjie/godbgv2/pkg/proc	0.003s
+```
+
+`godbgv2` 没有 `ch9.2.20` 的冒烟脚本（`testdata/script/` 下没有对应文件）：本节的交付物是行表反查与源码切片，端到端行为已由上面的回放覆盖，纯切片逻辑用单测断言更直接。
 
 ### 本节小结
 
-我们详细介绍了tinydbg中的反汇编操作的实现，前后端分离式架构下调试器前后端之间的服务层通信，不同位置描述locspec的解析，调试器根据locspec对应的LocationSpec实现将locspec转换为指令地址，然后读取内存指令数据、反汇编，将反汇编后的指令数据返回给客户端、客户端打印显示出来。这个完整的过程我们已经全部介绍到了，相信大家对这块的理解也更深入了。
+`list` 的实现可以概括成五步：解析 locspec；`file:line` 直接反查、`+N/-N` 先用当前 PC 查行再加偏移；`LineToPC` 线性扫描按地址排序的行表，用"行号相等 + 文件后缀"取第一条命中；`PCToLine` 把地址换回文件行；`SourceLines` 按 ±5 行切片并钳制边界；最后 `ListSource` 用 `Current` 告诉前端要不要画 `=>`。
 
-### 参考文献
+这条链路里最值得记住的是这些映射都不是双射：行号表是地址到行的多对一，反查只能返回地址最低的第一条；`PCToLine` 取"`<= pc` 的最近一行"，断点命中时靠它落回原行；`LineEntry` 只有 `File`/`Line`/`Address`，`is_stmt` 在解析阶段已被过滤，`prologue_end` 被丢弃，所以注释行、空行没有地址，函数断点也不会像 dlv 那样跳过序言。
 
-1. Capstone, https://www.capstone-engine.org/
-2. Gapstone, https://github.com/bnagy/gapstone
-3. Dissecting Go Binaries, https://www.grant.pizza/blog/dissecting-go-binaries/
+边界清单（都是命令行上会直接撞到的行为）：`+0` 因 `Offset != 0` 不成立而不可用；`-N` 必须写成 `-- -N`；`file` 参数是后缀匹配，`in.go` 会命中 `main.go`；`/regexp/` 多命中时 `list` 报歧义（`break` 则会为每个地址建断点）；`+N` 用 `currentPC`（当前 OS 线程），无参 `list` 用选择感知的 `Target.Registers()`，选中 goroutine 时两者可能不同源；源码路径不做替换，文件移动即报错。
+
+前向关系：locspec 的解析与地址转换在 [9.2.19](19-how_locspec_works.md)；行号表的解析（`ParseLine`、`is_stmt`、同址去重）在第 8 章 [行号表](../../8-dwarf/5-other/2-lineno-table.md)；地址到手之后的解码与打印在 [6.6 反汇编](../../6-develop-inst-debugger/6-disassemble.md)。本节把"源码位置"与"指令地址"接上，`list` 和后续的 `break` 才有共同的地基。
