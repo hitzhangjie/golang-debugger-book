@@ -1,462 +1,414 @@
-## Breakpoint part1: 现代调试器断点精细化管理
+## Breakpoint part1: 断点精细化管理
 
 ### 前言
 
-断点是调试器能力的核心功能之一，在介绍指令级调试器时，我们详细介绍过断点的底层工作原理。如果你忘记了指令0xCC的作用，忘记了 `ptrace(PTRACE_PEEKDATA/POKEDATA/PEEKTEXT/POKETEXT, ...)` 的功能，忘记了处理器执行0xCC后会发生什么，忘记了Linux内核如何响应SIGTRAP信号，忘记了子进程状态变化如何通过SIGCHLD通知到父进程并__wake_up_parent唤醒阻塞在wait4上的ptracer，甚至忘记了ptracer调用wait4是用来干什么的 …… 那我建议读者可以先翻到 [第6章 动态断点](../../6-develop-inst-debugger/7-breakpoint.md) 小节快速回顾一下。
+断点是调试器最核心的能力之一。在介绍指令级调试器时，我们已经拆解过它的底层机制：断点处的指令首字节被替换为 `0xCC`（`int3`），进程执行到这里触发 `#BP` 异常，内核把异常翻译成 `SIGTRAP` 并唤醒阻塞在 `wait4` 上的 tracer。如果印象已经模糊，建议先翻回 [第6章 动态断点](../../6-develop-inst-debugger/7-breakpoint.md) 快速回顾。
 
-除此以外，作为我们本节及后续小节的前置内容，我们已经介绍了：
+前面几节补齐了三块前置知识：locspec（9.2.19）把函数名、`file:line`、`*addr`、`+N/-N`、`/regexp/` 解析成指令地址（`pkg/proc/location.go:19`）；表达式求值（9.2.18）让条件断点在命中后决定停还是继续；行号表正反向查询（9.2.20）提供 `PCToLine` 与 `LineToPC`。
 
-- 位置描述locspec：符号级调试器添加断点时，可以使用locspec支持的所有位置描述类型；
-- 表达式求值evalexpr：条件断点，其实是普通断点+条件表达式，当断点命中后，tracer会检查该断点关联的条件表达式是否成立，如果不成立会立即恢复tracee的执行；
-- 反汇编操作disass：符号级调试器中对特定指令地址添加断点，也是支持的，但是我们可能需要先借助反汇编操作对指定源码位置进行反汇编，看到对应的指令列表后再确定加断点的地址；
+本节回答一个更上层的问题：**从"在 `main.go:16` 设一个断点"到"在 `0x4b3971` 处写入一个 `0xCC`"，中间隔着哪些概念？** 答案分三层：逻辑断点（用户视角）、物理断点（指令补丁）、Breaklet（同一地址上的重叠登记）。然后讨论软件断点与硬件断点的分工，以及"一个线程停下，其他线程怎么办"。
 
-本节内容不会再重复上述底层细节，而是会将精力聚焦在现代调试器中对断点的精细化管理上，包括逻辑断点与物理断点，物理断点重叠点与Breaklets，硬件断点与软件断点。调试器gdb、lldb等也是采用了与本节内容相仿的设计，所以当你掌握了本节内容，可以很自信地说掌握了现代调试器的断点精细化管理。
-
-OK，接下来我们一起看看符号级调试断点管理这块存在哪些挑战，以及如何通过层次化、精细化管理来解决这些挑战。
+先交代边界。godbgv2 是**单进程、all-stop** 的调试器：没有多进程跟踪、没有断点传播、没有 follow-exec、没有 suspended 断点，Breaklet 也没有回调。本节早期版本以 tinydbg（delve 的裁剪版）为参考、按 delve 的多进程模型讲述；这一版按 godbgv2 的真实代码重写，delve 侧的能力只在最后列成范围对照，避免读者把"别的调试器有"误读成"godbgv2 有"。本节代码路径均相对 godbgv2 仓库根目录；代码片段为控制篇幅做了删节，只保留与主线相关的语句，标注的文件与行号可用于对照完整实现。
 
 ### 定点停车的艺术
 
-大家在坐地铁时，都有注意到列车车门会通过“定点停车”相关的技术让列车车门与站台精准对齐，以方便乘客上下车。大家早已见怪不怪，大家有没有想过，调试器如何做到“定点停车”？
+坐地铁时，列车车门总能与站台精准对齐，靠的是"定点停车"。调试器做的是同一件事：把线程停在你指定的位置，而不是"大概附近"。
 
-读者可能想到了调试器支持各种类型的位置描述locspec，对，它提供了描述源码位置 or 指令地址的方式。单纯就源码位置而言，每一行源码可能对应着1个or多个表达式、1个or多个语句，每个表达式、语句有会对应着多条机器指令 …… 那1个源码位置对应着那么多条指令，究竟应该在哪些指令地址处添加断点呢？
+locspec 能描述位置，但对源码位置而言，一行源码可能对应多个表达式、多条语句，编译后就是多条机器指令。**这一行该在哪条指令上下断点？** 答案来自 DWARF 行号表的关键设计 `is_stmt` 标记：哪些地址适合作为语句边界，编译器生成指令时已经确定，并写进 `.debug_line`。调试器不必自己分析控制流，照抄编译器的判断即可——这就是"定点停车"的车位线。
 
-这涉及到DWARF行号表一个十分关键的设计 `lineEntry.IsStmt`，每行源码对应哪些机器指令，这个编译器生成指令时早就确定了，并且编译器知道在哪条指令地址处设置断点更加合适，所以会在对应行号表中记录对应指令的 `lineEntry.IsStmt=true` 。当指定了locspec实例，并解析对应的断点位置列表时，就需要通过 `lineEntry.IsStmt=true` 对lineEntries进行筛选，筛选出来的每个lineEntry都对应着一个候选断点地址lineEntry.Addr。
-
-然后，在这些地址处通过指令patch添加断点，或者通过调试寄存器添加断点，也就实现了定点停车。
-
-### 执行到下行源码
-
-#### 执行一行源码：next
-
-以next操作为例，它表示要执行到下一行，那如何确定下一行是哪一行呢？
-
-- 对于顺序执行的代码，可以从当前PC确定行号，然后line++直到找到下一个包含可执行指令的行(跳过注释、空行等)，在该处设置断点即可。
-- 对于代码包含分支控制(if-else、switch-case)和循环控制(for、break、continue)时，还可以继续line++来寻找吗？
-
-明显不行！下面这个示例比较容易说明这点：此时简单地递增行号是错误的。因为程序包含了分支控制、跳转，程序可能跳转回forloop判断语句或特定LABEL处，行号并不是简单地 `+1` ，下一行的行号可能变大、变小。
+godbgv2 有一个容易被忽略的细节：**筛选发生在 DWARF 解析阶段，而不是断点解析阶段**。`LineEntry` 只有三个字段（`pkg/dwarf/line.go:21`）：
 
 ```go
-10     var uploaded int
-11 UploadNextFile:
-12     for _, f := range files {
-13         _, err := uploader.Upload(f)
-14         if err != nil {
-15             if err == APIExceedLimit {
-16                 slog.Error("exceed api limit ... quit")
-17                 break UploadNextFile          // <= 执行next，应该执行到 line 29
-18             }
-19             if err == APIBadFileFormat {
-20                 slog.Error("bad file format ... try next")   
-21                 continue                      // <= 执行next，应该执行到 line 12
-22             }
-23             slog.Error("unknown error ... quit")
-24             break UploadNextFile
-25         }
-26         slog.Info("upload success", slog.String("file", f.Name)) // <= 执行next，应该执行到 line 12
-27     }
-28 
-29     println("uploaded files:", uploaded)      // <= 执行next，应该执行到 line 30
-30     println("total files:" len(files))
+type LineEntry struct {
+	File    string // 源文件
+	Line    int    // 行号
+	Address uint64 // 对应的机器地址
+}
 ```
 
-DWARF行号表支持通过PC查询对应源码行，但无法直接获取"下一行要执行的源码"，那我们如何才能做到这点呢？
+`is_stmt` 是行号程序状态机的私有寄存器，`emitRow` 在产出行记录时直接丢弃非语句行（`pkg/dwarf/line.go:628`）；等 `FindLocation` 或 `LineToPC` 看到 `Rows()` 时，表里已经只剩语句行。一个常见的说法是"解析 locspec 时用 `is_stmt` 筛选候选地址"，这个动作在 godbgv2 里确实发生了，只是提前到了解析器内部；代价是 `LineEntry` 不再暴露这个字段，查询侧无法二次判断。
 
-| 方案列表 | 执行操作                                                                                  | 是否可行 | 原因                                                            |
-| -------- | ----------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------- |
-| 方案1    | 从当前PC开始顺序扫描指令，<br />直到找到对应行号不同的PC位置                              | 否       | 要频繁读取内存指令数据，还必须对jmp、call指令进行分析，非常低效 |
-| 方案2    | 通过AST分析函数体，<br />识别并处理各类控制流，<br />在控制流的分支判断表达式处均添加断点 | 否       | 需要做复杂的AST分析，且容易受Go语言版本演进中AST变化的影响      |
-| 方案3    | ？                                                                                        | ？       | ？                                                              |
+定点停车的另一半是"选哪一条"。`LineToPC` 的做法很朴素（`pkg/dwarf/line.go:50`）：全表线性扫描、文件按后缀匹配、**返回第一条命中的行记录**。这解释了实测中 `break main.go:16` 为何落在 `0x4b3971`——它是行号表里第一条 `Line==16` 且文件名后缀匹配的记录。朴素也意味着边界：同一个 `file:line` 若在多处出现（泛型实例化、函数内联都会造成复制），只会给第一个地址下断点，其余副本漏掉。这个问题放到"逻辑断点 vs 物理断点"一节展开。
 
-方案1、方案2工程中都是难以落地的，有没有更简单有效的办法呢？有！
+#### 在函数入口下断点：Go 的栈扩容
 
-我们换个思路，用 **一种更简单高效的“广撒网”的方式**，而不是只在要执行的下一行源码处设置断点：
+函数入口是定点停车最容易翻车的地方。Go 的 goroutine 栈按需增长，编译器会在每个函数序言插入栈检查；栈不够时跳去 `runtime.morestack_noctxt`，扩容、拷栈、调整栈指针，然后**跳回函数入口重新执行**。于是一段平常的序言藏着两条路径：
 
-1. 执行next操作时，首先确定当前PC；
-2. 进而确定当前PC所属的函数，通过函数FDE确定函数的指令地址范围 [low,high)；
-3. 然后在行号表中筛选出这样的lineEntries：
-   - lineEntry地址必须是在函数指令地址范围[low,high)内；
-   - 并且lineEntry.IsStmt=true；
-4. 在筛选出的lineEntries的lineEntry.Addr处添加断点；
+```nasm
+; main.main 序言的一般形状（go build -gcflags 'all=-N -l'，地址随构建而变）
+cmp  rsp, qword [r14+0x10]   ; 栈还剩多少？g 结构里存着栈边界
+jbe  <morestack 入口>         ; 不够 → 扩容后跳回本函数入口重来
+push rbp
+mov  rbp, rsp
+sub  rsp, 0x28               ; 序言结束，下面是第一条源码语句
+```
 
-以 `for i:=0; i<10; i++ {...}` 为例，编译工具链生成DWARF行号表时，会为 i:=0、i<10、i++ 这几个位置处的指令生成对应的lineEntries，每个位置都存在一个lineEntry满足lineEntry.IsStmt=true。调试器可以在这些entries的Addr处设置断点。这样我们就能确保在循环执行过程中正确地停在 i:=0、i++、i<10 这几个位置，而不是直接执行到forloop循环体之后的位置。
+如果断点打在首指令 `cmp` 上，会发生两件事：**命中两次的假象**——第一次命中后调试器越过断点继续执行，栈不够就扩容，扩容完跳回入口又命中一次，用户看到"同一个函数被调用了两次"，其实只有一次；**停在了不该停的地方**——用户在函数名上下断点，预期是"进入函数体的第一条语句"，实际停在栈检查上，此时帧基址和局部变量区都还没建立。
 
-这种方法，不仅可以解决上述forloop的问题，即使源码中包含了break、continue、break LABEL、continue LABEL，也同样奏效。
+行号表恰好把这个位置标成合法停点：`cmp` 和 `sub rsp` 之后的第一条指令，在两个不同地址上共享函数的第一行，且都带 `is_stmt`。编译器只是说"这两处都可以作为函数第一行的停点"，调试器需要选后一个。
 
-#### 进入退出函数：stepin, stepout
+godbgv2 目前**没有做这个选择**。`Function.Entry` 来自 DIE 的 `DW_AT_low_pc`（经 `EntryRange` 处理，`pkg/proc/funcs.go:54`），`break main.main` 直接停在这条栈检查指令上：
 
-stepin和stepout的实现也需要自动隐式创建断点：
+```text
+godbg> break main.main
+breakpoint 1 added at 0x4b3940 (main.go:13)
+godbg> continue
+thread 2101 status: stopped: trace/breakpoint trap
+> main.go:13 (pc: 0x4b3941)
+```
 
-- stepin, 函数入口地址可以从函数定义对应的DWARF DIE获取，
-- stepout, 而返回地址则需要通过DWARF调用帧信息(CFA)进行计算，
+该输出可在 `testdata/script/ch9.2.22.txt` 与 `ch9.2.24.txt` 复现（`_fixtures/loop` 以 `-N -l` 构建；输出中的源码路径前缀从略）。**"在函数入口停"本身对入口断点可以接受**——首次进入就停下，符合"进入这个函数"的直觉；真正会错的是两种场景：栈扩容后重入导致的重复命中，以及用行号断点表达"执行到函数体第一句"时停在序言内部。规避方式很直接：用序言之后的源码行下断点，如 `break main.go:14`。
 
-这样执行stepin、stepout时，在相应位置设置好断点位置，并continue执行到断点位置即可。
+修复的口子已经留好：`DW_LNS_set_prologue_end` 已被解析（`pkg/dwarf/line.go:612`），但只写进状态机的私有字段 `prologueEnd`，既没有落进 `LineEntry`，也没有任何代码读取。要让"序言跳过"生效，需要把它暴露到行记录上，并在 `FindLocation` 选地址时取 `prologue_end` 之后的第一条语句行。godbgv2 没有在 `morestack` 处埋"栈扩容哨兵"断点，也没有任何 prologue-end 判断——这是需要如实说明的已知缺口，而不是已实现的行为。
 
-#### Go定制化需要：栈扩容 / stack growth
+### 隐式断点操作
 
-go为了支持协程栈伸缩，编译器在函数序言部分安插了一些栈检查指令；当函数调用发生时，runtime 会先检查当前栈空间是否足够。如果栈空间不够，就会分配一个更大的栈，并将当前栈上的数据拷贝到新栈中，然后调整 goroutine 的一些硬件上下文信息，包括将 goroutine 的栈指针更新到新的栈位置。这个过程通常称作 “栈扩容” 或 “stack growth / stack copy”。在 Go 1.13+ 的主线实现中，通常不再使用“分段栈 / split stack”这一说法，而是以连续栈和栈拷贝的方式处理扩容。
+用户执行 `break` 显式创建断点，另一些命令会隐式创建；区别在于"谁需要它"和"什么时候撤掉"。`step` 是**指令级**单步：`cmd/debug/step.go` 调 `Client.Step`，底层是 `PtraceSingleStep`（`pkg/target/step.go:12`），不需要断点。`next` 是**源码行级**单步：调试器先算"下一行"落在哪，在那里临时埋一个断点，再 continue——这正是隐式断点的典型用法。
 
-栈扩容特殊在哪里？为什么需要调试器特别关注？不妨思考下 stepin 时应该在函数入口哪个指令地址处添加断点。函数开头的第一条指令？第二条指令？or others? 如果我们在第一条指令或第二条指令处添加断点，那么大概率会观察到一个函数被调用了两次，很诡异。实际上我们应该停在栈扩容相关代码完成、callee 保存 rbp 并重新更新 rbp 之后的第一条指令位置处。类似地，Go 调试器需要对此做特殊处理。
-
-以下面源码为例，我们来说明下特殊处理的必要性，然后执行 `go build -o main -gcflags 'all=-N -l' main.go` 完成构建：
+但在 godbgv2 里 `next` 是个桩：`cmd/debug/next.go:17` 只打印 `TODO(ch9.2.28): next 尚未实现`，既不计算下一行，也不设断点。因此 `NextBreakpoint` 虽然定义了，却**没有任何生产者**。真正在生产中使用隐式断点的是 `stepout`（`pkg/proc/backtrace.go:118`）：按 Go 调用约定，返回地址保存在被调函数的 `CFA-8` 处；取到后在那里设一个步进类临时断点，continue 过去，停在返回地址时再清掉，对应代码如下（节选）：
 
 ```go
-01 package main
-02
-03 func main() {
-04        var a int = 1
-05        var b int = 2
-06        var c int
-07
-08        c = Add(a, b)
-09        println(c)
-10 }
-11
-12 func Add(a, b int) int {
-13        return a + b
-14 }
+ra, err := t.ReturnAddress()       // 返回地址 = CFA-8
+bp, err := t.SetStepBreakpoint(ra) // 生成 StepBreakpoint
+stop, err := t.dbp.Continue()
+// bp 用于停点判定，命中返回地址后清除，见 :137-142
 ```
 
-接下来我们使用 radare2 (r2) 来演示下 go 函数反汇编后指令执行、跳转流程，很明显可以看到 main.main 开头存在一个栈检查、栈扩容过程：
+不管显式还是隐式，最终都要经过 `createBreakpoint` → `dbp.AddBreakpoint` 落到一个 `0xCC` 补丁，差别只在 `Kind` 与生命周期。
 
-```
-$ r2 ./main
-[0x00470b60]> s sym.main.main
-[0x00470ae0]> af
-[0x00470ae0]> pdf
-┌ 103: sym.main.main ();
-│ afv: vars(3:sp[0x10..0x20])
-│       ┌─> 0x00470ae0      493b6610       cmp rsp, qword [r14 + 0x10]               // main.main入口地址
-│      ┌──< 0x00470ae4      7659           jbe 0x470b3f                              // 如果栈空间不够，则跳转到0x004700b3f执行栈扩容逻辑
-│      │╎   0x00470ae6      55             push rbp  
-│      │╎   0x00470ae7      4889e5         mov rbp, rsp
-│      │╎   0x00470aea      4883ec28       sub rsp, 0x28                             // <== 栈扩容完成、callee保存并设置帧基址后，这个地址更适合用做断点
-│      │╎   0x00470aee      48c7442420..   mov qword [var_20h], 1
-│      │╎   0x00470af7      48c7442418..   mov qword [var_18h], 2
-│      │╎   0x00470b00      48c7442410..   mov qword [var_10h], 0
-│      │╎   0x00470b09      b801000000     mov eax, 1
-│      │╎   0x00470b0e      bb02000000     mov ebx, 2
-│      │╎   0x00470b13      e848000000     call sym.main.Add
-│      │╎   0x00470b18      4889442410     mov qword [var_10h], rax
-│      │╎   0x00470b1d      0f1f00         nop dword [rax]
-│      │╎   0x00470b20      e85b8bfcff     call sym.runtime.printlock
-│      │╎   0x00470b25      488b442410     mov rax, qword [var_10h]
-│      │╎   0x00470b2a      e8f191fcff     call sym.runtime.printint
-│      │╎   0x00470b2f      e88c8dfcff     call sym.runtime.printnl
-│      │╎   0x00470b34      e8a78bfcff     call sym.runtime.printunlock
-│      │╎   0x00470b39      4883c428       add rsp, 0x28
-│      │╎   0x00470b3d      5d             pop rbp
-│      │╎   0x00470b3e      c3             ret
-│      └──> 0x00470b3f      90             nop
-│       ╎   0x00470b40      e89badffff     call sym.runtime.morestack_noctxt.abi0   // 栈扩容入口：runtime.morestack_noctxt
-└       └─< 0x00470b45      eb99           jmp sym.main.main                        // 当栈扩容准备好后，重新跳转回main.main执行
-[0x00470ae0]>
-```
+#### 隐式断点的分类：5 种 Kind
 
-前面我们提过了，为了避免栈扩容导致的同一个函数被调用两次的假象，我们不应该在栈检查相关的几条指令位置添加断点，如 `0x00470ae0` `0x00470ae4` 这几条都是不合适的；但是偏偏 go 编译器生成行号表的时候，将 `0x00470ae0` 对应的 lineEntry.IsStmt 设置为了 true，意味着调试器应该将此位置作为一个断点位置。
-
-你可以通过dwarfviewer来查看行号表，下面是截取的一部分main.main开头的指令对应的行号表lineEntries:
-
-```
-Address	Line	File	Column	IsStmt	Basic Block
-0x00470ae0	3	/home/zhangjie/debugger101/test/go_func/main.go	0	true	false   // 这个位置不合适，栈扩容时会导致同一个函数被执行两次的假象
-0x00470aea	3	/home/zhangjie/debugger101/test/go_func/main.go	0	true	false   // 这个位置可以！
-0x00470aee	4	/home/zhangjie/debugger101/test/go_func/main.go	0	true	false
-0x00470af7	5	/home/zhangjie/debugger101/test/go_func/main.go	0	true	false
-```
-
-其实将 `0x00470ae0` 作为候选断点位置不太合适，至少对普通开发者来说是不合适的。但是对于运行时调试人员，比如你想跟踪栈扩容逻辑，那么在 `0x00470ae0` 设置断点就是合适的。所以也可以理解成 go 编译器开发人员给了调试器设计人员一定的自由度，你可以通过一个选项来打开对栈扩容逻辑的跟踪（在0x00470ae0设置断点），默认不跟踪栈扩容逻辑（在0x00470aea设置断点）。
-
-> 关于如何使用dwarfviewer查看行号表？
->
-> 执行命令  `dwarfviewer -file=./main -view=line -webui`, 然后使用浏览器打开webui（ http://localhost:8080 ），注意从webui左侧侧边栏中选择编译单元 `main`，便可以查看该编译单元的行号表。
-
-### 隐式断点操作 `next` `stepin` `stepout`
-
-符号级调试器中，用户会通过执行 `break` 命令显式创建的断点，也有些调试命令会隐式地自动创建断点，比如 `next` `stepin` `stepout`。
-
-我们这里比较下step和next，step表示步进单条指令，next表示执行到下一行源码处：
-
-- 在指令级调试器中，step命令通过 `ptrace(PTRACE_SINGLESTEP, ...)`开启CPU单步执行模式来实现指令级别的步进。本质上是CPU控制的，CPU发现flags是步进模式，那么就执行一条指令后触发一个DebugException，该异常处理程序中会让tracee停下来，并通知tracer来观察tracee状态。
-- 而在符号级调试器中，要实现next源码行级别的步进操作，就需要智能地确定要执行到的下个源码行是哪一行，并在此处设置对应的断点，然后continue到此断点处，如果是0xCC软件断点则触发BreakpointException，该异常处理程序中会让tracee停下来，并通知tracer来观察tracee状态。通过这种方式来实现源码行级别的步进。
-
-stepin和stepout的实现也需要自动隐式创建断点：
-
-- stepin, stepin一个函数时，需要在函数入口地址处添加断点，然后continue到断点处；
-- stepout, 从一个函数中stepout时，需要在函数返回地址处添加断点，然后continue到断点处；
-
-**为了方便在源码级别进行调试，符号级调试器会隐式地自动创建断点**。设想下，如果没有next自动地断点管理机制，要实现执行一行源码的操作，我们还需要手动走读下代码判断下下一行源码位置是跳转到line10还是line20，然后再手动添加断点，再continue …… 这得多不方便。
-
-### 隐式断点细分
-
-为了更好地进行断点管理，需要区分人工手动创建、隐式自动创建的断点，对后者还需要再进一步细分其创建的情景、原因。当上述两类断点在同一个源码位置多次添加时、重叠时，我们需要精细化控制这个断点的行为。
+隐式断点和用户断点可能落在同一地址，调试器必须能区分"这个断点是谁要的、为什么"，否则无法决定命中优先级和清理时机。godbgv2 用位集表达类型（`pkg/proc/breakpoints.go:12`）：
 
 ```go
-// BreakpointKind determines the behavior of debugger when the breakpoint is reached.
 type BreakpointKind uint16
 
 const (
-    // 用户执行break命令创建的断点
-    UserBreakpoint BreakpointKind = (1 << iota)
-    // 用户执行next命令时隐式创建的断点
-    NextBreakpoint
-    // ...
-    NextDeferBreakpoint
-    // ...
-    StepBreakpoint
-    // ...
-    WatchOutOfScopeBreakpoint
-    // ...
-    StackResizeBreakpoint
-    // ...
-    PluginOpenBreakpoint
-    // 用户执行stepin命令时隐式创建的断点
-    StepIntoNewProcBreakpoint
-    // ...
-    NextInactivatedBreakpoint
-    // ...
-    StepIntoRangeOverFuncBodyBreakpoint
+	UserBreakpoint       BreakpointKind = 1 << iota // break 命令创建
+	NextBreakpoint                                  // next 命令隐式创建（预留）
+	StepBreakpoint                                  // step 命令隐式创建（stepout 在用）
+	TracepointBreakpoint                            // trace 命令创建的跟踪点
+	WatchBreakpoint                                 // watch 命令创建的监视点（预留）
 
-    // 该bitset表示步进操作断点的所有类型
-    steppingMask = NextBreakpoint | NextDeferBreakpoint | StepBreakpoint | StepIntoNewProcBreakpoint | NextInactivatedBreakpoint | StepIntoRangeOverFuncBodyBreakpoint
+	steppingMask = NextBreakpoint | StepBreakpoint // 步进类：允许与其他断点重叠
 )
 ```
 
+只有 5 种，与使用现状一一对应：
+
+| Kind | 值 | 生产者 | 现状 |
+| --- | --- | --- | --- |
+| `UserBreakpoint` | `1<<0` | `break` → `CreateBreakpointByLoc` | 在用 |
+| `NextBreakpoint` | `1<<1` | 无 | 预留（`next` 是桩） |
+| `StepBreakpoint` | `1<<2` | `stepout` 的 `SetStepBreakpoint` | 在用 |
+| `TracepointBreakpoint` | `1<<3` | `trace` 的 `SetTracepoints`（`pkg/proc/trace.go:35`） | 在用 |
+| `WatchBreakpoint` | `1<<4` | 无 | 预留（`watch` 走硬件寄存器路径） |
+
+用位集而不是枚举，是为了表达"同时属于多类"的组合。判断"能不能重叠"只做一次位与（`pkg/proc/breakpoints.go:31`）：`kind&steppingMask != 0`。`breakpoints_test.go:36` 的单测给出判定表：`User`、`Tracepoint`、`Watch` 不可重叠，`Next`、`Step` 可以，`Next|User` 这种组合也算"可以"。
+
 ### 逻辑断点 vs 物理断点
 
-我们期望在指定的一个源代码位置处添加断点，在个别特殊场景下，为了达到这个断点效果，我们要在多个不同机器指令地址处添加断点。
+用户说的是"源码位置"，机器认的是"指令地址"，中间隔着编译器的优化。最典型的是泛型：`func Add[T ~int|~int64](a, b T) T` 被 `Add(1, 2)` 和 `Add(int64(1), int64(2))` 使用后，会为每种类型各实例化一份，同一个源码行对应两个地址。内联同理：小函数被内联到多个调用点，函数体内的同一行指令被复制多份。
 
-考虑如下几种常见情况：
-
-- Go泛型函数 `func Add[T ~int|~int32|~int64](a, b T) T {return a+b;}`，如果程序中使用了 `Add(1,2), Add(uint(1), uint(2))` 那么这个泛型函数就会为int、uint分别实例化两个函数（了解下Go泛型函数实现方案，gcshaped stenciling）。继续转成机器指令后，泛型函数内同一个源码行自然就对应着两个地址（一个是int类型实例化位置，一个是uint类型实例化位置）。
-- 对于函数内联，其实也存在类似的情况。满足内联规则的小函数，在多个源码位置多次调用，编译器将其内联处理后，函数体内同一行源码对应的指令被复制到多个调用位置处，也存在同一个源码行对应多个地址的情况。
-
-实际上我们执行 `break locspec` 添加断点的时候，我们压根不会去考虑泛型函数如何去实例化成多个、哪些函数会被内联。即使知道也肯定不想用泛型函数实例化后的指令地址、函数内联后的地址去逐个设置断点 …… 因为这样非常不方便。
-
-**“在1个源码位置添加断点，实际上需要在泛型实例化、内联后的多个指令地址处创建断点”**，为了描述这种关系，就有了**“逻辑断点” 和 “物理断点”** 的概念：
-
-- 逻辑断点：`break 源码位置`，通过这种方式创建断点，会在对应源码位置处创建1个逻辑断点；
-- 物理断点：逻辑断点强调的是源代码位置，物理断点强调的是底层实现时要用断点指令0xCC进行指令patch，一个逻辑断点对应着至少1个物理断点。
-  泛型函数多次实例化、满足内联规则的函数多次内联时，1个逻辑断点会对应着多个物理断点。
-
-实际日常调试过程中，我们说“添加断点”强调的是更容易感知的“逻辑断点”，底层实现时会涉及1个或多个“物理断点”的创建。
-
-### 断点重叠管理 breaklet
-
-先举个例子，比如有下面代码片段: 假定当前我们现在停在11行这个位置，现在我们执行 `break 12` 那么将会在12行创建一个逻辑断点，对应的也会创建1个物理断点，然后我们执行 `next`操作来逐源码行执行。next操作会确定当前函数范围，并为函数内所有指令地址对应的lineEntry.IsStmt的指令地址处增加一个断点，12行也不例外。
-
-此时，在12行就出现了两个创建逻辑断点的操作，一个是人为 `break 12`设置的，一个是 `next` 隐式创建的。这里的两个逻辑断点，最终也是要去设置物理断点的，但是我们怎么明确表示这个地址处实际上是有两个“物理断点”发生了重叠呢？
+用户当然不想给每个副本单独下断点，所以需要两层抽象：**逻辑断点**是用户看到的那条记录，带编号、名称、位置描述、条件、命中计数；**物理断点**是真正写进目标进程内存的一个 `0xCC` 补丁，按指令地址索引。两层分别落在 `pkg/proc` 与 `pkg/target`：
 
 ```go
-   10 for {
-=> 11     i++
-   12     println(i)
-   13 }
-```
-
-重叠意味着什么呢？物理断点最终是否生效，需要综合重叠的多个断点的创建逻辑、断点激活条件来判断。举个例子，比如某个逻辑断点命中n次后才触发激活，或者命中超过m次后就不再激活，调试期间执行到此断点时tracee也停下了，但是tracer发现条件不满足断点激活条件，tracer便会执行PTRACE_CONT操作恢复tracee执行。但是，假如当前断点位置有next隐式创建的断点，那么实际上这个断点处还是应该停下来，因为next操作设计预期就是如此，它比条件断点的条件判断优先级还要高。
-
-那怎么描述这种同一个物理断点处存在多个断点的重叠呢？这就要引入 `Breaklet` 抽象。
-
-OK，截止到这里，我们可以抛出逻辑断点、物理断点、Breaklet三者的层次关系了：
-
-```go
-// 1个逻辑断点包含多个物理断点，解决的是泛型函数、函数内联情况下，
-// 一个源码位置处添加逻辑断点对应多个机器指令位置添加物理断点的问题
-type LogicalBreakpoint struct {
-    breakpoints []*Breakpoint
-    ...
-}
-
-// 1个物理多点包含至少1个breaklets，解决的是描述多个断点在同一个物理地址处重叠的问题
+// pkg/proc/breakpoints.go:48 —— 逻辑断点
 type Breakpoint struct {
-    breaklets []*Breaklet
-    ...
+	ID       uint64
+	Name     string
+	Loc      string // locspec 原文
+	Addr     uint64 // 解析后的指令地址（单地址）
+	File     string
+	Line     int
+	Cond     string
+	Kind     BreakpointKind
+	HitCount uint64
+	Enabled  bool
 }
 
-// Breaklet表示多个在同一个物理断点处重叠的多个断点之一
-type Breaklet struct {
-    // 表示是否是一个步进断点（next、step）
-    Kind      BreakpointKind
-
-    // 当前物理断点归属的逻辑断点的ID
-    LogicalID int
-
-    // 如果不为nil，Cond表达式求值为true时该断点才会激活，
-    // 不激活的意思就是调试器会发现tracee触发断点后，会主动执行continue让tracee继续执行
-    Cond      ast.Expr
-
-    // 当这个breaklet的所有条件都满足时，触发这个回调，这个回调逻辑允许包含带副作用的逻辑，
-    // 返回true时表示这个断点是active状态
-    callback func(th Thread, p *Target) (bool, error)
-
-    ...
+// pkg/target/breakpoint.go:11 —— 物理断点
+type Breakpoint struct {
+	ID      uint64
+	Addr    uintptr
+	Pos     string
+	Orig    byte // 原指令首字节
+	Enabled bool
 }
 ```
 
-Ok，结合上面伪代码，现在我们可以简单总结下：
+**这里必须纠正一个常见直觉。** 很多材料（包括 delve 的设计）讲的是"1 个逻辑断点 → N 个物理断点"，因为一个源码位置可能对应多个地址。godbgv2 正好相反：`Breakpoint.Addr` 是单个 `uint64`，**一个逻辑断点只对应一个物理断点**；多地址被上移到创建阶段——locspec 解析出几个地址，就建几条逻辑断点（地址处已有断点时复用），每条各带一个物理断点。
 
-- 同一个逻辑断点可能对应着多个物理断点，因为Go支持泛型函数、函数内联；
-- 同一个物理断点可能有多个breaklets，因为多个断点在同一个物理断点处会出现重叠；
-- 每个breaklet表示在同一个物理断点处重叠的多个断点之一
-  - 它有独立的断点类型Kind来区分每个断点添加原因；
-  - 它有标识字段体现它实际上从属于哪一个逻辑断点；
-  - 每个breaklet有自己的激活条件；
-  - 每个breaklet的所有条件满足时，有自己的callback可以触发执行；
+创建入口在 `pkg/proc/location.go:99`：先 `FindLocation`，命名断点若命中多个地址直接拒绝，然后逐地址 `createBreakpoint`，任一失败就回滚已创建的：
+
+```go
+addrs, err := t.FindLocation(loc)
+// 命名断点只能对应一个位置：多地址共名会让"按名引用"产生歧义
+if name != "" && len(addrs) > 1 {
+	return nil, fmt.Errorf("breakpoint name %q cannot be used for %d locations", name, len(addrs))
+}
+bps := []*Breakpoint{}
+for _, addr := range addrs {
+	bp, err := t.createBreakpoint(addr, loc, UserBreakpoint)
+	if err != nil {
+		for _, created := range bps { _, _ = t.ClearBreakpoint(created.ID) } // 回滚
+		return nil, err
+	}
+	bp.Name = name
+	bp.Cond = cond
+	bps = append(bps, bp)
+}
+```
+
+实际会返回多个地址的 locspec 只有 `/regexp/`：它遍历 `ListFunctions`，把每个匹配函数的入口都收进来（`pkg/proc/location.go:29`）；函数名、`file:line`、`*addr`、`+N/-N` 都是一个地址。所以"多条逻辑断点"最常见的来源是 `break /main\./` 这种批量下断点。
+
+这也解释了 godbgv2 为什么不做"1:N"：位置解析层本身就是"一个 locspec → 一组地址"，每个地址独立成一条逻辑断点即可，不需要让一条逻辑断点持有多个物理地址。代价是泛型实例化、内联造成的"同一源码行多副本"没有覆盖——`LineToPC` 只返回第一条，其余副本没有断点。原理上需要"同一逻辑断点挂多个物理断点"，godbgv2 没有走到那一步。
+
+还有一处编号陷阱：逻辑断点的 `ID` 在创建时取自物理断点（`ID: phys.ID`），但**物理断点被还原后重建时编号会变，逻辑断点编号不变**——"越过断点"的流程（还原指令 → 回退 PC → 单步 → 重新打补丁）会把物理断点整条摘掉再新建。因此清理逻辑断点时不能拿逻辑编号查物理表，只能按地址查（`pkg/proc/breakpoints.go:172`：`phys, ok := t.dbp.Breakpoints[uintptr(bp.Addr)]`）。
+
+### 断点重叠管理：Breaklet
+
+现在考虑：`stepout` 的返回地址，恰好是用户已经下过断点的位置，会怎样？
+
+物理层面只能有一个 `0xCC`——同一个地址不能补两次。但语义上有两个请求：用户断点要求停下并保持；`stepout` 的临时断点要求停下、然后被清理。合并成一条逻辑断点，`stepout` 收尾时会连用户断点一起删；各建一条，又需要记录"这个地址上的补丁是两条断点共用的"。`Breaklet` 就是这本登记簿（`pkg/proc/breakpoints.go:38`）：
+
+```go
+type Breaklet struct {
+	Kind      BreakpointKind // 该逻辑断点的创建来源
+	LogicalID uint64         // 归属的逻辑断点编号
+	Cond      string         // 激活条件（字段预留）
+}
+```
+
+`Target.breaklets` 是 `map[uint64][]*Breaklet`（`pkg/proc/target.go:16`），键是地址。创建断点时先看该地址有没有物理断点（`pkg/proc/breakpoints.go:71`，节选）：
+
+```go
+if _, ok := t.dbp.Breakpoints[uintptr(addr)]; ok {
+	if canOverlap(kind) {
+		existing := t.breakpointByAddr(addr)
+		// 步进类断点：只登记重叠单元，复用物理断点
+		t.breaklets[addr] = append(t.breaklets[addr],
+			&Breaklet{Kind: kind, LogicalID: existing.ID})
+		return &Breakpoint{ID: existing.ID, Addr: addr, Kind: kind, Enabled: true}, nil
+	}
+	// 用户断点：复用既有逻辑断点（重复 break 同一位置是合法的）
+	if bp := t.breakpointByAddr(addr); bp != nil {
+		return bp, nil
+	}
+}
+```
+
+清理时对称：先摘逻辑记录与 Breaklet，只有该地址的 Breaklet 全部摘完，才还原物理补丁（`pkg/proc/breakpoints.go:157`）。这就是"物理指令只 patch 一次、逻辑请求各留一条"。
+
+但 godbgv2 的重叠只做了一半，另一半需要如实说明：
+
+- **没有回调，也没有 per-breaklet 条件。** `Breaklet.Cond` 是从未赋值的预留字段；真正的条件存在逻辑断点的 `Breakpoint.Cond` 上（字符串），命中后由客户端调 `Client.EvalCondition` 求值，不满足就自动继续（`cmd/debug/continue.go:116`、`pkg/service/debugger/debugger.go:323`）。判定时按 `PC-1` 找到的是该地址上的**第一条逻辑断点**（`cmd/debug/continue.go:160`），不会遍历重叠的多个 Breaklet 分别判断。
+- **重叠分支复用已有逻辑断点编号，不新增逻辑断点。** `LogicalID` 直接取 `existing.ID`，返回的 `Breakpoint` 也没有加入 `t.bps`。因此 `stepout` 收尾时按这个编号调 `ClearBreakpoint`，摘除的是同址既有断点的逻辑记录与全部 Breaklet。当临时断点与用户断点真的重叠时，"只清理自己那一份"并没有做到。
+- `ToggleBreakpoint` 只翻逻辑断点的 `Enabled` 并还原/重建物理补丁（`pkg/proc/breakpoints.go:240`），不检查同址是否还有其他重叠单元。
+
+合起来说明：Breaklet 解决了"同一地址只有一个补丁"的**登记**问题，没有解决"多个请求各自判定、各自清理"的**仲裁**问题。delve 用 `callback func(...) (bool, error)` 补的正是后半件事；godbgv2 没有 callback，也没有 `on <bp> <cmd>` 这类命中后执行动作的机制。
 
 ### 软件断点 vs 硬件断点
 
-调试器实现断点的方式主要有两种：软件断点和硬件断点。
+#### 软件断点：改写一条指令
 
-- 软件断点是通过断点指令0xCC进行指令patch，软件断点相对来说使用更普遍，兼容性更好，但会修改目标程序指令。
-- 硬件断点则是利用CPU提供的调试寄存器（如x86的DR0-DR7）来实现的，不需要修改指令，能监视代码执行和数据访问，但调试寄存器数量有限。
+x86 的断点指令是 `0xCC`（`int3`），执行到它时 CPU 产生 `#BP` 异常（向量 3），内核捕获后向 tracee 投递 `SIGTRAP` 并唤醒 tracer。`pkg/target` 的 `(*DebuggedProcess).AddBreakpoint` 就是"读—存—改"三步（`pkg/target/breakpoint.go:52`）：
 
-#### 软件断点
+```go
+if bp, ok := p.Breakpoints[addr]; ok {
+	return toAPIBreakpoint(bp), nil // 该地址已有断点
+}
+orig := [1]byte{}
+n, err = syscall.PtracePeekText(pid, addr, orig[:]) // 读原首字节
+breakpoint = newBreakPoint(addr, orig[0], "-")
+p.Breakpoints[addr] = breakpoint
+n, err = syscall.PtracePokeText(pid, addr, []byte{0xCC}) // 改写为 int3
+```
 
-不同处理器架构有不同的断点指令，以x86为例，其断点指令是0xCC（INT 3）。
-当处理器执行了指令0xCC后，处理器会产生#BP异常（向量号3，BreakpointException），内核捕获该异常并通知调试器。
+`int3` 是陷阱类异常：CPU 执行完它之后，**压栈的返回地址指向断点地址 +1**。所以线程停下时 `PC` 是 `addr+1`，整个调试器到处都要记住这个 `+1`：判断"线程停在哪个断点"要查 `PC-1`（`pkg/target/breakpoint.go:186`）；展示源码位置时先按 `PC` 查行号、失败再按 `PC-1`（`cmd/debug/location.go:16`）；清理断点时要先把停在断点上的线程 `PC` 减 1，否则恢复执行会跳过被 `0xCC` 覆盖的指令。清理顺序在代码里写得很清楚（`pkg/target/breakpoint.go:96`）：**先回退线程 PC，再还原指令**——因为还原会摘掉断点索引，之后再找"停在断点处的线程"就找不到了。
 
-#### 硬件断点
+"越过断点"是这套机制的日常用法：用户 `continue` 时线程正停在断点上，必须先处理掉，否则恢复执行会立刻再次触发。顺序是四步——回退 PC、还原指令、单步执行一条指令、重新打补丁（`cmd/debug/continue.go:47`）：
 
-以x86架构为例，提供了4个断点地址寄存器(DR0-DR3)、1个状态寄存器(DR6)、1个控制寄存器(DR7)，来支持硬件断点。
+```go
+regs.SetPC(regs.PC() - 1) // 回退 PC
+Client.WriteRegs(tid, regs)
 
-当设置一个硬件断点时，需要执行如下操作:
+if _, cleared := bpCleared[bpAddr]; !cleared {
+	Client.RestoreInstruction(bpAddr) // 还原首字节（多线程去重）
+	bpCleared[bpAddr] = struct{}{}
+}
+Client.Step(tid)             // 单步越过这条指令
+Client.AddBreakpoint(bpAddr) // 重新打补丁
+```
 
-1. 将断点地址写入某个未使用的DR0-DR3寄存器
-2. 在DR7中设置对应的控制位:
+多线程下"还原只需一次"（`bpCleared` 去重），但"回退 PC"和"单步"必须逐线程做，因为可能多个线程都停在同一个断点上。
 
-   - L0-L3位: 启用对应的DR0-DR3断点(置1启用)
-   - G0-G3位: 全局启用对应断点(置1启用)
-   - R/W0-R/W3位: 设置断点类型
-     - 00: 执行断点
-     - 01: 数据写入断点
-     - 11: 数据读写断点
-   - LEN0-LEN3位: 设置监视的数据长度(1/2/4/8字节)
+#### 硬件断点：调试寄存器
 
-当程序执行到断点地址或访问监视的内存时，处理器会产生#DB异常(向量号1, DebugException)，内核捕获该异常并通知调试器。
+x86 提供 4 个调试地址寄存器 `DR0-DR3`、1 个状态寄存器 `DR6`、1 个控制寄存器 `DR7`。设置执行断点或数据监视点时，把地址写进某个空闲的 `DR0-DR3`，再在 `DR7` 里配置槽位：`L0-L3`（局部使能，位 0/2/4/6）、`R/W0-R/W3`（位 16/20/24/28，`00` 执行、`01` 写、`11` 读写）、`LEN0-LEN3`（位 18/22/26/30，监视长度）。命中后 `DR6` 的 `B0-B3` 置位，指明是哪个槽位触发，**读完必须清零**，否则恢复执行会立刻再次触发。
 
-#### 异常处理
+访问方式很特殊：调试寄存器属于内核保存的线程上下文，`ptrace` 没有专门请求，只能用 `PTRACE_PEEKUSER/POKEUSER` 读写 `struct user` 里的 `u_debugreg`。godbgv2 在 `pkg/target/hwbreakpoint.go:31` 硬编码偏移 `848`（常量 `debugRegOffset`），并自己声明了两个请求码（`:26`）：`ptracePeekUser = 3`、`ptracePokeUser = 6`。
 
-无论是软件断点产生的#BP异常，还是硬件断点产生的#DB异常，产生异常后，处理器会立即转入对该异常的处理。具体流程是：处理器从中断描述符表(IDT)中找到该异常对应的处理程序入口地址，然后跳转到该异常处理程序去执行。这里的IDT是在内核启动时设立的，每个异常对应的处理程序都是Linux内核提供的。
+`SetWatchpoint` 分配槽位后，对**每个被跟踪线程**都写一遍 DR 与 DR7（调试寄存器是线程级状态），DR7 在当前值上按位或，避免覆盖其他槽位（`pkg/target/hwbreakpoint.go:65`，节选）：
 
-Linux内核的异常处理程序执行时，会生成SIGTRAP信号发送给tracee。比较特殊的是，SIGTRAP信号的处理也是内核负责的，内核会进一步通知tracer。tracer此时一般处于wait4阻塞等待状态，等内核通过SIGCHLD信号和__wake_up_parent机制唤醒tracer后，tracer就可以使用ptrace相关操作去获取tracee的运行时状态了。
+```go
+slot, ok := p.freeWatchSlot()
+if !ok {
+	return nil, fmt.Errorf("no free debug register (DR0-DR3 all in use)")
+}
+dr7, err := p.currentDR7()           // 读当前 DR7
+dr7 |= 1 << (slot * 2)               // 局部使能 Ln
+dr7 |= uint64(mode) << (16 + slot*4) // R/Wn
+dr7 |= 0b11 << (18 + slot*4)         // LENn
+for _, thread := range p.Threads {
+	p.setDebugRegister(thread.Tid, slot, uint64(addr))
+	p.setDebugRegister(thread.Tid, 7, dr7)
+}
+```
 
-> **术语澄清**：严格来讲，"中断"这个术语可以泛指异常(exception)、陷阱(trap)、外部中断(interrupt)，也可以专指外部中断。外部中断是外设通过中断控制器连接到CPU的INTR引脚产生的，CPU在每个指令执行周期结束时通过中断控制器（负责中断屏蔽、按优先级扫描设备中断）来感知接下来需要处理哪个外设的中断请求。外部中断的处理是异步的，而上述提及的软件断点通过安插指令来生成异常并处理的方式是同步的。
->
-> -Exception（异常）：通常由程序错误或CPU检测到的特殊情况产生（如除零、无效指令、页错误等），向量号0-31。其实0-31中的异常可以细分为faults可恢复的异常, traps调试相关, aborts不可恢复的三大类。
-> -Trap（陷阱）：是一种特殊的异常，通常用于调试（如#DB, #BP），陷阱处理后会返回到异常指令的下一条。
-> -Interrupt（中断）：通常由外部设备产生（如定时器、键盘、网卡等），向量号32及以上。
+`LENn` 固定写 `0b11`；按 Intel SDM 的编码（`00`=1、`01`=2、`10`=8、`11`=4 字节），这里监视的是 4 字节（源码注释写作"8 字节"，与编码表不符，读者以编码表为准）。对 `watch -w` 关心的"这个地址被写了"来说，4 字节粒度已经够用。
 
-### 支持多进程+多线程调试
+godbgv2 把执行断点（`R/W=00`）留给软件断点，硬件断点只用于 `watch`：`WatchMode` 里定义了 `WatchExecute`，但命令层只开放 `write`/`read`/`readwrite`（`pkg/service/debugger/debugger.go:198`）。x86 没有真正的"只读数据"监视，`read` 按 `readwrite` 处理。命中路径也不同：`watch` 不经过 `0xCC`，而是 `Continue` 收到 `SIGTRAP` 后读 `DR6` 判断是不是监视点（`pkg/target/continue.go:197`、`pkg/target/hwbreakpoint.go:113`）。调试寄存器还依赖内核支持：WSL2 对 `PTRACE_POKEUSER` 写 `u_debugreg` 返回 `EIO`，godbgv2 会翻译成"hardware watchpoint not supported by kernel"（`pkg/target/hwbreakpoint.go:86`）。
 
-并发编程模型，当前无外乎多进程、多线程、协程这几种编程模型，以Go为例吧，Go暴漏给开发者的并发操作是基于goroutine的，但是goroutine执行最终还是依赖于thread。对Linux而言，thread实现其实是轻量级进程LWP，我们可以通过系统调用clone结合一些资源复制选项来创建线程。有时我们也会实现多进程程序，比如支持热重启的微服务框架。OK，调试器如果能够方便地支持对多进程、多线程、协程进行跟踪，那肯定是非常方便的。
+| 维度 | 软件断点 | 硬件断点 |
+| --- | --- | --- |
+| 实现 | 指令首字节改写为 `0xCC` | 调试寄存器 `DR0-DR3` |
+| 触发 | `#BP`（向量 3） | `#DB`（向量 1） |
+| 数量 | 不受限 | 最多 4 个 |
+| 能否监视数据 | 不能 | 能（写、读写） |
+| 副作用 | 改写目标进程内存 | 不改内存，改线程上下文 |
+| godbgv2 中的用途 | `break`、`trace` | `watch` |
 
-#### tid or pid
+### 多进程+多线程调试
 
-对调试器而言，所有的被跟踪对象tracee都是就线程这个身份来说的。线程隶属于进程，`getpid()`返回的是所属进程ID，`syscall(SYS_gettid)`返回的是线程ID，这里的tid就是线程对应的LWP的pid。ptrace操作的参数pid，其实指的就是线程对应的轻量级进程的pid。ps: `/proc/<pid>/tasks/` 下是进程包含的线程的tid（对应的LWP的pid）。
+对调试器而言，被跟踪对象始终是**线程**。Linux 的线程是轻量级进程（LWP），`getpid()` 返回进程 ID，`syscall(SYS_gettid)` 返回线程 ID；`ptrace` 的 `pid` 参数指的其实是 LWP 的 pid，`/proc/<pid>/task/` 下每一项就是一个线程。
 
-#### 调试困难点
+godbgv2 只跟踪一个进程，但线程数量动态变化：进程启动后 Go 运行时会创建 GC worker、sysmon 等线程；调试器用 `PTRACE_O_TRACECLONE` 自动跟踪 clone 出来的新线程，收到 `PTRACE_EVENT_CLONE` 时把新 tid 加入 `DebuggedProcess.Threads`（`pkg/target/continue.go:43`、`pkg/target/thread.go:65`）。这是内部事件，处理完要让克隆者继续跑，不能当成用户可见的停止上报。
 
-多进程调试、多线程调试、协程调试的困难点：
+#### 为什么是 all-stop
 
-- 当父进程创建子进程时，如何自动跟踪子进程，如果需要手动加断点让子进程停下来，会错过合适的调试时机；
-- 当进程内部创建新线程时，如何自动跟踪新线程，如果需要手动加断点让新线程停下来，也会错过合适的调试时机；
-- 当跟踪某个协程goroutine-10时，continue恢复现成执行后，GMP调度器可能会调度另一个goroutine-20来执行并停在断点处，但是我们期望跟踪的是goroutine-10；
+某个线程命中断点后，调试器可以只停这个线程（non-stop），也可以停掉整个进程（all-stop）。godbgv2 只有 all-stop，这也是 gdb、lldb、delve 的默认行为。理由有三条：
 
-对于自动跟踪新进程、新线程，我们需要通过自动跟踪新创建的进程、线程。对于跟踪特定协程执行，我们可以借助条件断点的方式，调试器可以给断点加条件 `break [--name|-n name] [locspec] [if condition]` 相当于调试器内部隐式加个条件 `cond runtime.curg.goid == 创建断点时goid`。都可以相对简单的搞定。
+1. **状态一致**。用户停下来想看"那一瞬间"的完整状态；其他线程若继续跑，可能改内存、改变量、释放资源，看到的数据下一秒就失效。
+2. **避免调试引入的竞态**。让其他线程继续跑会制造只在调试时出现的竞态，或掩盖正在找的那个竞态。
+3. **单步可控**。单步时用户预期"只有当前线程走了一步"，其他线程后台自由执行会让全局状态面目全非。
 
-#### 断点传播
+#### tgkill(SIGSTOP) 挂起策略
 
-我们需要进一步思考的是，断点的管理，是否需要针对线程或者进程粒度单独进行维护呢？假设我们现在正在调试的是进程P1的线程T1，调试期间我们创建了一些断点。
+`Continue` 的流程是：`PtraceCont` 恢复全部线程，`waitAny` 等任意线程停止，再 `suspendOtherThreads` 挂起其余线程（`pkg/target/continue.go:17`、`:212`）：
 
-思考以下问题：
+```go
+for _, thread := range p.Threads { // 恢复全部线程
+	p.ExecPtrace(func() error { return syscall.PtraceCont(thread.Tid, 0) })
+}
+if err := p.suspendOtherThreads(wpid); err != nil { // all-stop
+	return nil, err
+}
+```
 
-1. 当我们切换到进程P1的线程T2去跟踪调试的时候，你希望这些断点在T2继续生效吗？
-2. 再或者进程P1 forkexec创建了子进程P2，你希望上述断点在P2也生效吗？
+挂起用 `tgkill(SIGSTOP)` 而不是 `PTRACE_SINGLESTEP`（`pkg/target/suspend.go:19`，节选）：
 
-对于问题1，从实践角度来说，大家是倾向于添加一个断点后，这个断点对当前进程的所有线程生效，但是我们可能更倾向于跟踪当前线程，所以更希望当前线程运行到断点后停下来，而不是其他线程运行到断点后就停下来。
+```go
+syscall.Tgkill(p.Process.Pid, tid, syscall.SIGSTOP)
+// 短轮询消费停止事件；已停止的线程无事件可消费，稍后直接返回
+for i := 0; i < 50; i++ {
+	_, _, err := p.waitFastNoBlock(tid)
+	time.Sleep(10 * time.Millisecond)
+}
+```
 
-对于问题2，有可能父子进程运行的代码是完全一样的，也可能子进程通过exec替换了可执行的代码，对于前者，我们还是倾向于能够自动将父进程设置过的断点，让它在子进程也生效的。
+这两个选择都是踩坑之后定下来的：阻塞在 `futex` 里的线程可能迟迟不触发单步陷阱，用 `PTRACE_SINGLESTEP` 挂起会卡住整个流程；已经停止的线程不再产生事件，阻塞式 `wait4` 会永久挂起。
 
-对于问题1，我们不需要特殊处理，因为同一个进程中的线程执行的代码都是相同的，设置了断点之后对所有线程都是生效的。对于问题2，尤其是父子进程执行相同代码的情况，我们是希望能够将父进程中的断点给传播到子进程，让这些断点在子进程中也生效的。
+挂起带来一个副作用：调试器自己发出的 `SIGSTOP` 也会作为停止事件回到 `Continue` 的等待循环。如果把它当成"程序停了"上报，用户会看到莫名其妙的停止。所以 `Continue` 必须读 `siginfo`，按 `(si_pid, si_code)` 区分信号来源（`pkg/target/continue.go:162`，节选）：
 
-#### Stop Mode
+```go
+switch sig {
+case syscall.SIGURG:
+	forward = true // go 运行时异步抢占，原样转发
+case syscall.SIGSTOP, syscall.SIGCONT:
+	sender, code := p.stopSiginfo(wpid)
+	if (sender == int32(os.Getpid()) && code == siTKill) || sender == 0 {
+		discard = true // 自己挂起的 / 内核发起的初始停止
+	}
+}
+```
 
-当进程执行期间命中断点时，是只让命中断点的线程停下来，还是让其内部的所有线程都停下来？这其实就是主流调试器采用的两种控制模式：All-stop Mode 和 Non-stop Mode。但是从实践来看，当触发断点时能够默认暂停整个进程中的所有活动（All-stop Mode），对调试来说是更便利的，开发者可以有更多时间去观察。
+命中 `forward` 或 `discard` 时，调试器用 `PtraceCont(wpid, resumeSig)` 让线程继续，然后 `continue` 回到等待循环。四类情形：`SIGURG`（Go 运行时抢占）转发给运行时；`SIGSTOP/SIGCONT` 且发送者是调试器自身（`SI_TKILL`，`siTKill = -6`）丢弃；`si_pid == 0`（内核发起的初始停止，如 clone 后新线程的 `SIGSTOP`）丢弃；其余信号（如外部 `kill -INT`）作为真实停止上报。最后一条 smoke 可验：`ch9.2.23.txt` 用外部 `SIGINT` 打断一个条件不满足、正在自动续跑的进程，调试器正确报告 `stopped: interrupt`。
 
-ps：默认暂停整个进程中的所有活动比较便利，但是也要同时伴之以提供恢复某个特定进程、线程的执行，这在调试某几个有协作关系、并发执行的线程时，是非常有价值的。
+#### 断点为什么不需要"传播"
 
-##### All-stop Mode
+多进程调试器里，"父进程的断点要不要在子进程生效"是个真问题，需要断点表复制和 follow-exec 策略。godbgv2 没有这个问题：只有一个进程；`0xCC` 写进**进程地址空间**的代码页，同进程所有线程共享同一份代码，物理断点天然对所有线程生效，新 clone 的线程也自动生效。所以既不需要"按线程维护断点表"，也不需要"新线程继承断点"。断点表因此挂在 `Target`（进程级）而不是 `Thread` 上，`Threads` 只用于执行控制和寄存器读写。
 
-当一个线程命中断点时，主流调试器 (如 GDB, LLDB, Delve, Visual Studio Debugger 等) 的默认行为是暂停整个进程，也就是暂停所有其他线程。这种模式通常被称为 "All-Stop Mode"。
+至于 non-stop 模式，godbgv2 没有实现，也没有 `set non-stop` 之类的开关。代价是调试并发程序时粒度较粗；但对教学实现来说，它把"线程状态一致性"这个最容易出错的维度一次性消掉了。
 
-为什么更倾向于将All-stop Mode作为默认行为？主要原因是为了保证调试会话的一致性和可预测性：
+### delve 做过、godbgv2 没做：范围决策
 
-1. 冻结状态：当您在某个断点停下来时，您希望检查的是程序在“那一个瞬间”的完整状态。如果其他线程继续运行，它们可能会修改内存、改变变量值、释放资源等。这样一来，您在调试器中看到的数据可能在您查看它的下一秒就失效了，这会让调试变得几乎不可能。
-2. 避免数据竞争：让其他线程继续运行会引入新的、仅在调试时才会出现的竞态条件（Race Condition），或者掩盖掉您正在试图寻找的那个竞态条件。
-3. 可控的执行：当您单步执行（Step Over, Step Into）代码时，您期望只有当前线程执行一小步。如果其他线程在后台“自由飞翔”，那么程序的全局状态在您执行一步之后可能会发生天翻地覆的变化，这违背了单步调试的初衷。
+前面反复提到"delve 有、这里没有"。集中列一张表，明确这是**范围决策**，不是"待办清单"，更不是"已实现"：
 
-当一个线程因为断点（通常是一个特殊的陷阱指令，如 x86 上的 INT 3）而暂停时：
+| 能力 | delve | godbgv2 | 说明 |
+| --- | --- | --- | --- |
+| 多进程跟踪 | 支持 | ❌ | 只 exec/attach 一个进程 |
+| 断点传播 / follow-exec | 支持 | ❌ | 单进程，int3 天然覆盖所有线程 |
+| suspended 断点 | 支持 | ❌ | 无"断点暂时不生效、稍后恢复"的机制 |
+| Breaklet 回调 / `on <bp> <cmd>` | 支持 | ❌ | Breaklet 只记 `Kind`/`LogicalID` |
+| 命中次数条件（`-hitcount`） | 支持 | ❌ | 有计数展示，无按次数触发 |
+| trace 返回点 | 支持 | ❌ | 只在函数入口设跟踪点 |
+| 序言结束跳过 | 支持 | ❌ | 见"栈扩容"一节 |
+| 源码级 `next` / `stepin` | 支持 | 🅿️ / ❌ | `next` 是桩，无 `stepin`；`step` 是指令级 |
+| non-stop 模式 | 支持 | ❌ | 只有 all-stop |
 
-1. CPU 产生一个异常。
-2. 操作系统内核捕获这个异常，并通知正在监控（trace）这个进程的调试器。
-3. 调试器接收到通知，此时它获得了控制权。
-4. 调试器会立即通过操作系统接口，向该进程的其他所有线程发送一个暂停信号（如 SIGSTOP），将它们全部“冻结”住。
-
-##### Non-stop Mode
-
-虽然“All-stop”是默认且最常用的模式，但现代调试器也支持另一种高级模式，称为 "Non-stop Mode"。
-
-在 Non-stop 模式下，当一个线程命中断点时，只有该线程被暂停，其他线程可以继续运行。调试器可以独立地控制每一个线程的执行（暂停、继续、单步等）。
-
-什么时候会使用 Non-stop 模式？这通常用于一些特殊的、复杂的调试场景：
-
-
-- 实时系统：比如一个线程负责UI响应，您不希望因为调试后台工作线程而导致整个界面卡死。
-- 监控程序：一个线程可能需要持续地响应心跳或处理网络请求，暂停它会导致连接超时。
-- 分析复杂的并发问题：您可能想观察当一个线程被“卡住”时，其他线程的行为模式。
-
-在 GDB 中，你可以通过 `set non-stop on/off` 命令来切换这两种模式。但毫无疑问，Non-stop 模式对调试者的心智负担远大于 All-stop 模式。
-
-ps：后续可以看到tinydbg的一些设计，为同时启停进程组内的多个进程、同一个进程内的多个线程，提供了支持。
+godbgv2 关心的是把"单进程、断点语义正确、多线程能 all-stop"这条主线走通：逻辑/物理两层、5 种 Kind、Breaklet 登记、`0xCC` 补丁与 PC 回退、硬件 watch、all-stop 挂起。这些在后面的小节里逐个命令展开：9.2.22 讲 `break` 与 `continue` 的完整链路，9.2.23 讲条件与命中计数，9.2.24 讲 `breakpoints`/`clear`/`toggle`，9.2.25 与 9.2.26 分别讲 `trace` 和 `watch`。
 
 ### Put it Together
 
-OK，上面这些统筹起来，就是现代调试器断点管理的层次结构，tinydbg的实现也借鉴了类似的设计。
+把上面的概念叠起来，godbgv2 的断点体系是三层：
 
-```bash
-TargetGroup (调试器跟踪的进程组 debugger.Debugger.target)
-├── LogicalBreakpoints map[int]*LogicalBreakpoint  // 调试器维护的全局逻辑断点
-└── targets []proc.Target (进程组中的多个进程)
-    ├── Target 1 (进程P1, 包含多个threads)
-    │   └── BreakpointMap (每个进程的断点映射)
-    │       ├── M map[uint64]*Breakpoint           // 物理断点（按地址索引）
-    |       |                 ├── []*Breaklet      // 每个物理断点又包含了一系列的Breaklet，
-    |       |                                         每个Breaklet有自己的Kind,Cond,etc.
-    │       └── Logical map[int]*LogicalBreakpoint // 逻辑断点（共享引用）
-    └── Target 2 (进程P2, 包含多个threads)
-        └── BreakpointMap (每个进程的断点映射)
-            ├── M map[uint64]*Breakpoint           // 物理断点（按地址索引）
-            |                 ├── []*Breaklet      // 每个物理断点又包含了一系列的Breaklet，
-            |                                         每个Breaklet有自己的Kind,Cond,etc.            
-            └── Logical map[int]*LogicalBreakpoint // 逻辑断点（共享引用）
+```text
+Target（pkg/proc，一个被调试进程）
+├── bps []*Breakpoint                     逻辑断点：Loc/File/Line/Cond/Kind/HitCount/Enabled
+├── breaklets map[uint64][]*Breaklet      地址 → 重叠单元（Kind/LogicalID）
+└── dbp *target.DebuggedProcess
+    ├── Breakpoints map[uintptr]*Breakpoint     物理断点：Addr/Orig（0xCC 补丁）
+    ├── BreakpointsByID map[uint64]*Breakpoint  物理断点按编号索引
+    └── Threads map[int]*Thread                 线程集合（all-stop 范围）
 ```
 
-tinydbg，它做到了这些方面：
+一条 `break main.go:16` 的路径：
 
-- **跟踪进程组的多进程与多线程**: 支持跟踪进程组中的多进程、多线程，并支持对它们的启停等进行统一管理；
-- **逻辑断点与物理断点层次区分**：1个逻辑断点可以对应多个物理断点，同1个物理断点处允许存在多个断点在此处重叠；
-- **逻辑断点全局共享，统一管理**：所有断点都是逻辑断点，在 TargetGroup 级别统一管理；
-    也因此，逻辑断点状态也做到了全局共享，如断点命中计数等信息在逻辑断点级别维护，所有进程、线程共享；
-- **自动断点传播机制，调试便利**：新进程、新线程自动继承现有的断点；
-    也允许通过 follow-exec 和正则表达式控制断点传播范围，如子进程cmdline匹配正则时才继承断点；
-- **断点实现灵活，基于软件&硬件**：根据调试场景及当时状态，选择适用的软件&硬件断点方案；
-- **手动创建&隐式创建完美协作**：通过breaklets解决调试人员手动创建的断点、其他调试命令隐式创建的断点重叠的问题；
-- **Stop-all Mode并支持切换**：在Stop-all Mode这种更直观的场景上，支持threads/goroutines切换，更好适应并发调试场景；
+```text
+cmd/debug/break.go:65   Client.CreateBreakpoint("main.go:16", "", "")
+  → debugger.CreateBreakpoint          （pkg/service/debugger/debugger.go:103）
+  → proc.Target.CreateBreakpointByLoc  （pkg/proc/location.go:99）
+  → FindLocation → LineToPC             （返回 0x4b3971）
+  → createBreakpoint                    （建立逻辑断点 + Breaklet）
+  → dbp.AddBreakpoint                   （PeekText 存 Orig，PokeText 写 0xCC）
+```
 
-这使得它成为了一个非常实用的Go调试器，它也成为了现代调试器设计实现的典型代表，致敬 go-delve/delve 的贡献者们。
+一次命中的路径：
+
+```text
+int3 → #BP → SIGTRAP → wait4 返回
+  → Continue 挂起其余线程，返回 StopInfo{PID, Reason}
+  → debugger.Continue 按 PC-1 找到逻辑断点，HitCount++
+  → cmd/debug/continue.go：findBreakpointAt(PC-1) → checkAutoResume
+      ├─ 条件不满足 → 越过断点，自动 continue
+      ├─ 跟踪点     → 打印位置，自动 continue
+      └─ 普通断点   → printLocation(PC, PC-1) 后停下
+```
+
+三层各管一件事：逻辑断点管"用户要什么"，物理断点管"机器怎么停"，Breaklet 管"同一地址上都有谁在要"。命令层只经 `api.Client` 访问后端，不碰 DWARF、不碰 ptrace——这也是 9.2.16 之后各节一直遵守的分层。
+
+一处实测细节值得记住：`break main.go:16` 命中后展示的位置是 `main.go:16`、`pc: 0x4b3972`，`pc` 比断点地址大 1。这就是 `int3` 留下的痕迹，也是整节反复强调 `PC-1` 的原因。
 
 ### 本节小结
 
-本文围绕现代调试器（以 go-delve/delve 为例）中断点的精细化管理展开，系统梳理了逻辑断点、物理断点、Breaklet 等多层次断点抽象，以及它们在支持泛型、内联、断点重叠等复杂场景下的作用。我们还介绍了多进程多线程调试时的断点的自动传播机制、断点启用策略（如 follow-exec 及正则过滤）、Stop-all与Non-stop Mode，以及 next/stepin/stepout 等调试命令背后的隐式断点管理。通过这些机制，调试器能够在多进程、多线程、复杂控制流下，实现灵活、精准且高效的断点控制，极大提升了调试的便利性。
+本节围绕 godbgv2 的真实实现，梳理了断点从"源码位置"落到"指令补丁"的三层模型：
 
-本文主要聚焦于断点管理的原理和设计思想，尚未深入到具体的实现细节和源码分析。下一小节我们进一步剖析实现断点的一些关键操作，将原理与实践相结合，更好地理解和掌握现代调试器的断点管理。
+- **定点停车**依赖 DWARF 的 `is_stmt`；godbgv2 在行号表解析阶段就丢弃非语句行，`LineToPC` 取第一条匹配地址。函数入口断点会停在栈检查指令上，因为 `Function.Entry` 就是 `DW_AT_low_pc`，而 prologue-end 信息被解析后丢弃——这是已知缺口，规避方式是改用序言之后的源码行。
+- **隐式断点**目前只有一个真实生产者：`stepout` 在 `CFA-8` 返回地址处设 `StepBreakpoint`。`next` 仍是桩，`NextBreakpoint` 只有定义。5 种 `BreakpointKind` 用位集表达，`steppingMask` 决定哪些类型允许重叠。
+- **逻辑断点与物理断点**是 1:1，不是 1:N：多地址被上移到创建阶段，`/regexp/` 命中几个函数就建几条逻辑断点。物理断点重建后编号会变，清理只能按地址查。
+- **Breaklet** 登记同一地址上的重叠请求，保证物理补丁只打一次；但没有 callback、没有 per-breaklet 条件、重叠清理也不彻底，这些是范围边界。
+- **软件断点**改写 `0xCC`，命中时 `PC=地址+1`，越过断点要回退 PC 并走"还原→单步→重打"；**硬件断点**用 `DR0-DR3/DR6/DR7`，godbgv2 只用于 `watch`，最多 4 个且依赖内核支持。
+- **多线程**只有 all-stop：`tgkill(SIGSTOP)` 挂起其余线程，再用 `siginfo` 把"自己挂起的停止"与"外部信号"区分开。单进程 + 共享代码页意味着断点不需要传播。
+
+下一节（9.2.22）沿着 `break` 与 `continue` 的命令链路，把本节的三层模型落到具体代码：断点怎么创建、执行到断点后怎么越过、停下来的位置怎么展示。
