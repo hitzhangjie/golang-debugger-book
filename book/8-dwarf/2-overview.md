@@ -125,7 +125,11 @@ readelf --debug-dump=info greet | less
    └─<3><b865c>  DW_TAG_member  DW_AT_name: name  DW_AT_data_member_location: 0  DW_AT_type: <0x9ad1e>
 ```
 
-这两个类型 DIE 落在 `runtime` CU，是当前 Go 链接器生成类型信息的实现方式：类型 DIE 由链接器根据程序用到的类型生成、去重，再统一追加到 `runtime` 的 CU 中，而不是随各自的编译单元存放。这是 Go 工具链的实现选择，不是 DWARF 标准的要求；把类型 DIE 的生成移到编译器的方案见 [golang/go#52209](https://github.com/golang/go/issues/52209)，该 issue 目前仍未关闭，方案尚未落地。
+这两个类型 DIE 落在 `runtime` CU，是当前 Go 链接器生成类型信息的实现方式：类型 DIE 由链接器根据程序用到的类型生成、去重，再统一放进 `runtime` 的 CU，而不是随各自的编译单元存放。这是 Go 工具链的实现选择，不是 DWARF 标准的要求；把类型 DIE 的生成移到编译器的方案见 [golang/go#52209](https://github.com/golang/go/issues/52209)，该 issue 至今仍未关闭，相关实现也尚未合并。
+
+类型 DIE 集中存放，是因为无法用一条规则为所有类型确定归属。全局变量 DIE 由编译器随变量符号生成，链接器按符号所属的编译单元就能放回原处；类型则要分情况讨论。包级具名类型（如 `main.Greeter`）只在一个包里定义，可以按定义它的包归位，这部分确实有优化空间。匿名复合类型（`[]A.T`、`func(int) error`）、泛型实例化类型（`List[int]`）以及 `int`、`string` 这类内建类型则不同：它们没有唯一的定义包，类型符号可能由多个包各自生成，链接器按 dupok 去重后只保留一份，放进哪个包都缺乏依据。map、chan 涉及的 `map<K,V>`、`table<K,V>`、`hchan<T>`、`waitq<T>` 等内部类型，则由链接器依据运行时类型描述符现场合成，不对应任何包。
+
+要让其余几类也各归其位，就得在链接期增加一轮分类、兜底和搬迁；只把具名类型归位、其余仍留在 runtime CU 也是一种折中，但类型 DIE 会分散在两处，规则也更复杂。两种做法的收益都只是阅读 DWARF 时更直观——调试器并不依赖类型 DIE 位于哪个 CU，Delve、gdb 都在整个 `.debug_info` 上按名字查找类型。因此链接器选择了一条统一规则：全部放进 runtime CU（该做法从 2018 年的 [CL 137235](https://go-review.googlesource.com/c/go/+/137235) 沿用至今）。维护者视其为实现上的副产物；若有人在具体调试场景中因此受阻，可在 #52209 中反馈。
 
 > 本节输出来自 go1.26.7，构建时加了 `GOEXPERIMENT=nodwarf5`，产物为 DWARF v4。编译器版本不同，偏移量和地址会变化，但树的结构不变。
 
