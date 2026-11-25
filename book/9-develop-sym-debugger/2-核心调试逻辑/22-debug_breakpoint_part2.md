@@ -1,613 +1,516 @@
 ## Breakpoint - part2: 添加断点+执行到断点
 
-前一小节我们深入介绍了现代调试器断点精细化管理面临的挑战以及解决办法，本节我们从实现角度出发，来看一看tinydbg是如何实现常用断点操作的，以及执行到断点之后的处理。
+前一小节从原理上梳理了断点管理的层次：用户视角的**逻辑断点**、指令地址上的**物理断点**，以及同一地址叠加多个逻辑断点时用来记账的 `Breaklet`。这一节开始落地：`break` 如何把一行输入变成一个真正的 `0xCC` 补丁；`continue` 又如何让进程跑到断点、停下来，并在下一次 `continue` 时正确地越过它继续跑。
+
+先把范围讲清楚。godbgv2 是**单进程、all-stop** 的调试器：一次只跟踪一个 tracee（没有进程组，也就没有「断点向新进程传播」这回事），任一时刻要么全部线程都在跑、要么全部线程都被挂起。软件断点的补丁机制、多线程 `continue` 与挂起策略在第 6 章已经讲过（见 [6.18.4 线程执行控制 continue](../../6-develop-inst-debugger/18-multithread/4-continue.md)），本节关注符号级调试带来的增量：**位置描述（locspec）**、**命名断点**、**断点条件**，以及符号化地展示「停在源码哪一行」。
 
 ### 实现目标: 添加+执行到断点
 
-本节实现目标，重点是介绍添加断点命令 `breakpoint` 的设计实现，以及执行到断点后调试器的相关处理逻辑。前一节介绍了现代调试器断点的层次化、精细化管理，引入了一些必要的设计及抽象，实现也会相对更复杂。调试器中有多个与断点机制强相关的调试命令，为了保证内容更聚焦、更便于阅读理解，本节仅介绍添加断点命令 `breakpoint` 以及 程序执行到断点后的处理逻辑。这也是断点相关设计实现中最核心的内容，理解了这部分内容后，再去理解其他调试命令就简单了，我们将在后续小节中介绍。
+`break` 的完整形态：
 
-断点以及与断点机制相关的调试命令设计及实现，内容组织上我是这么规划的：
+```
+break [--name|-n name] <locspec> [if <condition>]
+```
 
-- part1：介绍现代调试器断点的层次化、精细化管理；
-- part2：breakpoint命令添加断点，以及执行到断点后的处理逻辑；
-- part3：`breakpoint ... if expr` or `condition <bpid> expr` 条件断点的创建，及断点命中后的处理逻辑；
-- part4：`breakpoints` `clear` `clearall` `toggle`，这几个查看、清理、关闭or激活断点的操作；
-- ~part5~：`trace` `watch` 这两种特殊类型的断点会在 [trace](./25-debug_trace.md) 和 [watch](./26-debug_watch.md) 中分别进行介绍。
+`--name|-n name` 给断点起名（断点多了以后，「断点 3」远不如一个有意义的名字好用）；`<locspec>` 是位置描述，函数名、`file:line`、`*addr`、`+N`/`-N`、`/regexp/` 都支持，解析见 [9.2.19](./19-how_locspec_works.md)；`if <condition>` 在创建时带上激活条件，条件的判定在 [9.2.23](./23-debug_breakpoint_part3.md) 展开。
 
-ps: `on <bpid> command` 断点命中后执行指定的动作，这个会在介绍part2、part3过程中介绍。
+本节要打通这条链路：
+
+1. 命令层把 `name`、`locspec`、`condition` 拆开，一次 RPC 交给服务端；
+2. 服务端校验名字，把 locspec 解析成**一组**地址，每个地址建一条逻辑断点；
+3. 逻辑断点落到物理层：保存原指令首字节、写入 `0xCC`；
+4. `continue` 恢复全部线程；命中断点后符号化地展示位置，再次 `continue` 时先越过断点再继续。
+
+能力边界一开始就摆出来（口径与 godbgv2 仓库的 `docs/FEATURE-MATRIX.md` §2/§3 一致）：
+
+| 能力 | godbgv2 | 说明 |
+|---|---|---|
+| 命名断点 | ✅ | `-n/--name`；纯数字与重名被拒绝 |
+| 多地址 locspec | ✅ | `/re/` 命中多个函数时，每个地址一条逻辑断点 |
+| 条件断点 | ✅ | 条件存在逻辑断点上，**判定在命令层**（9.2.23） |
+| 断点传播 | ❌ | 单进程；`int3` 是进程内存补丁，天然对所有线程生效 |
+| suspended 断点 | ❌ | locspec 解析失败即失败，不保留「待激活」断点 |
+| follow-exec | ❌ | 不做多进程跟踪 |
+| `on <bp> <cmd>` | ❌ | 命中后自动执行命令未实现 |
+| `next` 隐式断点 | 🅿️ | `next` 目前是桩（9.2.28） |
+
+ps：9.2.22～9.2.26 的分工是：本节 `break` 与 `continue`；9.2.23 条件断点；9.2.24 `breakpoints`/`clear`/`clearall`/`toggle`；9.2.25 `trace` 与 9.2.26 `watch` 两类特殊断点。
 
 ### 代码实现: `breakpoint`
 
-OK，接下来我们看下 `breakpoint` 命令在clientside、serverside分别是如何实现的。
+#### 命令层：把一行输入拆成三件事
 
-先来看看break支持的操作, `break [--name|-n=name] [locspec] [if <condition>]`:
-
-- `--name|-n=name` 可以指定断点名字，如果调试任务比较重，涉及到大量断点，能给断点命名非常有用，它比id、断点位置更易于辨识使用；
-- `[locspec]` 前面介绍过的所有受支持的 `locspec`写法，`break` 命令都予以了支持，这将使得添加断点非常方便；
-- `[if condition]` 添加断点时还可以直接指定断点激活条件 `if <condition>`，这里的condition是任意bool类型表达式。
-
-ps：如果断点创建时未指定激活条件，后续也可以使用 `condition <breakpoint> <boolexpr>` 为已有断点指定激活条件。
-
-```bash
-(tinydbg) help break
-Sets a breakpoint.
-
-    break [--name|-n=name] [locspec] [if <condition>]
-
-Locspec is a location specifier in the form of:
-
-  * *<address> Specifies the location of memory address address. address can be specified as a decimal, hexadecimal or octal number
-  * <filename>:<line> Specifies the line in filename. filename can be the partial path to a file or even just the base name as long as the expression remains unambiguous.
-  * <line> Specifies the line in the current file
-  ...
-If locspec is omitted a breakpoint will be set on the current line.
-
-If you would like to assign a name to the breakpoint you can do so with the form:
-    break -n mybpname main.go:4
-
-Finally, you can assign a condition to the newly created breakpoint by using the 'if' postfix form, like so:
-    break main.go:55 if i == 5
-
-Alternatively you can set a condition on a breakpoint after created by using the 'on' command.
-```
-
-ps：tinydbg重写了go-delve/delve的clientside的断点操作，我们将相对低频使用的参数[name]调整为了选项 `--name|-n=<name>` 的形式，这样也使得程序中解析断点name, locspec, condition的逻辑大幅简化。原来go-delve/delve中的breakpoint命令的参数、选项、条件解析逻辑，可读性欠佳，不太适合作为教程示例给大家介绍。
-
-OK，接下来我们看看tinydbg中添加断点时，clientside、serverside的设计实现。
-
-#### clientside 核心代码
-
-```bash
-debug_breakpoint.go:breakpointCmd.cmdFn(...), 
-i.e., breakpoint(...)
-    \--> _, err := setBreakpoint(t, ctx, false, args)
-            \--> name, spec, cond, err := parseBreakpointArgs(argstr)
-            |    解析断点相关的name，spec，cond
-            |
-            \--> locs, substSpec, findLocErr := t.client.FindLocation(ctx.Scope, spec, true, t.substitutePathRules())
-            |    查找spec对应的地址列表，注意文件路径的替换
-            |
-            \--> if findLocErr != nil && shouldAskToSuspendBreakpoint(t)
-            |    如果没找到，询问是否要添加suspended断点，后续会激活
-            |       bp, err := t.client.CreateBreakpointWithExpr(requestedBp, spec, t.substitutePathRules(), true)
-            |       return nil, err 
-            |    if findLocErr != nil 
-            |       return nil, findLocErr
-            |
-            |    ps: how shouldAskToSuspendBreakpoint(...) works: 
-            |        target calls `plugin.Open(...)`, target exited, followexecmode enabled
-            |
-            \--> foreach loc in locs do
-            |    对于每个找到的地址，创建断点
-            |       requestBp.Addr = loc.PC; 
-            |       requestedBp.Addrs = loc.PCs;
-            |       requestedBp.AddrPid = loc.PCPids
-            |       bp, err := t.client.CreateBreakpointWithExpr(requestedBp, spec, t.substitutePathRules(), false)
-            |
-            \--> if it is a tracepoint, set breakpoints for return addresses, then
-            |    如果是添加tracepoint，那么对于locspec匹配的每个函数，都要在返回地址处设置断点
-            |    ps: like `trace [--name|-n=name] [locspec]`, in which `locspec` matches functions
-            | 
-            |    foreach loc in locs do
-            |       if loc.Function != nil then 
-            |           addrs, err := t.client.(*rpc2.RPCClient).FunctionReturnLocations(locs[0].Function.Name())
-            |       foreach addr in addrs do
-            |           _, err = t.client.CreateBreakpoint(&api.Breakpoint{Addr: addrs[j], TraceReturn: true, Line: -1, LoadArgs: &ShortLoadConfig})
-
-   
-```
-
-简单总结下clientside添加断点的处理流程：
-
-1. 解析输入字符串，得到断点名name、位置描述spec、条件cond；
-2. 然后请求服务器返回位置描述spec对应的指令地址列表；
-3. 如果服务器查找spec失败，至少说明spec对应的位置当前没有指令数据。此时询问是否要尝试添加suspended断点，等后续指令加载后或者进程启动后就可以激活断点；如果服务器查找spec失败，也不需要添加suspended断点，那么返回失败。
-4. 如果服务器查找spec成功，则将服务器返回的每个指令地址处([]api.Location)都请求添加断点；
-5. 如果当前添加的是tracepoint，并且解析出的位置描述spec中还匹配了一些函数，tracepoint因为要观察func的进入、退出时状态，所以这里请求服务器返回匹配函数的返回地址列表，然后返回地址处也添加断点。
-
-通过clientside添加断点的处理过程，我们可以粗略看出，这里处理了普通断点、条件断点、suspended断点、tracepoints 。读者朋友可以关注，clientside添加不同类型断点时用到的RPC以及RPC参数设置的差异。
-
-> ps:  创建断点相关的几个RPC协议设计，给人感觉非常繁琐、冗余、不精炼。
->
-> ```
-> type Client interface {
->     ...
->     // CreateBreakpoint creates a new breakpoint.
->     CreateBreakpoint(*api.Breakpoint) (*api.Breakpoint, error)
->
->     // CreateBreakpointWithExpr creates a new breakpoint and sets an expression to restore it after it is disabled.
->     CreateBreakpointWithExpr(*api.Breakpoint, string, [][2]string, bool) (*api.Breakpoint, error)
->     ...
-> }
-> ```
->
-> 实际上api.Breakpoint描述的是一个断点在clientside希望能看到的完整信息，但是将其用于创建断点请求，让人感觉使用起来非常不方便，这个类型有29个字段，设置是哪些字段才是有效请求呢？再比如CreateBreakpointWithExpr，第2、3个参数分别是locspec以及是否是suspended bp，这俩字段本来就可以包含在api.Breakpoint内，为什么又要多此一举放外面？总之就感觉这里的API设计有点难受。
-
-接下来我们看看服务器收到serverside的添加断点请求时是如何进行处理的。
-
-#### serverside 核心代码
-
-服务器端描述起来可能有点复杂，服务器侧为了应对各种调整，引入了多种层次的抽象和不同实现。前面介绍了断点层次化管理机制，这部分信息对于理解serverside处理流程非常重要。
-
-OK，假定读者朋友们已经理解了上述内容，现在我们整体介绍下serverside添加断点的处理流程。
-
-```bash
-rpc2/server.go:CreateBreakpoint
-func (s *RPCServer) CreateBreakpoint(arg CreateBreakpointIn, out *CreateBreakpointOut) error {
-    \--> err := api.ValidBreakpointName(arg.Breakpoint.Name)
-    \--> createdbp, err := s.debugger.CreateBreakpoint(&arg.Breakpoint, arg.LocExpr, arg.SubstitutePathRules, arg.Suspended)
-    |       \--> checking: if breakpoints with the same name as requestBp.Name created before
-    |       |              if created before, return error
-    |       |    d.findBreakpointByName(requestedBp.Name)
-    |       \--> checking: if breakpoints with the same requestBp.ID created before
-    |       |              if created before, return error
-    |       |    lbp := d.target.LogicalBreakpoints[requestedBp.ID]
-    |       \--> breakpoint config, initialized based on following order
-    |       |    \--> case requestedBp.TraceReturn, 
-    |       |    |    bpcfg.PidAddrs = []proc.PidAddr{{Pid: d.target.Selected.Pid(), Addr: requestedBp.Addr}}
-    |       |    \--> case requestedBp.File != "",
-    |       |    |    bpcfg.File = requestBp.File
-    |       |    |    bpcfg.Line = requestBp.Line
-    |       |    \--> requestedBp.FunctionName != "",
-    |       |    |    bpcfg.FunctionName = requestedBp.FunctionName
-    |       |    |    bpcfg.Line = requestedBp.Line
-    |       |    \--> len(requestedBp.Addrs) > 0, 
-    |       |    |    bpcfg.PidAddrs = make([]proc.PidAddr, len(requestedBp.Addrs))
-    |       |    |    then, fill the bpcfg.PidAddrs with slice of PidAddr{pid,addr}
-    |       |    \--> default, bpcfg.Addr = requestBp.Addr
-    |       \--> if locexpr != "", 
-    |       |    \--> bpcfg.Expr = func(t *proc.Target) []uint64 {...}
-    |       |    \--> bpcfg.ExprString = locExpr
-    |       \--> create the logical breakpoint
-    |       |    \--> `id`, allocate a logical breakpoint ID
-    |       |    \--> lbp := &proc.LogicalBreakpoint{LogicalID: id, HitCount: make(map[int64]uint64)}
-    |       |    \--> d.copyLogicalBreakpointInfo(lbp, requestedBp)
-    |       |    |    copy requestedBp.X to lbp.X
-    |       |    |    d.target.ChangeBreakpointCondition(lbp, requested.Cond, requested.HitCond, requested.HitCondPerG)
-    |       |    \--> err = d.target.SetBreakpointEnabled(lbp, true)
-    |       |    |    \--> if lbp.enabled && !enabled, then 
-    |       |    |    |    lbp.enabled = false
-    |       |    |    |    err = grp.disableBreakpoint(lbp)
-    |       |    |    \--> if !lbp.enabled && enabled, then 
-    |       |    |    |    lbp.enabled = true
-    |       |    |    |    lbp.condSatisfiable = breakpointConditionSatisfiable(grp.LogicalBreakpoints, lbp)
-    |       |    |    |    err = grp.enableBreakpoint(lbp)
-    |       |    \--> return d.convertBreakpoint(lbp)   
-    \--> out.Breakpoint = *createdbp
-```
-
-简单总结下这里的处理流程：
-
-1. 创建断点时如果指定了name，先检查名字是否符合要求（必须是unicode字符，并且不能为纯数字）。
-   不符合要求直接返回失败。
-2. 开始创建断点，如果指定了name，检查下这个名字是否已经被其他逻辑断点使用了。
-   名字被使用则返回错误。
-3. 如果指定了逻辑断点ID，则检查该ID是否已经被其他逻辑断点使用了。
-   ID被使用则返回错误，错误中说明了使用该ID的断点位置信息， `proc.BreakpointExistsError{File: lbp.File, Line: lbp.Line}`。
-4. 根据请求参数中设置断点的方式，创建断点：
-   - 如果requestBp.TraceReturn=true，说明是tracepoint请求中还需指定地址requestBp.Addr（函数调用返回地址）
-     ```
-     bpcfg.PidAddrs = []proc.PidAddr{ {Pid: d.target.Selected.Pid(), Addr: requestedBp.Addr} }
-     ```
-   - 如果requestBp.File != "", 则使用requestBp.File:requestBp.Line来创建断点
-     ```
-     bpcfg.File = requestBp.File, bpcfg.Line = requestBp.Line
-     ```
-   - 如果requestedBp.FunctionName != ""，则使用requestBp.FunctionName:requestBp.Line来创建断点
-     ```
-     bpcfg.FunctionName = requestBp.FunctionName, bpcfg.Line = requestBp.Line
-     ```
-   - 如果 len(requestedBp.Addrs) != 0，则在目标进程的这些地址处添加断点
-     ```
-     bpcfg.PidAddrs = []proc.PidAddr{.....}
-     ```
-   - 其他情况，使用requestBp.Addr来设置断点
-     ```
-     bpcfg.PidAddr = []proc.PidAddr{ {Pid: d.target.Selected.Pid(), Addr: requestedBp.Addr} }
-     ```
-5. 如果locExpr != ""，则解析位置表达式得到LocationSpec，bpcfg.Expr实际上是个函数，执行后返回位置表达式查找到的地址列表
-   ```
-   bpcfg.Expr = func(t *proc.Target) []uint64 {...}
-   bpcfg.ExprString = locExpr
-   ```
-6. 更新逻辑断点的id，创建一个逻辑断点proc.LogicalBreakpoint{LogicalID: id, ...,Set: setbp, ...,File:...,Line:...,FunctionName:...,}
-7. 设置逻辑断点的字段值，并更新其断点条件，copyLogicalBreakpointInfo->ChangeBreakpointCondition
-8. 设置逻辑断点对应的物理断点：err = d.target.SetBreakpointEnabled(lbp, true)
-9. 将逻辑断点信息转换为api.Breakpoint信息返还给客户端展示
-
-接下来看下 `d.target.SetBreakpointEnabled(lbp, true)`，设置逻辑断点的流程，从逻辑断点到物理断点、breaklets，一起看看：
-
-```bash
-err = d.target.SetBreakpointEnabled(lbp, true)
-    \-->  err = grp.enableBreakpoint(lbp)
-            \--> for target in grp.targets, do: 
-                    err := enableBreakpointOnTarget(target, lbp)
-                    |   \--> addrs, err = FindFileLocation(t, lbp.Set.File, lbp.Set.Line), or 
-                    |   |    addrs, err = FindFunctionLocation(t, lbp.Set.FunctionName, lbp.Set.Line), or 
-                    |   |    filter the lbp.Set.PidAddrs if lbp.Set.PidAddrs[i].Pid == t.Pid(), or
-                    |   |    runs lbp.Set.Expr() to find the address list
-                    |   \--> foreach addr in addrs, do:
-                    |           p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil)
-                    |           |    \--> t.setBreakpointInternal(logicalID, addr, kind, 0, cond)
-                    |           |    |       \--> newBreaklet := &Breaklet{LogicalID: logicalID, Kind: kind, Cond: cond}
-                    |           |    |       |
-                    |           |    |       \--> if breakpoint existed at `addr`, then
-                    |           |    |       |       check this newBreaklet can overlap:
-                    |           |    |       |       1) if no, return BreakpointExistsError{bp.File, bp.Line, bp.Addr}; 
-                    |           |    |       |       2) if yes, bp.Breaklets = append(bp.Breaklets, newBreaklet), 
-                    |           |    |       |       3) then `setLogicalBreakpoint(bp)`, and return
-                    |           |    |       \--> else breakpoint not existed at `addr`, 
-                    |           |    |       |       create a new breakpoint, so go on
-                    |           |    |       |
-                    |           |    |       \--> f, l, fn := t.BinInfo().PCToLine(addr)
-                    |           |    |       |
-                    |           |    |       \--> if it is watchtype: set hardware debug registers
-                    |           |    |       |    ...
-                    |           |    |       \--> newBreakpoint := &Breakpoint{funcName, watchType, hwidx, file, line, addr}
-                    |           |    |       \--> newBreakpoint.Breaklets = append(newBreakpoint.Breaklets, newBreaklet)
-                    |           |    |       \--> err := t.proc.WriteBreakpoint(newBreakpoint)
-                    |           |    |       |       \--> if bp.WatchType != 0, then
-                    |           |    |       |       |       watchtype要设置硬件断点，使用处理器自身调试器寄存器的话，这部分可以先不动
-                    |           |    |       |       |       for each thread in dbp.threads, do
-                    |           |    |       |       |            err := thread.writeHardwareBreakpoint(bp.Addr, bp.WatchType, bp.HWBreakIndex)
-                    |           |    |       |       |       return nil
-                    |           |    |       |       \--> _, err := dbp.memthread.ReadMemory(bp.OriginalData, bp.Addr)
-                    |           |    |       |       |       其他断点类型，就要通过0xCC这种调试指令来完成
-                    |           |    |       |       |    return dbp.writeSoftwareBreakpoint(dbp.memthread, bp.Addr)
-                    |           |    |       |       |       \--> _, err := thread.WriteMemory(addr, dbp.bi.Arch.BreakpointInstruction())
-                    |           |    |       |       |               \--> t.dbp.execPtraceFunc(func() { written, err = sys.PtracePokeData(t.ID, uintptr(addr), data) })
-                    |           |    |       \--> newBreakpoint.Breaklets = append(newBreakpoint.Breaklets, newBreaklet)
-                    |           |    |       \--> setLogicalBreakpoint(newBreakpoint)
-                    |           |    |            更新逻辑断点/物理断点中个别相关的字段
-```
-
-看完clientside实现、serverside实现的核心代码路径，这里的逻辑还是比较清晰的吧。主要是明确这几点：
-
-- 这个逻辑断点对进程组grp中的所有进程都生效 `grp.enableBreakpoint(lbp) -> for target in grp.targets -> enableBreakpointOnTarget(target, lbp)`；
-- 这个逻辑断点位置，可能对应着多个机器指令地址，`FindFileLocation(...), or FindFunctionLocation, or filter from lbp.Set.PidAddrs, or runs lbp.Set.Expr() to find address`
-- 每个找到的机器指令地址处都需要添加物理断点 `p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil) -> t.setBreakpointInternal(logicalID, addr, kind, 0, cond)`
-
-#### serverside 断点传播机制
-
-符号级调试场景下“断点”通常指的是逻辑断点，逻辑断点在TargetGroup层次进行统一管理，当有新进程、新线程创建，加入TargetGroup时会自动继承TargetGroup中记录的断点。
-
-这就是我们提到的，当新进程或新线程加入调试组时，断点会自动传播：
+**file：cmd/debug/break.go**
 
 ```go
-func (grp *TargetGroup) addTarget(p ProcessInternal, pid int, currentThread Thread, path string, stopReason StopReason, cmdline string) (*Target, error) {
-  ...
-  t, err := grp.newTarget(p, pid, currentThread, path, cmdline)
-  ...
-  // 共享逻辑断点
-  t.Breakpoints().Logical = grp.LogicalBreakpoints  
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name, err := cmd.Flags().GetString("name")
+		if err != nil {
+			return err
+		}
 
-  // 自动为新目标启用所有现有的逻辑断点
-  for _, lbp := range grp.LogicalBreakpoints {
-      if lbp.LogicalID < 0 {
-          continue
-      }
-      // 在新目标上启用断点
-      err := enableBreakpointOnTarget(t, lbp)  
-      ...
-  }
-  ...
+		// 解析 "locspec [if <condition>]"：cond 为 if 之后的全部内容
+		loc := args[0]
+		cond := ""
+		if len(args) > 1 {
+			if args[1] != "if" {
+				return errors.New("usage: break [--name|-n name] <locspec> [if <condition>]")
+			}
+			cond = strings.Join(args[2:], " ")
+		}
+
+		// 纯指令地址：走第6章的按地址添加路径（保持输出兼容）。
+		// 若指定了名称或条件，转入 locspec 路径（*addr 形式）统一处理。
+		if addr, err := parseAddress(loc); err == nil && name == "" && cond == "" {
+			bp, err := Client.AddBreakpoint(addr)
+			...
+			fmt.Printf("breakpoint %d added at %#x\n", bp.ID, bp.Addr)
+			return nil
+		}
+
+		spec := loc
+		if addr, err := parseAddress(loc); err == nil {
+			spec = fmt.Sprintf("*%#x", addr)
+		}
+
+		bps, err := Client.CreateBreakpoint(spec, cond, name)
+		... // 逐条打印 id、地址、源码位置、名字、条件
+	},
+```
+
+三个细节：
+
+1. **条件的解析只认 `if`**。cobra 把 `break main.go:16 if i == 3` 拆成 `args = ["main.go:16", "if", "i", "==", "3"]`，所以 `args[1]` 必须是 `if`，其余 join 成表达式原文。代价是 `break main.go:16 i==3` 会被当成用法错误，而不是去「猜」用户意图。
+2. **纯地址走老路径**。`parseAddress` 只是 `strconv.ParseUint(locStr, 0, 64)`；`break 0x4b3940` 命中它就直接 `Client.AddBreakpoint(addr)`，输出保持 `breakpoint N added at 0x...`，不带源码位置。
+3. **带 `-n` 或 `if` 时地址也绕到 locspec 路径**：`break -n entry 0x4b3940` 会先格式化成 `*0x4b3940`，再和函数名、`file:line` 一样走 `CreateBreakpoint`。因为名字和条件挂在**逻辑断点**上，只收地址的 `AddBreakpoint` 表达不了。
+
+#### RPC：三参数的单入口
+
+**file：pkg/service/api/client.go**
+
+```go
+	// CreateBreakpoint 按位置描述（locspec）创建断点；cond 为激活条件
+	// （ch9.2.23 起生效），name 为断点名称（可空，ch9.2.22）。
+	// locspec 可解析出多个地址时返回多条。
+	CreateBreakpoint(loc, cond, name string) ([]Breakpoint, error)
+```
+
+**file：pkg/service/rpc2/client.go**、**server.go** 只是 `net/rpc` 的包装，服务端一行转发：
+
+```go
+// client
+func (c *Client) CreateBreakpoint(loc, cond, name string) ([]api.Breakpoint, error) {
+	var reply CreateBreakpointReply
+	err := c.c.Call("Debugger.CreateBreakpoint", &CreateBreakpointArgs{Loc: loc, Cond: cond, Name: name}, &reply)
+	return reply.Bps, err
 }
 
-func enableBreakpointOnTarget(p *Target, lbp *LogicalBreakpoint) error {
-  // 根据断点类型决定在哪些地址设置物理断点
-  switch {
-  case lbp.Set.File != "":
-      // 文件行断点：在所有匹配的地址设置
-      addrs, err = FindFileLocation(p, lbp.Set.File, lbp.Set.Line)
-  case lbp.Set.FunctionName != "":
-      // 函数断点：在函数入口设置
-      addrs, err = FindFunctionLocation(p, lbp.Set.FunctionName, lbp.Set.Line)
-  case len(lbp.Set.PidAddrs) > 0:
-      // 指定进程指定地址处添加断点：过滤出目标进程为p的逻辑断点进行设置
-      for _, pidAddr := range lbp.Set.PidAddrs {
-          if pidAddr.Pid == p.Pid() {
-              addrs = append(addrs, pidAddr.Addr)
-          }
-      }
-  }
-
-  // 在每个地址设置物理断点
-  for _, addr := range addrs {
-      _, err = p.SetBreakpoint(lbp.LogicalID, addr, UserBreakpoint, nil)
-  }
+// server
+func (s *serverImpl) CreateBreakpoint(args *CreateBreakpointArgs, reply *CreateBreakpointReply) error {
+	bps, err := s.dbg.CreateBreakpoint(args.Loc, args.Cond, args.Name)
+	reply.Bps = bps
+	return err
 }
 ```
 
-#### serverside 断点传播策略
+`CreateBreakpointArgs` 就是 `{Loc, Cond, Name}` 三个 `string`，`CreateBreakpointReply` 是 `{Bps []api.Breakpoint}`——三个字符串进去、一个切片出来，没有「创建模板」结构体。这一点值得强调，因为它是「服务端解析 locspec」的直接后果：命令层只转发字符串，不必先在客户端把 locspec 变成一组地址再逐个下发。
 
-通过 follow-exec 和正则表达式控制断点传播范围。
+#### 服务层：校验名字、解析位置、逐地址建断点
 
-如果打开了followExec模式，并且followExecRegexp不空，此时就会检查子进程执行的cmdline是否匹配，如果匹配就会自动追踪并进行断点传播。
+`Debugger` 的转发只有一行（`d.t.CreateBreakpointByLoc(loc, cond, name)`），真正的活在 `proc` 与 `target` 两层：
 
-```bash
-  target follow-exec -on              // 打开follow-exec模式
-  target follow-exec -on "myapp.*"    // 打开follow-exec模式，但是只跟踪cmdline匹配myapp.*的子进程
-  target follow-exec -off             // 关闭follow-exec模式
-```
-
-处理逻辑详见：
+**file：pkg/proc/location.go**
 
 ```go
-  type TargetGroup struct {
-    followExecEnabled bool        // 是否启用 follow-exec
-    followExecRegex   *regexp.Regexp  // 正则表达式过滤器
-    // ...
-  }
+func (t *Target) CreateBreakpointByLoc(loc, cond, name string) ([]*Breakpoint, error) {
+	if err := t.validateBreakpointName(name); err != nil {
+		return nil, err
+	}
 
-  func (grp *TargetGroup) addTarget(p ProcessInternal, pid int, currentThread Thread, path string, stopReason StopReason, cmdline string) (*Target, error) {
-    logger := logflags.LogDebuggerLogger()
-    if len(grp.targets) > 0 {
-        // 检查是否启用 follow-exec
-        if !grp.followExecEnabled {
-            logger.Debugf("Detaching from child target (follow-exec disabled) %d %q", pid, cmdline)
-            return nil, nil  // 不跟踪子进程
-        }
+	addrs, err := t.FindLocation(loc)
+	if err != nil {
+		return nil, err
+	}
 
-        // 检查正则表达式过滤
-        if grp.followExecRegex != nil && !grp.followExecRegex.MatchString(cmdline) {
-            logger.Debugf("Detaching from child target (follow-exec regex not matched) %d %q", pid, cmdline)
-            return nil, nil  // 不跟踪不匹配的进程
-        }
-    }
+	// 命名断点只能对应一个位置：多个位置共用一名会使"按名引用"
+	// 产生歧义，直接拒绝。
+	if name != "" && len(addrs) > 1 {
+		return nil, fmt.Errorf("breakpoint name %q cannot be used for %d locations", name, len(addrs))
+	}
 
-    // 新进程被添加到调试组，所有现有断点会自动应用
-    t.Breakpoints().Logical = grp.LogicalBreakpoints
-    for _, lbp := range grp.LogicalBreakpoints {
-        err := enableBreakpointOnTarget(t, lbp)  // 在新进程中设置断点
-    }
-  }
-```
-
-#### serverside 断点状态共享
-
-前面也曾提到过，逻辑断点统一在TargetGroup层次进行维护，断点的命中计数等信息也逻辑断点级别维护，所有进程、线程共享。
-
-```go
-// TargetGroup represents a group of target processes being debugged that
-// will be resumed and stopped simultaneously...
-type TargetGroup struct {
-    procgrp ProcessGroup
-    targets           []*Target
-    ...
-    LogicalBreakpoints map[int]*LogicalBreakpoint
-    ...
-}
-
-// 逻辑断点：用户概念上的断点
-type LogicalBreakpoint struct {
-  LogicalID    int
-  Set          SetBreakpoint            // 断点设置信息
-  enabled      bool
-  HitCount     map[int64]uint64         // 命中计数
-  TotalHitCount uint64
-  // ...
+	bps := []*Breakpoint{}
+	for _, addr := range addrs {
+		bp, err := t.createBreakpoint(addr, loc, UserBreakpoint)
+		if err != nil {
+			// 部分成功：回滚已创建的断点
+			for _, created := range bps {
+				_, _ = t.ClearBreakpoint(created.ID)
+			}
+			return nil, err
+		}
+		bp.Name = name
+		bp.Cond = cond
+		bps = append(bps, bp)
+	}
+	return bps, nil
 }
 ```
 
-### 代码实现：continue
-#### 我们从Attach开始
-
-当成功添加完断点之后，clientside就可以执行继续执行continue命令，serverside收到请求后会恢复TargetGroup的执行，TargetGroup包含了一个进程组中的多个进程，而每个进程又包括了多个线程，那这里的continue是恢复所有的进程、线程的执行吗？当某个进程的个别线程命中断点停止执行后，其他进程、其他线程又如何处理呢？前一节介绍断点精细化管理时提到了Stop Mode分为All-stop Mode和None-stop Mode，我们一起来看下tinydbg中实现时是如何实现的。
-
-All-stop Mode, 首先联想下 [tinydbg attach](./11-tinydbg_attach.md) 的实现，调试器attach目标进程时，会尝试跟踪跟目标进程下的所有线程。
+名字校验在 `validateBreakpointName`：空名字合法；纯数字拒绝（`isAllDigits`）；与其他断点重名拒绝。`CreateBreakpointByLoc` 另外拒绝「命名断点对应多个地址」。这些规则各有理由：纯数字名字和断点编号长得一样，`clear`/`toggle` 按编号办事时会分不清；重名会让「按名引用」失去意义；命名断点若对应多个地址，同一个名字指哪一条没有答案。实际效果（真实输出，cobra 随后打印的用法提示略）：
 
 ```
-func Attach(pid int, waitFor *proc.WaitFor) (*proc.TargetGroup, error) {
-    \-> dbp.execPtraceFunc(func() { err = ptraceAttach(dbp.pid) })
-    |   _, _, err = dbp.wait(dbp.pid, 0)
-    \-> tgt, err := dbp.initialize(findExecutable("", dbp.pid))
-            \-> cmdline, err := dbp.initializeBasic()
-                    \-> cmdline, err := initialize(dbp)
-                    \-> if err := dbp.updateThreadList(); err != nil {
-                            \-> foreach `tid` in /proc/<pid>/task/*
-                                    \-> if _, err := dbp.addThread(tid, tid != dbp.pid); err != nil {
-                                            \-> sys.PtraceAttach(tid) 
+godbg> break -n 123 main.main
+Error: breakpoint name "123" cannot be all digits
+
+godbg> break -n mainbp main.main
+godbg> break -n mainbp main.go:16
+Error: breakpoint with name "mainbp" already exists
+
+godbg> break -n dup /main./
+Error: breakpoint name "dup" cannot be used for 3 locations
 ```
 
-假定我们Attach了之后再添加断点，现在我们理解添加断点的处理过程了，为了让程序执行到断点，我们可以执行continue操作，下面简单介绍下tinydbg如何处理continue命令。
+`FindLocation` 把 locspec 变成地址列表，五种写法对应五条分支：`*addr` 直接返回、`/re/` 遍历函数表返回**全部**匹配函数的入口、`file:line` 走行号表反向查询、`+N`/`-N` 换算成相邻行、其余按函数名查入口。所以「一个 locspec 对应多条逻辑断点」只发生在正则分支：
 
-#### clientside 核心代码
+```
+godbg> break /main./
+breakpoint 1 added at 0x440980 (.../src/runtime/proc.go:205)
+breakpoint 2 added at 0x46d1e0 (.../src/runtime/proc.go:172)
+breakpoint 3 added at 0x4b3940 (.../examples/debuggee/loop/main.go:13)
+```
+
+#### 逻辑断点：多地址、同址复用与重叠
+
+`createBreakpoint` 是「一个地址一条逻辑断点」的地方，要处理三种情况（**file：pkg/proc/breakpoints.go**）：
 
 ```go
-continueCmd.cmdFn()
-    \-> c.cont(t *Session, ctx callContext, args string)
-            \-> stateChan := t.client.Continue()
-                    \-> for {
-                    \->    out := new(CommandOut)
-                    \->    err := c.call("Command", &api.DebuggerCommand{Name: api.Continue, ReturnInfoLoadConfig: c.retValLoadCfg}, &out)
-                    \->
-                    \->    // record current state
-                    \->    state := out.State
-                    \->    ch <- &state
-                    \->      
-                    \->    // breakpoint (including normal breakpoint and bp-based tracepoint)
-                    \->    isbreakpoint := false
-                    \->    // tracepoint (bp-based tracepoints, exclude normal breakpoint)
-                    \->    istracepoint := true
-                    \->    for i := range state.Threads {
-                    \->       if state.Threads[i].Breakpoint != nil {
-                    \->           isbreakpoint = true
-                    \->           istracepoint = istracepoint && (state.Threads[i].Breakpoint.Tracepoint || state.Threads[i].Breakpoint.TraceReturn)
-                    \->      }
-                    \->    }
-                    \->
-                    \->    // return if:
-                    \->    // - !isbreakpoint: doesn't encounter any breakpoint, i.e, target exit or other cases
-                    \->    // - !isbreakpoint || !istracepoint: encounter one normal breakpoint, not tracepoint
-                    \->    if !isbreakpoint || !istracepoint {
-                    \->        close(ch)
-                    \->        return
-                    \->    }
-                    \-> }
-            \-> for state := range stateChan { printcontext(t, state); }
-            \-> printPos(t, state.CurrentThread, printPosShowArrow)
-```
-
-#### serverside resume all
-
-```go
-func (d *Debugger) Command(command *api.DebuggerCommand, resumeNotify chan struct{}, clientStatusCh chan struct{}) (state *api.DebuggerState, err error) {
-    ...
-    switch command.Name {
-    case api.Continue:
-        err = d.target.Continue()
-    ...
-    }
-    ...
+func (t *Target) createBreakpoint(addr uint64, loc string, kind BreakpointKind) (*Breakpoint, error) {
+	// 该地址已有物理断点：按重叠策略处理
+	if _, ok := t.dbp.Breakpoints[uintptr(addr)]; ok {
+		if canOverlap(kind) {
+			... // 步进类断点：只追加 Breaklet，复用物理断点
+		}
+		// 用户断点：复用既有逻辑断点
+		if bp := t.breakpointByAddr(addr); bp != nil {
+			return bp, nil
+		}
+	}
+	// 物理断点已被还原、逻辑断点仍在（continue 越过断点的客户端流程）
+	if bp := t.breakpointByAddr(addr); bp != nil {
+		if _, err := t.dbp.AddBreakpoint(uintptr(addr)); err != nil {
+			return nil, err
+		}
+		return bp, nil
+	}
+	// 创建物理断点（int3 补丁），再登记逻辑记录与 Breaklet
+	phys, err := t.dbp.AddBreakpoint(uintptr(addr))
+	...
+	bp := &Breakpoint{ID: phys.ID, Loc: loc, Addr: addr, File: file, Line: line, Kind: kind, Enabled: true}
+	t.bps = append(t.bps, bp)
+	t.breaklets[addr] = append(t.breaklets[addr], &Breaklet{Kind: kind, LogicalID: bp.ID})
+	return bp, nil
 }
 ```
 
-而 d.target.Continue() 具体做了哪些处理呢？
+三条分支对应三种现实：同一地址重复 `break` 直接复用既有逻辑断点（编号不变，`break main.main` 连按两次只有一条）；步进类断点允许与用户断点共存，物理指令只补一次、逻辑记录各留一条；物理断点被还原而逻辑断点还在，是 `continue` 越过断点留下的中间状态，必须重建物理断点并复用原逻辑断点，否则会出现「编号不断递增的重复断点」。
+
+> ps：同址复用有一个容易踩的副作用。`CreateBreakpointByLoc` 在 `createBreakpoint` 返回之后才写 `bp.Name = name`、`bp.Cond = cond`，而复用返回的是**已有**逻辑断点，这两个字段会被本次请求的值覆盖。实测：先 `break -n b1 main.main`，再 `break main.main`，编号仍是 1，但名字被清空。要改条件请用 9.2.23 的 `condition`，不要靠再 `break` 一次。
+
+#### 物理断点：写 `0xCC` 与保存 `Orig`
+
+到 `target` 层，断点收敛成一个朴素的 `Breakpoint`（`ID`/`Addr`/`Pos`/`Orig`/`Enabled`）：
+
+**file：pkg/target/breakpoint.go**
 
 ```go
-func (grp *TargetGroup) Continue() error
-    ...
-    \-> trapthread, stopReason, contOnceErr := grp.procgrp.ContinueOnce(grp.cctx)
-            \-> for {
-            |       err := procgrp.resume()
-            |       |    \-> foreach dbp in procgrop.procs
-            |       |    |       \-> foreach thread in dbp.threads
-            |       |    |       |       \-> procgrp.stepInstruction(thread)
-            |       |    |       |       |       \-> if bp := t.CurrentBreakpoint.Breakpoint; bp is a hardware bp {
-            |       |    |       |       |       |       t.clearHardwareBreakpoint(bp.Addr, bp.WatchType, bp.HWBreakIndex)
-            |       |    |       |       |       |       defer func() { err = t.writeHardwareBreakpoint(bp.Addr, bp.WatchType, bp.HWBreakIndex); }()
-            |       |    |       |       |       |   }
-            |       |    |       |       |       \-> if bp, ok := t.dbp.FindBreakpoint(pc, false); ok means bp is software breakpoint {
-            |       |    |       |       |       |       err = t.clearSoftwareBreakpoint(bp)
-            |       |    |       |       |       |       defer func() { err = t.dbp.writeSoftwareBreakpoint(t, bp.Addr); }
-            |       |    |       |       |       |   }
-            |       |    |       |       |       \-> err = procgrp.singleStep(t)
-            |       |    |       |       |       |      for {
-            |       |    |       |       |       |          t.dbp.execPtraceFunc(func() { err = ptraceSingleStep(t.ID, sig) })
-            |       |    |       |       |       |          wpid, status, err := t.dbp.waitFast(t.ID)
-            |       |    |       |       |       |              \-> wpid, err := sys.Wait4(pid, &s, sys.WALL, nil)
-            |       |    |       |       |       |                  ps: Since Linux 4.7, the __WALL flag is automatically implied if the child is being ptraced,
-            |       |    |       |       |       |                      so debugger can know the all children (created by clone or non-clone) state changed.
-            |       |    |       |       |       |          if t.ID== wpid { return nil }
-            |       |    |       |       |       |      }
-            |       |    \-> foreach dbp in procgrop.procs
-            |       |    |       \-> foreach thread in dbp.threads
-            |       |    |       |       \-> thread.resume()
-            |       |    |       |       |       \-> sig := t.os.delayedSignal
-            |       |    |       |       |       \-> return t.resumeWithSig(sig)
-            |       |    |       |       |       |       \-> t.os.running = true
-            |       |    |       |       |       |       \-> t.dbp.execPtraceFunc(func() { err = ptraceCont(t.ID, sig) })
-            |   }
-```
-
-可以看到clientside每执行一次continue命令，服务器确实会让跟踪的所有暂停的进程、线程全部恢复执行。既然已经恢复执行了，接下来任意一个被跟踪的进程中的线程都可能会命中断点（可能是硬件断点，也可能是软件断点）。
-
-那么不禁要问，当命中断点后，debugger是如何进行处理的呢？
-
-#### serverside stop all
-
-```go
-func (grp *TargetGroup) Continue() error
-    ...
-    \-> trapthread, stopReason, contOnceErr := grp.procgrp.ContinueOnce(grp.cctx)
-    |       \-> for {
-    |       *       err := procgrp.resume()
-    |       |       ps: so far, all targets have been resumed to running
-    |       |
-    |       *       trapthread, err := trapWait(procgrp, -1)
-    |       |           \-> return trapWaitInternal(procgrp, pid, 0)
-    |       |       if err != nil { return nil, proc.StopUnknown, err }
-    |       |       ps: handles many events like child exit, cloned, non-cloned, 
-    |       |           and processing delayed signals including SIGTRAP, etc.
-    |       |
-    |       *       trapthread, err = procgrp.stop(cctx, trapthread)
-    |       |           \-> for dbp in procgrp.procs {
-    |       |           |       for thread in dbp.threads {
-    |       |           |           if thread running {
-    |       |           |               thread.stop()
-    |       |           |                   \-> err = sys.Tgkill(t.dbp.pid, t.ID, sys.SIGSTOP)
-    |       |           |                       ps: SIGSTOP will causes target thread stop, which can be resumed by sending SIGCONT. 
-    |       |           |                           And SIGSTOP cannot be caught.
-    |       |           |           }
-    |       |           |       }    
-    |       |           |   }
-    |       |       if err != nil { return nil, proc.StopUnknown, err }
-    |       |       ps: All-stop mode, if we found one thread hit the breakpoint (or traced after thread cloned, non-cloned, etc),
-    |       |           we stop all running threads.
-    |       |
-    |       *       dbp := procgrp.procForThread(trapthread.ID)
-    |       |       dbp.memthread = trapthread
-    |       |       ps: here refresh other processes' threads' memthread to the one, which is the 1st thread.os.setbp == true.
-    |       |           When reading memory, we uses this memthread pid as ptrace(PTRACE_PEEK/POKE_DATA/TEXT, ...) operations.
-    |       |
-    |       |       return trapthread, proc.StopUnknown, nil
-    |       |   }
-    \-> series of state checking and clearing actions ... we skip them
-```
-
-continue操作会先全部恢复执行，然后每当遇到一个被跟踪的线程状态发生变化，就会尝试stop所有进程、线程的执行，并更新它们memthread的线程为当前trapthread，所有线程都停下来之后，如果想读取、修改内存数据、线程硬件上下文信息的时候，就可以通过ptrace来操作了。
-
-#### serverside return state
-
-```go
-func (d *Debugger) Command(command *api.DebuggerCommand, resumeNotify chan struct{}, clientStatusCh chan struct{}) (state *api.DebuggerState, err error) {
-    ...
-    switch command.Name {
-    case api.Continue:
-        err = d.target.Continue()
-    ...
-    }
-    ...
-    state, stateErr := d.state(api.LoadConfigToProc(command.ReturnInfoLoadConfig), withBreakpointInfo)
-    ...
-    for _, th := range state.Threads {
-        if th.Breakpoint != nil && th.Breakpoint.TraceReturn {
-            for _, v := range th.BreakpointInfo.Arguments {
-                if (v.Flags & api.VariableReturnArgument) != 0 {
-                    th.ReturnValues = append(th.ReturnValues, v)
-                }
-            }
-        }
-    }
-    ...
-    return state, err
-}
-
-// Command interrupts, continues and steps through the program.
-func (s *RPCServer) Command(command api.DebuggerCommand, cb service.RPCCallback) {
-    st, err := s.debugger.Command(&command, cb.SetupDoneChan(), cb.DisconnectChan())
-    if err != nil {
-        cb.Return(nil, err)
-        return
-    }
-    var out CommandOut
-    out.State = *st
-    cb.Return(out, nil)
-}
-
-func (cb *RPCCallback) Return(out interface{}, err error) {
-    ...
-    cb.s.sendResponse(cb.sending, &cb.req, &resp, out, cb.codec, errmsg)
+func (p *DebuggedProcess) AddBreakpoint(addr uintptr) (*api.Breakpoint, error) {
+	// 该地址处已有断点，直接返回
+	if bp, ok := p.Breakpoints[addr]; ok {
+		return toAPIBreakpoint(bp), nil
+	}
+	err = p.ExecPtrace(func() error {
+		pid := p.Process.Pid
+		// 读取并保存断点处的原始指令首字节
+		orig := [1]byte{}
+		n, err = syscall.PtracePeekText(pid, addr, orig[:])
+		...
+		breakpoint = newBreakPoint(addr, orig[0], "-")
+		p.Breakpoints[addr] = breakpoint
+		p.BreakpointsByID[breakpoint.ID] = breakpoint
+		// 将断点处的指令首字节替换为 int3
+		n, err = syscall.PtracePokeText(pid, addr, []byte{0xCC})
+		...
+	})
+	...
 }
 ```
 
-最后，调试器将当前的被调试进程的状态信息 `state *api.DebuggerState` 返回给clientside，clientside则完成状态信息的打印：
+物理层只做三件事：`PtracePeekText` 读出并保存首字节（`Orig`）、`PtracePokeText` 写入 `0xCC`、同时维护 `Breakpoints`（按地址）与 `BreakpointsByID`（按编号）两张索引；编号由包级 `bpSeqNo` 单调递增分配。
+
+这里有个必须讲清的编号关系：**逻辑断点的 `ID` 初次创建时取自物理断点的 `ID`**（`ID: phys.ID`），但物理断点在「越过断点」流程里会被还原并重建，重建后编号会变，逻辑编号不变。所以 `ClearBreakpoint` 不能拿逻辑编号查物理断点，必须按地址查——源码注释写得很明确：物理断点被 continue 越过断点后还原、重建时编号会更新，而逻辑编号保持不变。
+
+「线程是否停在断点处」的判定也在物理层，判据是 `PC-1`：
 
 ```go
-continueCmd.cmdFn()
-    \-> c.cont(t *Session, ctx callContext, args string)
-            \-> stateChan := t.client.Continue()
-            ...
-            \-> for state := range stateChan { printcontext(t, state); }
-            \-> printPos(t, state.CurrentThread, printPosShowArrow)
+		// 检查 PC-1 位置是否有断点
+		pc := regs.PC()
+		if bp, exists := p.Breakpoints[uintptr(pc-1)]; exists {
+			threadStoppedAtBP[tid] = bp.Addr
+		}
 ```
 
-在这之后，就可以在调试器会话中继续输入其他调试命令，如 print vars，eval expr等等，继续执行其他调试操作了。
+原因很直接：`0xCC` 被执行后，内核报告的 PC 已经指向**下一条**指令，断点地址是 `PC-1`。这个「+1」在本节后半程反复出现——判断停在哪条断点、展示源码位置、回退 PC，用的都是它。
+
+### 代码实现: continue
+
+#### 命令层：先越过断点，再恢复执行
+
+`continue` 的入口先调 `Client.ThreadsStoppedAtBreakpoint()`：有线程停在断点处就先 `passOverBreakpoints` 越过，再 `continueRun` 恢复执行，最后打印 `continue ok`。越过断点的逻辑在 `passOverBreakpoints`（**file：cmd/debug/continue.go**）：
+
+```go
+func passOverBreakpoints(bpStoppedThreads map[int]uint64) error {
+	bpCleared := make(map[uint64]struct{})
+	for tid, bpAddr := range bpStoppedThreads {
+		fmt.Printf("thread %d stopped at breakpoint %#x\n", tid, bpAddr)
+
+		// 回退该线程的 PC
+		regs, err := Client.ReadRegs(tid)
+		...
+		regs.SetPC(regs.PC() - 1)
+		if err = Client.WriteRegs(tid, regs); err != nil { ... }
+
+		// 断点只需还原一次（多线程可能停在同一个断点）
+		if _, cleared := bpCleared[bpAddr]; !cleared {
+			if err := Client.RestoreInstruction(bpAddr); err != nil && err != api.ErrBreakpointNotExisted {
+				return fmt.Errorf("clear breakpoint at %#x error: %v", bpAddr, err)
+			}
+			bpCleared[bpAddr] = struct{}{}
+		}
+
+		// 单步越过断点处指令
+		if err := Client.Step(tid); err != nil { ... }
+
+		// 恢复断点
+		if _, err := Client.AddBreakpoint(bpAddr); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to restore breakpoint at %#x: %v\n", bpAddr, err)
+		} else {
+			fmt.Printf("restored breakpoint at %#x\n", bpAddr)
+		}
+	}
+	return nil
+}
+```
+
+四个动作的顺序有讲究，而且**代码的实际顺序与注释措辞不同**（注释写「还原断点 → 回退 PC」，代码是先回退）：
+
+1. **先回退 PC**（`regs.SetPC(regs.PC()-1)`）：不先回退，单步就会从断点指令的下一条开始，等于跳过一条指令；
+2. **再还原指令**（`RestoreInstruction`）：把 `Orig` 写回去，让断点处恢复成一条正常指令；
+3. **单步**（`Client.Step(tid)`）：`PTRACE_SINGLESTEP` 执行这一条指令；
+4. **重新打补丁**（`Client.AddBreakpoint(bpAddr)`）：让后续命中继续有效。
+
+回退 PC 必须早于还原指令，因为「哪些线程停在断点处」是按 `PC-1` 与 `Breakpoints` 索引匹配的，而 `RestoreInstruction` 会把该地址从索引里摘掉，之后再想找这些线程就找不到了。同一地址被多个线程命中时，`bpCleared` 保证只还原一次。另外 `RestoreInstruction` 可能返回 `api.ErrBreakpointNotExisted`（该地址的物理断点已被清理），这里显式容忍；`rpc2.Client` 的 `translateErr` 会把服务端的错误文本翻译回这个哨兵，否则跨 RPC 的同一性判断不成立。
+
+真实运行输出（两个断点、两次 `continue`）：
+
+```
+godbg> break main.main
+breakpoint 1 added at 0x4b3940 (.../examples/debuggee/loop/main.go:13)
+godbg> break main.go:16
+breakpoint 2 added at 0x4b3971 (.../examples/debuggee/loop/main.go:16)
+godbg> continue
+thread 2012209 status: stopped: trace/breakpoint trap
+> .../examples/debuggee/loop/main.go:13 (pc: 0x4b3941)
+stop all threads now
+continue ok
+godbg> continue
+thread 2012209 stopped at breakpoint 0x4b3940
+restored breakpoint at 0x4b3940
+thread 2012209 status: stopped: trace/breakpoint trap
+> .../examples/debuggee/loop/main.go:16 (pc: 0x4b3972)
+stop all threads now
+continue ok
+```
+
+注意 `pc: 0x4b3941` 与 `pc: 0x4b3972`：停下来时 PC 都是断点地址 +1，而展示的源码行来自 `printLocation`（**file：cmd/debug/location.go**）——先用 `PC` 查 `PCToLine`、失败再用 `PC-1` 查，成功则打印 `> file:line (pc: ...)`。
+
+#### 目标层：All-stop 与内部事件判别
+
+命令层的 `Client.Continue()` 落到 `DebuggedProcess.Continue`，骨架是「全部放行 → 等待任意线程停止 → 挂起其余线程」（**file：pkg/target/continue.go**）：
+
+```go
+func (p *DebuggedProcess) Continue() (*api.StopInfo, error) {
+	// 恢复全部线程执行
+	for _, thread := range p.Threads {
+		err := p.ExecPtrace(func() error {
+			err := syscall.PtraceCont(thread.Tid, 0)
+			if err == syscall.ESRCH { return nil } // 线程已退出
+			return err
+		})
+		...
+	}
+	// 等待任意线程停止
+	for {
+		wpid, status, err := p.waitAny(syscall.WSTOPPED)
+		...
+		if status.Stopped() && status.TrapCause() == syscall.PTRACE_EVENT_CLONE {
+			... // 内部事件：跟踪新线程后继续等待
+			continue
+		}
+		...
+	}
+}
+```
+
+`waitAny` 用 `wait4(-1, ..., WNOHANG|WALL)` 轮询，返回的可能是**真正的停止**，也可能是内核抛给调试器的**内部事件**。内部事件不能在用户面前「停住」，必须就地消费：
+
+- `PTRACE_EVENT_CLONE`：新线程创建。顺序是「读事件消息拿到新 tid → 加入线程表 → **先恢复克隆者** → 非阻塞消费新线程的初始 `SIGSTOP` → 设置 ptrace 选项 → 恢复新线程」。注释记录了两个排查结论：先恢复克隆者，是因为新线程的初始停止在克隆者恢复后才进入可等待状态；消费初始停止用 `waitFastNoBlock` 而非阻塞 `wait`，是因为停止事件与 `CLONE` 事件到达顺序不固定，阻塞等待会把整个 `continue` 挂死。
+- `PTRACE_EVENT_EXEC` 表示 `exec` 成功，继续放行；`PTRACE_EVENT_FORK`/`VFORK` 则按 `follow-fork-mode=parent` 挂起其余线程后把事件报告给用户，子进程虽被内核跟踪，但调试器暂不管理它。
+
+真正麻烦的是**信号造成的停止**。Go 运行时会在运行期间投递 `SIGURG`（异步抢占），调试器自己的 `suspendOtherThreads` 又会用 `tgkill(SIGSTOP)` 挂起线程；如果把这些都当成「用户可见的停止」，`continue` 就会莫名其妙地停在与断点无关的位置。判别办法是读 siginfo：
+
+```go
+		sig := status.StopSignal()
+		forward, discard := false, false
+		switch sig {
+		case syscall.SIGURG:
+			forward = true // 转发给运行时处理
+		case syscall.SIGSTOP, syscall.SIGCONT:
+			sender, code := p.stopSiginfo(wpid)
+			if (sender == int32(os.Getpid()) && code == siTKill) || sender == 0 {
+				discard = true // 调试器自身挂起 / 内核发起：丢弃
+			}
+		}
+		if forward || discard { ... continue }
+```
+
+规则收成一张表：
+
+| 停止信号 | `siginfo` 特征 | 处理 | 理由 |
+|---|---|---|---|
+| `SIGURG` | 任意 | **转发**（`PtraceCont(wpid, sig)`） | Go 运行时异步抢占，交给运行时自己处理 |
+| `SIGSTOP`/`SIGCONT` | `si_pid == getpid()` 且 `si_code == SI_TKILL` | **丢弃** | `suspendOtherThreads` 用 `tgkill` 挂起，投递者是调试器自己 |
+| `SIGSTOP`/`SIGCONT` | `si_pid == 0` | **丢弃** | 内核发起，例如 clone 后新线程的初始停止 |
+| 其余 | — | **上抛** | 外部投递的停止（如另一个终端 `kill -STOP`），是真实事件 |
+
+`siginfo` 用 `PTRACE_GETSIGINFO` 读原始结构（**file：pkg/target/ptrace_linux.go** 的 `stopSiginfo`），按 linux/amd64 的 `siginfo_t` 布局取 `si_code`（偏移 8）与 `_kill._pid`（偏移 16）；读取失败返回 `(-1, -1)`，按「外部信号」处理——宁可上抛，不可吞事件。挂起其余线程则用 `tgkill(SIGSTOP)` 加短轮询（**file：pkg/target/suspend.go**），而不是 `PTRACE_SINGLESTEP` 或阻塞 `wait`：阻塞在 futex 里的线程单步陷阱可能迟迟不来；已经停止的线程也不会再产生停止事件。
+
+#### 停止之后：命中计数与自动续跑
+
+停下来的那一刻，服务端做一次记账：`Debugger.Continue` 拿到 `StopInfo` 后用 `ThreadStoppedAtBreakpoint` 判断停止线程是否停在逻辑断点上，是则 `NoteBreakpointHit` 累加命中计数；`breakpoints` 里的 `hit:N` 即来自这里。
+
+命令层则在一个循环里决定「这次停止要不要给用户看」（**file：cmd/debug/continue.go**）：
+
+```go
+func continueRun() error {
+	for {
+		stop, err := Client.Continue()
+		if err != nil {
+			return fmt.Errorf("continue error: %v", err)
+		}
+		// 自动恢复执行的断点（条件不满足 / 跟踪点，见 9.2.23、9.2.25）
+		resume, err := checkAutoResume(stop)
+		if err != nil { return err }
+		if resume { continue }
+
+		fmt.Printf("thread %d status: %s\n", stop.PID, stop.Reason)
+		printLocation(stop.PID)
+		fmt.Println("stop all threads now")
+		return nil
+	}
+}
+```
+
+`checkAutoResume` 先用 `findBreakpointAt(stop.PID)` 找到停在哪条逻辑断点（按 `PC-1` 匹配 `ListBreakpoints`），然后：断点带条件就调 `Client.EvalCondition(bp.Cond)`，结果为假则 `passOverStop()` 越过断点、返回 `true` 让循环继续跑；断点是跟踪点（`bp.Tracepoint`）则打印一行命中信息后同样越过、继续。真实输出：
+
+```
+breakpoint 1 condition "1 == 2" not satisfied, auto continue
+```
+
+> ps：条件判定放在**命令层**而不是后端，是架构上的有意选择。后端（`debugger`/`proc`）只提供 `EvalCondition` 这一个原子 RPC，自己不打印、不决定「要不要继续」；「条件不满足就自动续跑」是前端的策略。代价很直接：换一个前端（比如 headless 模式的另一个客户端）就得自己实现同样的循环，否则拿到的是原始停止事件。至于在 target 层用 breaklet 回调判定这条路——godbgv2 的 `Breaklet` 根本没有回调字段，只有 `Kind`/`LogicalID`/`Cond` 三个字段。
 
 ### 执行测试
 
-略。
+先准备固件与二进制（固定工具链构建，地址可复现）：
+
+```bash
+$ git checkout ch9.2.22
+$ make build
+$ make fixtures
+```
+
+本节 smoke 脚本 `testdata/script/ch9.2.22.txt` 很短，但覆盖了「按位置描述加断点 → 执行到断点 → 展示源码位置」的全链路：
+
+```
+break -n mainbp main.main
+=breakpoint [0-9]+ added at 0x4b3940 \(.*main\.go:13\), name "mainbp"
+breakpoints
+=breakpoint\[1\] addr:0x4b3940, loc:.*main\.go:13, name:mainbp
+continue
+=thread [0-9]+ status: stopped: trace/breakpoint trap
+=> .*main\.go:13 \(pc: 0x4b3941\)
+```
+
+```bash
+$ ./scripts/smoke.sh ch9.2.22
+smoke: running testdata/script/ch9.2.22.txt
+smoke: all passed
+```
+
+交互式跑一遍，观察命名断点与命中计数：
+
+```bash
+$ ./godbg exec _fixtures/loop
+process 2012209 launched, stopped by SIGTRAP
+godbg> break -n mainbp main.main
+breakpoint 1 added at 0x4b3940 (.../examples/debuggee/loop/main.go:13), name "mainbp"
+godbg> breakpoints
+breakpoint[1] addr:0x4b3940, loc:.../examples/debuggee/loop/main.go:13, name:mainbp
+godbg> continue
+thread 2012209 status: stopped: trace/breakpoint trap
+> .../examples/debuggee/loop/main.go:13 (pc: 0x4b3941)
+godbg> breakpoints
+breakpoint[1] addr:0x4b3940, loc:.../examples/debuggee/loop/main.go:13, name:mainbp, hit:1
+```
+
+再验证条件断点与自动续跑（条件本身的完整行为见 9.2.23）：
+
+```bash
+godbg> break main.go:16 if 1 == 2
+breakpoint 2 added at 0x4b3971 (.../examples/debuggee/loop/main.go:16), cond "1 == 2"
+godbg> break main.go:17
+breakpoint 3 added at 0x4b3a47 (.../examples/debuggee/loop/main.go:17)
+godbg> continue
+pid: 2016233, loop: 0
+breakpoint 2 condition "1 == 2" not satisfied, auto continue
+thread 2016233 stopped at breakpoint 0x4b3971
+restored breakpoint at 0x4b3971
+thread 2016233 status: stopped: trace/breakpoint trap
+```
+
+上例中调试目标自身的 stdout 与调试器输出交错，行序以终端为准；自动续跑之后停在循环体下一行（`main.go:17`）的断点上。
+
+> ps：以上都是真实运行输出，只把仓库绝对路径缩写成 `...`。线程 tid 每次运行都变；代码地址由固定工具链（`GOTOOLCHAIN=go1.24.13`）与 `-gcflags "all=-N -l"` 构建决定，`0x4b3940`（`main.main`）与 `0x4b3971`（`main.go:16`）据此可复现。
 
 ### 本节小结
 
-本节详细介绍了 tinydbg 调试器中 `breakpoint` 命令的实现机制，以及 `continue` 命令如何驱动程序执行并在断点处停下的完整流程。我们从客户端如何解析断点参数（名称、位置、条件）并与服务器交互，讲到服务器端如何查找指令地址、创建和管理逻辑断点与物理断点，并支持包括普通断点、条件断点、suspended 断点、tracepoint 等多种类型。服务器端采用层次化的断点管理架构，逻辑断点统一管理断点的状态和命中信息，物理断点则具体作用于指令地址，并通过自动断点传播机制保证新进程、新线程能够继承现有断点。随后，`continue` 命令会恢复所有目标进程和线程的执行，遇到断点时根据 all-stop/none-stop 模式进行调度和状态同步，最终将调试状态返回给客户端。整体设计不仅提升了断点管理的灵活性和效率，也为多进程、多线程复杂调试场景提供了坚实的基础。通过本节内容，读者可以系统理解现代调试器断点添加、传播与命中后的核心实现逻辑。
+本节把 `break` 与 `continue` 两条命令从命令层一路穿到 ptrace：
+
+- `break` 在命令层只做三件事——拆出 `name`/`locspec`/`cond`、判断纯地址捷径、发一条 `CreateBreakpoint(loc, cond, name)`。服务端 `CreateBreakpointByLoc` 校验名字、用 `FindLocation` 得到一组地址、每个地址建一条逻辑断点（命名断点多地址直接拒绝，部分失败回滚）；`createBreakpoint` 处理同址复用与重叠；`AddBreakpoint` 保存 `Orig`、写 `0xCC`。
+- `continue` 在命令层先处理停在断点处的线程（回退 PC → 还原 → 单步 → 重打补丁），再进 `continueRun` 循环；目标层 `Continue` 恢复全部线程、把 `CLONE`/`EXEC`/`FORK` 当内部事件消费、用 `siginfo` 把「运行时的 SIGURG」「调试器自己投递的 SIGSTOP」「内核发起的初始停止」与「真实停止事件」区分开，最后 `suspendOtherThreads` 完成 all-stop。
+
+对照 9.2.21 的模型，本节落地了其中两层：`proc.Breakpoint`（逻辑，带名字/条件/命中计数）与 `target.Breakpoint`（物理，带 `Orig`）；`Breaklet` 目前只用于步进类断点的重叠记账，没有回调、也没有条件字段的语义。
+
+#### 对照：delve 做过而 godbgv2 不做的部分
+
+把本节涉及的能力与另一套实现并列一下，避免读者按 delve 的心智模型理解 godbgv2：
+
+| 方面 | delve | godbgv2 |
+|---|---|---|
+| 逻辑断点归属 | 进程组 `TargetGroup`，跨进程共享 | 单进程 `Target.bps` |
+| 新建断点入口 | `CreateBreakpoint` + `CreateBreakpointWithExpr` 双入口 | `CreateBreakpoint(loc, cond, name)` 单入口 |
+| 断点传播 | `addTarget` 回放逻辑断点、`follow-exec` 过滤 | 无，也不需要 |
+| suspended 断点 | 支持 | 不支持 |
+| `continue` 返回 | `Command` + 状态 channel，流式 | 一次 `Continue` 返回一个 `StopInfo` |
+| 条件判定位置 | target 层 breaklet 回调 | 命令层 `EvalCondition` + 自动续跑 |
+
+本书早期版本用 tinydbg（delve 的教学裁剪版）讲解这一组小节；godbgv2 是净室实现，两者没有代码派生关系，这张表只用来标定边界。下一节（9.2.23）把「条件」这一列展开：条件的存储、`condition` 命令、`EvalCondition` 的能力边界，以及命中计数为什么包含「被条件过滤掉」的那次命中。
