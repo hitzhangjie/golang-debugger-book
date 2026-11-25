@@ -1,426 +1,378 @@
 ## locspec解析与地址转换
 
-符号级调试器和指令级调试器相比，最明显的不同之一就是我们可以使用字符串来表示位置信息，如添加断点时、反汇编时可以使用"文件名:行号"、"函数名"来表示目标地址。为了调试时更加便利，我们需要设计一些大家常用、容易记住、容易输入的位置描述方式，这里我们就叫做locationspec，简称locspec了。
+符号级调试器与指令级调试器最直观的差别，是添加断点、查看源码这些操作都可以用字符串而不是裸地址来描述位置：`break main.main`、`break main.go:16`、`list +2`。这类字符串在 godbgv2 里叫 locspec（location spec，位置描述符）。
 
-### 实现目标：支持locspec解析及地址转换
+本节跟踪一条 locspec 的完整链路：前端把字符串原样交给后端，`pkg/locspec.Parse` 把它拆成扁平的 `LocSpec`，`proc.Target.FindLocation` 再用一个 switch 按字段落到符号层与行号表，换出指令地址。早先的版本按 tinydbg 的写法组织，为每种位置描述定义类型、各自实现查找方法；godbgv2 是净室实现，解析和转换分别集中在一个函数和一段 switch 里，下文一律以 godbgv2 代码为准。
 
-本节我们就结合多种调试器中的断点操作、反汇编操作等等，常见的locspec操作如下：
+### 实现目标
 
-- `<filename>` 完整的源文件路径，或者是源文件路径的某一段后缀；
-- `<function>` 任何有效的Go函数名、方法名，使用后缀也可以，如：
-  - `<package>.<receiver type>.<name>`
-  - `<package>.(*<receiver type>).<name>`
-  - `<receiver type>.<name>`
-  - `<package>.<name>`
-  - `(*<receiver type>).<name>`
-  - `<name>`
-    ps: 使用其后缀也可以，但是如果有冲突要提示存在冲突函数名。
-- `/<regex>/` 名字与正则表达式匹配的所有函数、方法；
-- `+<offset>` 当前行后面+offset行；
-- `-<offset>` 当前行前面-offset行；
-- `<line>` 当前源文件中的行号，也可与 `<filename>`结合使用；
-- `*<address>` 内存地址address处数据作为地址；
+godbgv2 通过 locspec 支持以下位置写法（`cmd/debug/break.go:14-23` 的 help 文本、`docs/FEATURE-MATRIX.md` §3 第一行）：
 
-最后总结一下，我们要支持locspec它的文法应该满足：`locStr ::= <filename>:<line> | <function>[:<line>] | /<regex>/ | (+|-)<offset> | <line> | *<address>` .
+| 写法 | 示例 | godbgv2 |
+|---|---|---|
+| 函数名（含包名） | `break main.main` | ✅ 精确全名 |
+| 文件:行号 | `break main.go:16` | ✅ 前缀可省，仅语句行 |
+| 绝对地址 | `break *0x4b3971` | ✅ 数值 |
+| 相对偏移 | `break +2` / `break -- -2` | ⚠️ 需已有停止位置，`+0` 不可用 |
+| 正则 | `break /main\./` | ✅ 可命中多个地址 |
+| `func:line` | `break main.main:16` | ❌ |
+| 裸行号 / 裸文件名 | `break 20` / `break main.go` | ❌ 前者被前端当成十进制地址，后者落到函数名分支 |
+| `*<表达式>` | `break *ptr` | ❌ 只接受数值 |
 
-我们本节不仅要根据locspec实现对输入地址字符串的解析，还要能够将其转换为内存中的地址，OK，接下来我们一起来实现它。
+对应的文法是原稿文法的真子集：
+
+```text
+loc ::= <funcname> | <file>:<line> | *<addr> | (+|-)<N> | /<regexp>/
+```
+
+两条约束决定了代码为什么这么短：**解析不接触目标进程**（`Parse` 只看字符串，输入输出都是纯数据，可被单元测试完整覆盖，`pkg/locspec/locspec_test.go`）；**转换才需要目标进程**（函数名查 DWARF、`file:line` 查行号表、`+N` 读寄存器，都只有在 `proc.Target` 上做得到，所以落在 `FindLocation`）。
+
+### 基础知识
+
+**locspec 是"两次转换"。** 第一次是字符串 → 字段：`"main.go:16"` 变成 `File="main.go"`、`Line=16`，只需要字符串处理。第二次是字段 → 地址：函数名要查 `.debug_info` 里的 `DW_TAG_subprogram`（`DW_AT_low_pc` 是入口、`DW_AT_high_pc` 是范围，`pkg/proc/funcs.go:34-61`），`file:line` 要查 `.debug_line` 行号表。两套数据没有交集，godbgv2 也就把这两次转换切成两个函数，边界正好是"要不要目标进程"。
+
+**行号表只有语句行。** `lineProgram.emitRow` 在 `!p.isStmt` 时直接返回（`pkg/dwarf/line.go:628`），所以 `LineTable` 里没有注释行、空行、右花括号这些"不可下断点"的行。直接后果是：给这些行下断点会得到 `no address for ...`，而不是一个"不太合适"的地址。这相当于把 dlv 的 `includeNonExecutableLines` 选项在解析阶段就固化成了"不包含"。
 
 ### 代码实现
 
-#### locspec
+#### 1. 调用链：前端只交出字符串
 
-结合前面确定的locspec `locStr ::= <filename>:<line> | <function>[:<line>] | /<regex>/ | (+|-)<offset> | <line> | *<address>`，我们明确了要支持的几种位置描述类型。
-
-结合调试器tinydbg加断点操作，来说明下使用时是什么效果：
-
-- 文件名:行号，比如 `break main.go:20`，在指定源文件main.go的20行
-- 函数名，比如 `break main.main`，在指定package的指定函数 main.main
-- regexp，比如 `break main.(*Student).*`，在所有匹配正则的函数名、方法名处添加断点
-- +offset，比如 `break +2`，在当前断点行-2行位置
-- -offset，比如 `break -2`，在当前断点所在行-2行位置
-- line，比如 `break 20`，在当前源文件20行
-- `*address`，比如 `*0x12345678`，指定内存地址中的地址处
-
-see: tinydbg/pkg/locspec/locations.go，这定义了每个locspec类型必须满足的接口定义LocationSpec，以及不同locspec类型的定义以及解析函数。
-
-#### 位置类型
-
-结合前面locspec文法的定义，这了看下每种位置类型的定义，将输入位置字符串解析为不同LocationSpec实现的逻辑我们就省略了。我们将重点放在不同LocationSpec如何将human-redable位置描述转换为内存地址的过程。
-
-ps：这个转换过程当然是在调试器后端实现的，因为转换的过程涉及到“符号层(Symbolic Layer)”、“目标层 (Target Layer)”的操作。
-
-see: tinydbg/pkg/locspec/locations.go
-
-```go
-// 函数位置
-// 比如 main.main, PackageName=main, BaseName=main
-type FuncLocationSpec struct {
-	PackageName           string
-	AbsolutePackage       bool
-	ReceiverName          string
-	PackageOrReceiverName string
-	BaseName              string
-}
-
-// 文件:行号 or funcName:行号
-// 比如 main.go:20，Base=main.go，LineOffset=20
-type NormalLocationSpec struct {
-	Base       string
-	FuncBase   *FuncLocationSpec
-	LineOffset int
-}
-
-// 指定行号位置（相对于当前源文件）
-// 比如20，Line=20
-type LineLocationSpec struct { Line int }
-
-// 源码行基础上加减行数（相对于当前源码行）
-// 比如+20，Offset=+20
-type OffsetLocationSpec struct { Offset int }
-
-// 解引用内存位置得到地址
-// 比如0x123456，AddrExpr=0x123456
-type AddrLocationSpec struct { AddrExpr string }
-
-// 名字与正则表达式匹配的函数、方法
-// 比如/[a-z].*/，FuncRegex=/[a-z].*/
-type RegexLocationSpec struct { FuncRegex string }
+```text
+cmd/debug/break.go   break <loc> [if <cond>] [-n <name>]
+      │  Client.CreateBreakpoint(loc, cond, name)
+      │     └─ net/rpc: Debugger.CreateBreakpoint{Loc,Cond,Name}
+      ▼
+service/debugger.Debugger.CreateBreakpoint        (debugger.go:103)
+      │  Target.CreateBreakpointByLoc(loc, cond, name)
+      ▼
+proc.Target.FindLocation(loc) ──────────────► []uint64
+      │  locspec.Parse → switch 分支
+      ▼
+proc.Target.createBreakpoint(addr, loc) × N       (breakpoints.go:71)
 ```
 
-#### 地址解析
-
-开发人员调试时，会在调试器前端输入位置字符串，比如添加断点时输入 `break main.main` , `break main.go:20` , `break main.main:20` 等不同位置写法。需要调试器后端进行代为处理的，调试器前端会在JSON-RPC请求参数中设置必要的位置信息，就是输入的位置描述字符串。到了调试器后端这里，接收到调试请求参数后，会发现原来是个加断点请求，并且参数里的位置字符串指明了位置，就是下面的locStr了。
-
-接下来就是，调试器先解析这个locStr，我们一起粗略看下解析过程吧，对照着前面的locspec，一看就能理解Parse的含义，Parse的结果是一个LocationSpec实现，可能是FuncLocationSpec, LineLocationSpec or others。
-
-see: tinydbg/pkg/locspec/locations.go
+`cmd/debug/break.go` 里真正和 locspec 相关的只有几行，其余是 cobra 的参数整理：
 
 ```go
-// Parse will turn locStr into a parsed LocationSpec.
-func Parse(locStr string) (LocationSpec, error) {
-	rest := locStr
-    ...
-
-	switch rest[0] {
-	case '+', '-': // 解析 `+/-<offset>`
-		offset, _ := strconv.Atoi(rest)
-		return &OffsetLocationSpec{offset}, nil
-	case '/':
-		if rest[len(rest)-1] == '/' { // 解析 `/regexp/` 正则表达式位置描述
-			rx, rest := readRegex(rest[1:])
-			if len(rest) == 0 {
-				return nil, malformed("non-terminated regular expression")
-			}
-			if len(rest) > 1 {
-				return nil, malformed("no line offset can be specified for regular expression locations")
-			} return &RegexLocationSpec{rx}, nil
-		} else {                     // 解析 `文件行号、函数行号` 位置描述
-			return parseLocationSpecDefault(locStr, rest)
-		}
-	case '*': // 解析 *<address> 位置描述
-		return &AddrLocationSpec{AddrExpr: rest[1:]}, nil
-	default: // 解析 `文件行号、函数行号` 位置描述
-		return parseLocationSpecDefault(locStr, rest)
-	}
+spec := loc
+if addr, err := parseAddress(loc); err == nil {
+	spec = fmt.Sprintf("*%#x", addr)
 }
+
+// 位置描述（locspec）：可能解析出多个地址（如正则匹配）
+bps, err := Client.CreateBreakpoint(spec, cond, name)
 ```
 
-#### 地址转换
+这段代码之前还有一条"纯指令地址"的快捷路径：`parseAddress(loc)` 成功且没带 `if`/`-n` 时直接走 `Client.AddBreakpoint`。两个容易踩的坑由此而来。其一，`parseAddress`（`cmd/debug/address.go:12`，`strconv.ParseUint(..., 0, 64)`）先跑，`break 20` 匹配成功，于是走 `AddBreakpoint(0x14)`，**根本到不了 locspec**。其二，`parseAddress` 成功但带了 `if`/`-n` 时字符串被改写成 `*0x...` 再交给 locspec，所以 `break 20 if x>0` 里的 `20` 依然是地址而不是行号。
 
-locspec的目的是为了将位置描述字符串转换为内存中的地址，所以针对locspec定义了这样一个接口LocationSpec。
+`api.Client` 侧只有两个入口与 locspec 有关：`CreateBreakpoint(loc, cond, name) ([]Breakpoint, error)`（`pkg/service/api/client.go:88`）和 `ListSource(loc) (*ListSourceResult, error)`（`pkg/service/api/client.go:150`）。`FindLocation` **不是** RPC，它是 `proc.Target` 上的方法，两个入口在服务端汇合到它：`Debugger.CreateBreakpoint` 经 `CreateBreakpointByLoc` 调用（`debugger.go:107`），`Debugger.ListSource` 直接调用（`debugger.go:475`）。顺带澄清一处容易想当然的地方：`disass` 并**不**接受 locspec——`disassStartAddress` 无参时取 `Client.CurrentPC()`，有参时只调 `parseAddress`（`cmd/debug/disass.go:53-67`），所以 `disass main.main` 会报 `parse address err`，这与 dlv 的 `disassemble -l` 不同。
 
-locspec主要是在client端调试会话中进行输入，然后RPC传给服务器侧，服务器侧将其解析为具体的LocationSpec实现，之后的最常用操作就是使用 `XXXLocationSpec.Find(t, args, scope, locStr, ...)` 来将locStr转换为内存地址。
+#### 2. 解析：Parse 只做字符串切分
 
-```go
-type LocationSpec interface {
-	// Find returns all locations that match the location spec.
-	Find(t *proc.Target, processArgs []string, scope *proc.EvalScope,
-		locStr string,
-		includeNonExecutableLines bool,
-		substitutePathRules [][2]string) ([]api.Location, string, error)
-}
-```
+`LocSpec` 是一个扁平结构，六个字段分别对应五种写法（`pkg/locspec/locspec.go:11-20`）：
 
-调试器后端和目标进程进行交互，可以读取它的二进制、DWARF、进程等信息，可以将上述输入的"位置描述"字符串精确转换为内存地址。
+| 输入 | `FuncName` | `File` | `Line` | `Addr` | `Offset` | `Pattern` |
+|---|---|---|---|---|---|---|
+| `main.main` | `main.main` | | 0 | 0 | 0 | |
+| `main.go:16` | | `main.go` | 16 | 0 | 0 | |
+| `*0x4b3971` | | | 0 | `0x4b3971` | 0 | |
+| `+2` / `-2` | | | 0 | 0 | `2` / `-2` | |
+| `/main\./` | | | 0 | 0 | 0 | `main\.` |
 
-每一种LocationSpec实现结合实际情况实现这样的查询操作Find，如何实现Find操作的呢？每个LocationSpec实现有不同的实现逻辑，比如：
-
-- `*<address>` 就需要涉及到 `ptrace(PTRACE_PEEKDATA,...)` 读取内存中数据，
-- 再比如NormalLocationSpec通常是 `文件名:行号`，这种就需要利用DWARF调试信息中的行号表信息，转换出这行对应的指令地址，
-- 再比如如果是 `FuncLocationSpec` 就需要根据DWARF调试信息中的FDE信息，再找到该函数所包含指令的起始地址
-- ...
-
-所以你看，不同的locspec LocationSpec实现，也各自有不同的转换成内存地址的实现方式，这部分还是很重要的，涉及到了很多核心DWARF数据结构的使用。
-
-我们一起来看几个示例，你就明白就了。
-
-##### NormalLocationSpec
-
-NormalLocationSpec表示的是 `file:line` 或者 `func:line` 这种类型的位置描述，注意它包含了一个FuncLocationSpec用以支持 `func:line` 这种情况，FuncLocationSpec并没有实现 LocationSpec interface。
-
-OK，我们来看下这个函数是如何实现的。
+`Parse` 的分支顺序就是语法优先级（`locspec.go:31-83`）：
 
 ```go
-// NormalLocationSpec represents a basic location spec.
-// This can be a file:line or func:line.
-type NormalLocationSpec struct {
-	Base       string
-	FuncBase   *FuncLocationSpec
-	LineOffset int
-}
-
-// FuncLocationSpec represents a function in the target program.
-type FuncLocationSpec struct {
-	PackageName           string
-	AbsolutePackage       bool
-	ReceiverName          string
-	PackageOrReceiverName string
-	BaseName              string
-}
-
-// Find will return a list of locations that match the given location spec.
-// This matches each other location spec that does not already have its own spec
-// implemented (such as regex, or addr).
-func (loc *NormalLocationSpec) Find(t *proc.Target, processArgs []string, scope *proc.EvalScope, locStr string, includeNonExecutableLines bool, substitutePathRules [][2]string) ([]api.Location, string, error) {
-	// 如果是file:line描述方式，所有后缀匹配的文件都算是候选文件，我们需要先找到候选的源文件列表
-	// - 但是这里的候选文件可能比较多，所以必须加个数量限制，如果没有开发者想要的候选文件，那就得指定的路径更明确点
-	// - 再一个是源文件路径映射的问题，这里需要根据路径映射规则进行映射，以免匹配不到
-	limit := maxFindLocationCandidates
-	var candidateFiles []string
-	for _, sourceFile := range t.BinInfo().Sources {
-		substFile := sourceFile
-		if len(substitutePathRules) > 0 {
-			substFile = SubstitutePath(sourceFile, substitutePathRules)
-		}
-		if loc.FileMatch(substFile) || (len(processArgs) >= 1 && tryMatchRelativePathByProc(loc.Base, processArgs[0], substFile)) {
-			candidateFiles = append(candidateFiles, sourceFile)
-			if len(candidateFiles) >= limit {
-				break
-			}
-		}
+func Parse(raw string) (*LocSpec, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, fmt.Errorf("empty locspec")
 	}
-	limit -= len(candidateFiles)
+	ls := &LocSpec{Raw: raw}
 
-	// 如果是func:line描述方式，所有后缀匹配的函数名都算是候选函数，我们也得先找到候选的函数列表
-	// - 这里的候选函数可能也比较多，所以也得加个数量限制，如果没有开发者想要的候选函数，那也得指定的函数名更明确点，
-	//   比如包含包路径、receivertype
-	var candidateFuncs []string
-	if loc.FuncBase != nil && limit > 0 {
-		// 查找最多limit个函数名匹配的函数
-		// - 先查泛型函数 (Go 的泛型在编译时会为不同的类型参数生成不同的具体实现，这些实现可能都对应到同一行源码???)
-		//   how generics works? see: https://github.com/golang/proposal/blob/master/design/generics-implementation-dictionaries-go1.18.md
-		// - 再查其他普通函数
-		candidateFuncs = loc.findFuncCandidates(t.BinInfo(), limit)
+	// 以 / 开头但未以 / 结尾：非法的正则描述符
+	if strings.HasPrefix(raw, "/") != strings.HasSuffix(raw, "/") {
+		return nil, fmt.Errorf("unterminated regexp locspec %q", raw)
 	}
 
-	// 如果没有找到匹配的源文件名、函数名
-	if matching := len(candidateFiles) + len(candidateFuncs); matching == 0 {
-		// 如果没有指定作用域，那么直接返回未找到错误
-		if scope == nil {
-			return nil, "", fmt.Errorf("location %q not found", locStr)
-		}
-		// 注意，file:line, func:line这里的line是可选项，想象下添加断点时，对吧！
-		// 简化下，如果输入了 xxx，但是当做func去查找时没有查到，有可能是少输入了符号* …… 所以当做 *xxx 重新解析下
-		addrSpec := &AddrLocationSpec{AddrExpr: locStr}
-		locs, subst, err := addrSpec.Find(t, processArgs, scope, locStr, includeNonExecutableLines, nil)
+	switch {
+	case strings.HasPrefix(raw, "*"):
+		addr, err := strconv.ParseUint(raw[1:], 0, 64)
 		if err != nil {
-			return nil, "", fmt.Errorf("location %q not found", locStr)
+			return nil, fmt.Errorf("invalid address locspec %q", raw)
 		}
-		return locs, subst, nil
-	} else if matching > 1 {
-	// 如果找到了多个匹配，调试器不知道在哪里添加断点，需要提示开发者位置有歧义
-		return nil, "", AmbiguousLocationError{Location: locStr, CandidatesString: append(candidateFiles, candidateFuncs...)}
-	}
-
-	var addrs []uint64
-	var err error
-
-	// 如果候选源文件只有1个，下面看下有没有line要求
-	if len(candidateFiles) == 1 {
-		// 行号只能>=0，解析NormalLocationSpec时，LineOffset初始化为-1
-		if loc.LineOffset < 0 {
-			return nil, "", errors.New("Malformed breakpoint location, no line offset specified")
+		ls.Addr = addr
+	case strings.HasPrefix(raw, "+") || strings.HasPrefix(raw, "-"):
+		off, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid offset locspec %q", raw)
 		}
-		// 通过DWARF行号表查找 file:line 对应的指令地址，
-		addrs, err = proc.FindFileLocation(t, candidateFiles[0], loc.LineOffset)
-	} else { 
-	// 如果候选函数只有1个，下面看下有没有line要求，这个其实要分两步来完成
-	// - 先找到函数入口地址对应的源码行（file:line)
-	// - newLine=line+LineOffset，使用 file:newLine 作为位置，查行号表得到地址
-		addrs, err = proc.FindFunctionLocation(t, candidateFuncs[0], loc.LineOffset)
-	}
-	...
-
-	return []api.Location{addressesToLocation(addrs)}, "", nil
-}
-```
-
-##### LineLocationSpec
-
-LineLocationSpec描述的是当前源文件的指定行的位置，当前源文件位置的确定依赖scope.PC+DWARF行号表，这样先确定当前PC所处的源码位置"文件名：行号"，然后确定新的文件名行号"文件名:loc.Line"。然后再通过行号表将其转换为对应的PC地址。
-
-关于DWARF行号表的设计实现，如果你忘记了相关的细节，可以翻翻 [DWARF行号表](8-dwarf/5-other/2-lineno-table.md)。
-
-```go
-// LineLocationSpec represents a line number in the current file.
-type LineLocationSpec struct {
-	Line int
-}
-
-// Find will return the location at the given line in the current file.
-func (loc *LineLocationSpec) Find(t *proc.Target, _ []string, scope *proc.EvalScope, _ string, includeNonExecutableLines bool, _ [][2]string) ([]api.Location, string, error) {
-	// 由于需要确定当前执行到的源码行位置，依赖PC，所以参数EvalScope不能为空。
-	if scope == nil {
-		return nil, "", errors.New("could not determine current location (scope is nil)")
-	}
-	// 确定当前执行到的源文件位置，只关心文件名，行号已经重新指定
-	file, _, fn := scope.BinInfo.PCToLine(scope.PC)
-	if fn == nil {
-		return nil, "", errors.New("could not determine current location")
-	}
-	// 确定新的位置file:loc.Line
-	subst := fmt.Sprintf("%s:%d", file, loc.Line)
-	// 查找源文件位置对应的指令地址
-	addrs, err := proc.FindFileLocation(t, file, loc.Line)
-	if includeNonExecutableLines {
-		if _, isCouldNotFindLine := err.(*proc.ErrCouldNotFindLine); isCouldNotFindLine {
-			return []api.Location{{File: file, Line: loc.Line}}, subst, nil
+		ls.Offset = off
+	case strings.HasPrefix(raw, "/") && strings.HasSuffix(raw, "/") && len(raw) > 1:
+		pattern := raw[1 : len(raw)-1]
+		if _, err := regexp.Compile(pattern); err != nil {
+			return nil, fmt.Errorf("invalid regexp locspec %q", raw)
 		}
-	}
-	return []api.Location{addressesToLocation(addrs)}, subst, err
-}
-```
-
->注意，同一行源代码，可能对应了多条机器指令，那么该使用哪一个指令地址应该作为该源码行的第一条指令呢？比如用来添加断点时，应该停在哪一条指令处？
->
->在行号表中每一行都有一列标识，是否将该行指令当做源码行添加断点时的指令。这个是很重要的，比如Go里面的函数调用是非常特殊的，它不同于C、C++，Go函数调用开始会先检查栈帧大小是否够用，不够用会会执行栈扩容动作，扩容完成再返回原来的函数执行。如果在函>数调用的第一条指令处添加断点，我们会观察到这个函数执行了两次，这很奇怪！所以，对于Go语言调试器，通常要将函数入口处栈检查通过后的第一条指令位置当做断点位置。
-
-但是这并不是 `LocationSpec.Find(...) ([]api.Location, _, error)` 会返回多个位置的理由？上面的问题，DWARF中已经解决了，只需要compiler、linker、debugger开发者注意即可。Find操作返回多个位置的一个情景是，Go Generics，Go泛型函数是通过一种称为"stenciling（蜡印）"的技术，即会为每种泛型参数生成一个函数实例，这多个实例的入口地址自然是不同的，所以这个情景下就存在一个file:line位置存在多个api.Location的可能性。
-
-在介绍NormalLocationSpec查找候选函数名的时候，我们有提到过，会优先搜索泛型函数名，再搜索其他普通函数名，了解即可。
-
-##### OffsetLocationSpec
-
-当前调试器执行到的源码行file:line，在当前源代码位置，增加一个行偏移量LineOffset，得到新的位置file:line+LineOffset。
-
-```go
-// OffsetLocationSpec represents a location spec that
-// is an offset of the current location (file:line).
-type OffsetLocationSpec struct {
-	Offset int
-}
-
-// Find returns the location after adding the offset amount to the current line number.
-func (loc *OffsetLocationSpec) Find(t *proc.Target, _ []string, scope *proc.EvalScope, _ string, includeNonExecutableLines bool, _ [][2]string) ([]api.Location, string, error) {
-	// 因为要确定当前执行到的源代码位置，依赖PC，所以scope必须有效
-	if scope == nil {
-		return nil, "", errors.New("could not determine current location (scope is nil)")
-	}
-	// 根据PC确定当前执行到的源文件位置 file:line, fn
-	file, line, fn := scope.BinInfo.PCToLine(scope.PC)
-	if loc.Offset == 0 {
-		subst := ""
-		if fn != nil {
-			subst = fmt.Sprintf("%s:%d", file, line)
+		ls.Pattern = pattern
+	case strings.Contains(raw, ":"):
+		idx := strings.LastIndex(raw, ":")
+		file, lineStr := raw[:idx], raw[idx+1:]
+		line, err := strconv.Atoi(lineStr)
+		if err != nil || file == "" || line <= 0 {
+			return nil, fmt.Errorf("invalid file:line locspec %q", raw)
 		}
-		return []api.Location{{PC: scope.PC}}, subst, nil
-	}
-	if fn == nil {
-		return nil, "", errors.New("could not determine current location")
-	}
-	// 确定新的源文件位置 file:line+LineOffset
-	subst := fmt.Sprintf("%s:%d", file, line+loc.Offset)
-	// 确定新位置对应的指令地址
-	addrs, err := proc.FindFileLocation(t, file, line+loc.Offset)
-	...
-	return []api.Location{addressesToLocation(addrs)}, subst, err
-}
-```
-
-##### AddrLocationSpec
-
-AddrLocationSpec其实支持了如下几种方式：
-
-- `<address>`，直接指定了一个地址
-- `*<address>`，表达式形式指定了一个地址
-- `<funcName>`，函数本身也算是一个地址？函数序言之后的第一条指令的地址
-
-```go
-// AddrLocationSpec represents an address when used
-// as a location spec.
-type AddrLocationSpec struct {
-	AddrExpr string
-}
-
-// Find returns the locations specified via the address location spec.
-func (loc *AddrLocationSpec) Find(t *proc.Target, _ []string, scope *proc.EvalScope, locStr string, includeNonExecutableLines bool, _ [][2]string) ([]api.Location, string, error) {
-    // locStr 本身包含的是一个地址，如locStr=0x12345678
-	if scope == nil {
-		addr, _ := strconv.ParseInt(loc.AddrExpr, 0, 64)
-		return []api.Location{{PC: uint64(addr)}}, "", nil
-	}
-
-    // locStr可能是一个表达式，如 *0x12345678 or 0x12345678+0x20
-	v, _ := scope.EvalExpression(loc.AddrExpr, proc.LoadConfig{FollowPointers: true})
-	switch v.Kind {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		addr, _ := constant.Uint64Val(v.Value)
-		return []api.Location{{PC: addr}}, "", nil
-	case reflect.Func:
-		fn := scope.BinInfo.PCToFunc(v.Base)
-		pc, _ := proc.FirstPCAfterPrologue(t, fn, false)
-		return []api.Location{{PC: pc}}, v.Name, nil
+		ls.File, ls.Line = file, line
 	default:
-		return nil, "", fmt.Errorf("wrong expression kind: %v", v.Kind)
+		ls.FuncName = raw
 	}
+	return ls, nil
 }
 ```
 
-这里分两种情况：本身就是一个地址值，直接字符串转Int64后返回；另一种是一个表达式，`scope.EvalExpression(...)`，表达式结果可以是一个计算出的地址，也可能是一个函数，如果是后者，那么就需要取函数prologue后的第一条指令地址。
+三处细节值得记住：
 
-ps: scope.EvalExpression的工作原理，我们在前一小节 [18-表达式计算](./18-how_evalexpr_works.md) 中进行了详细介绍。如果你忘记了它是如何工作的，可以翻回去看看。当然这一节并没有对所有类型的表达式进行计算，但是我们已经介绍了读者了解这些的所有必备知识、关键流程，读者可以自行了解。
+- **`/` 的前后缀检查在 switch 之前。** 这一条同时起着"正则必须成对"和"绝对路径不可用"两个作用。前者的报错是 `unterminated regexp locspec "/main\\./10"`；后者意味着 `/home/zhangjie/.../main.go:16` 会被判成未闭合正则——绝对路径的 `file:line` 目前无法使用，只能写相对路径或路径后缀。
+- **`:` 用 `LastIndex` 切。** 于是 `main.main:16` 被切成 `File="main.main"`、`Line=16`，下一步的行号表查询必然失败。这是 `func:line` 不支持的根因：解析层并不认识"冒号左边可能是函数名"。
+- **报错都带原串。** 解析层给出的是 `empty locspec`、`unterminated regexp locspec`、`invalid address/offset/regexp locspec`、`invalid file:line locspec` 这几种消息，都带 `%q`，所以前端 `Error:` 后面的内容能直接告诉用户"哪一段没被接受"。
 
-##### RegexLocationSpec
-
-通过 `/regexp/` 的格式来配置一个正则表达式，所有函数名与该正则匹配的位置，都会作为候选函数，然后找到这些函数对应的指令地址。
+#### 3. 转换：FindLocation 的一个 switch
 
 ```go
-type RegexLocationSpec struct {
-	FuncRegex string
-}
-
-// Find will search all functions in the target program and filter them via the
-// regex location spec. Only functions matching the regex will be returned.
-func (loc *RegexLocationSpec) Find(t *proc.Target, _ []string, scope *proc.EvalScope, locStr string, includeNonExecutableLines bool, _ [][2]string) ([]api.Location, string, error) {
-	if scope == nil {
-		//TODO(aarzilli): this needs only the list of function we should make it work
-		return nil, "", errors.New("could not determine location (scope is nil)")
-	}
-	funcs := scope.BinInfo.Functions
-	matches, err := regexFilterFuncs(loc.FuncRegex, funcs)
+func (t *Target) FindLocation(loc string) ([]uint64, error) {
+	ls, err := locspec.Parse(loc)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	r := make([]api.Location, 0, len(matches))
-	for i := range matches {
-		addrs, _ := proc.FindFunctionLocation(t, matches[i], 0)
-		if len(addrs) > 0 {
-			r = append(r, addressesToLocation(addrs))
+
+	switch {
+	case ls.Addr != 0 || (len(ls.Raw) > 0 && ls.Raw[0] == '*'):
+		return []uint64{ls.Addr}, nil
+
+	case ls.Pattern != "":
+		re, err := regexp.Compile(ls.Pattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid regexp %q: %v", ls.Pattern, err)
 		}
+		fns, err := t.ListFunctions()
+		if err != nil {
+			return nil, err
+		}
+		addrs := []uint64{}
+		for _, fn := range fns {
+			if re.MatchString(fn.Name) {
+				addrs = append(addrs, fn.Entry)
+			}
+		}
+		if len(addrs) == 0 {
+			return nil, fmt.Errorf("no function matches %q", ls.Pattern)
+		}
+		return addrs, nil
+
+	case ls.File != "":
+		addr, err := t.LineToPC(ls.File, ls.Line)
+		if err != nil {
+			return nil, err
+		}
+		return []uint64{addr}, nil
+
+	case ls.Offset != 0:
+		// 当前 PC → 当前行 → 偏移行 → 地址
+		pc, err := t.currentPC()
+		if err != nil {
+			return nil, err
+		}
+		file, line, err := t.bi.PCToLine(pc)
+		if err != nil {
+			return nil, fmt.Errorf("cannot resolve current line: %v", err)
+		}
+		addr, err := t.LineToPC(file, line+ls.Offset)
+		if err != nil {
+			return nil, err
+		}
+		return []uint64{addr}, nil
+
+	default:
+		fn, err := t.FindFunction(ls.FuncName)
+		if err != nil {
+			return nil, err
+		}
+		return []uint64{fn.Entry}, nil
 	}
-	return r, "", nil
 }
 ```
+
+五个分支对应五种能力，逐一说明它们依赖什么：
+
+- **`*addr`**：只做一次数值判断，直接返回。`Addr != 0 || Raw[0]=='*'` 这个条件是为了让 `*0x0` 也能进这一支（`Raw` 判断兜底），否则地址 0 会被当成"没解析出地址"。
+- **`/regexp/`**：遍历 `ListFunctions()`（DWARF 全部 `DW_TAG_subprogram`，`pkg/proc/target.go:46`）做 `MatchString`，命中即取其 `Entry`。**这是唯一会返回多个地址的分支**，也是断点层"一条命令多条断点"的来源。
+- **`file:line`**：`LineToPC` 线性扫描行号表，返回**第一条**满足 `row.Line == line && strings.HasSuffix(row.File, file)` 的记录（`pkg/dwarf/line.go:50-57`）。不做路径映射、不校验地址是否落在某个函数范围内、不返回多个地址。
+- **`+N`/`-N`**：`currentPC()` 读当前线程寄存器（`location.go:82-92`）→ `PCToLine` 得到当前 `file:line` → `LineToPC(file, line+N)`。纯往返，没有范围检查。
+- **default（函数名）**：`FindFunction` 精确匹配 `DW_AT_name`，返回 `Entry`（`pkg/proc/funcs.go:35-51`）。它只返回一个地址——`FindFunction` 取第一个同名 DIE，所以"同名函数多地址"在 godbgv2 不存在，多地址只可能来自 `/regexp/`。
+
+#### 4. 逐形式的语法与边界
+
+**4.1 函数名**：`main.main`、`runtime.main`、`loop.(*T).Run` 这类**完整的 DWARF 名称**可用。匹配是 `e.Val(stddwarf.AttrName) == name`（`pkg/dwarf/reader.go:54`）——全等，没有后缀匹配、没有"候选唯一则接受"的消歧。所以 `break main`、`break loop` 都是 `Error: function "main" not found`。这一点与书稿早先写的"用后缀也可以"相反，读者不要照旧稿试。
+
+`break main.main` 落在 `DW_AT_low_pc`，即函数第一条指令。`loop` fixture 里它是 `0x4b3940`（`main.go:13`），反汇编出来是 `lea -0x10(%rsp),%r12`，也就是 Go 的栈检查序言。为什么会停在序言而不是第一条"用户语句"、有什么影响，见 9.2.21；这里只需记住：函数名 locspec 不做序言跳过。
+
+**4.2 `file:line`**：冒号左边是文件（后缀匹配），右边是行号（`>0`）。两种写法都可用：`main.go:16` 与 `loop/main.go:16`。三个边界：
+
+- **后缀匹配会误命中。** `LineToPC` 用 `HasSuffix`，`break in.go:16` 会匹配到 `main.go:16`（`main.go` 以 `in.go` 结尾），实跑确实停在 `0x4b3971`。文件名写得越短，越容易撞上。
+- **绝对路径不可用**：以 `/` 开头会被 `Parse` 的预检判成未闭合正则（见 4.6）。
+- **只认语句行**：`break main.go:11`（`main.go` 里是右花括号 `)`）报 `no address for .../main.go:11`。注意这个报错发生在 `LineToPC` 里，措辞是 `no address for`，与解析层的 `invalid ... locspec` 可区分。
+
+**4.3 `*addr`**：`strconv.ParseUint(raw[1:], 0, 64)`，所以 `*0x4b3971`、`*4929905`（同一个地址的十进制写法）、`*0` 都按 Go 的 `base=0` 约定解析。`break 0x4b3971` 不带 `*` 时走前端 `parseAddress` 的快捷路径，效果相同但用的是另一个 RPC（`AddBreakpoint`）。
+
+`*<表达式>` 不支持：`break *main.main` 报 `Error: invalid address locspec "*main.main"`。老稿里"`*` 后面是一个表达式，用 `EvalExpression` 求出地址"的写法在 godbgv2 尚未接线——9.2.18 的求值器目前只服务于 `print`/`condition`。
+
+**4.4 `+N` / `-N`**：语义是"当前停止位置所在源码行 ± N 行"。它成立的前提是**已经停下来过**：进程刚 exec 时的 PC 在 `runtime/rt0_linux_amd64.s:8`，此时 `break +2` 会去查 `rt0_linux_amd64.s:10` 并报 `no address`——不是偏移算错，而是起始位置本身就没有可用的源码行。停在 `main.go:13` 之后 `break +2` 就正常了：解析到 `main.go:15`、地址 `0x4b3964`，`list +2` 显示的也是同一行同一地址。
+
+四个已知边界：
+
+1. **`+0` 不可用（缺陷）。** 分支条件是 `ls.Offset != 0`（`location.go:56`），`+0` 解出的 `Offset` 就是 0，于是掉进 `default` 当函数名查，报 `Error: function "" not found`。修复只需把条件改成同时看 `Raw[0]`，但这属于代码改动，本节只如实记录缺口。
+2. **`-N` 会被 cobra 当成 flag。** `break -2` 的报错是 `unknown shorthand flag: '2' in -2`；要写成 `break -- -2` 才能进 locspec。这一点在 help 里没有提示。
+3. **不校验范围。** `line+offset` 越界或跨到别的函数，都只是把新行号丢给行号表：`+100` 得到 `no address for .../main.go:113`，跨函数时则可能悄悄落到另一个函数的某行上。
+4. **只看当前线程。** `currentPC` 读的是 `CurrentThreadTid` 的寄存器，**不理会** `thread`/`goroutine` 选择。而 `list` 不带参数时走 `Registers()`（`pkg/proc/goroutines.go:300`），是尊重选择的。两者在"选了别的 goroutine"时会对不上。
+
+**4.5 `/regexp/`**：`re.MatchString(fn.Name)` 不锚定，`/main/` 会命中所有名字含 `main` 的函数。多命中时 `FindLocation` 返回多个地址，**不报歧义**——`break` 会为每个地址建一条逻辑断点：
+
+```text
+godbg> break /main\./
+breakpoint 1 added at 0x440980 (.../runtime/proc.go:205)
+breakpoint 2 added at 0x46d1e0 (.../runtime/proc.go:172)
+breakpoint 3 added at 0x4b3940 (.../loop/main.go:13)
+```
+
+三个命中分别是 `runtime.main.func2`、`runtime.main.func1` 与 `main.main`（本节输出块里仓库与工具链的绝对路径前缀统一写成 `...`，实跑输出为完整路径）。没有命中时报 `Error: no function matches "nomatch"`（注意引号里是去掉 `/` 之后的正则原文）。
+
+`list` 的处理相反：它只需要一个位置，所以多地址会拼成歧义错误并列出候选（`debugger.go:479-492`），实跑 `list /main\./` 得到 `Error: location "/main\\./" is ambiguous: runtime.main.func2, runtime.main.func1, main.main`。
+
+候选超过三个时只列前三个并追加 `(and N more)`。另外，命名断点不能对应多个地址，会在断点层被拒：`break -n multi /main\./` → `breakpoint name "multi" cannot be used for 3 locations`。
+
+**4.6 不支持的写法**，以及它们各自的报错——这些报错就是"当前实现不认这个语法"的证据：
+
+| 输入 | 报错 | 原因 |
+|---|---|---|
+| `main.main:16` | `no address for main.main:16` | 被切成 `File="main.main"`，行号表查不到 |
+| `16` | `list` 报 `function "16" not found`，`break` 报 `peek text, pid: …, 0 bytes, error: input/output error` | `list` 落到函数名分支；`break` 被前端当十进制地址 0x14 |
+| `main.go` | `function "main.go" not found` | 落到函数名分支 |
+| `*main.main` | `invalid address locspec "*main.main"` | 只接受数值 |
+| `/abs/path/main.go:16` | `unterminated regexp locspec "…"` | 以 `/` 开头、不以 `/` 结尾 |
+| `/main\./10` | `unterminated regexp locspec "/main\\./10"` | 正则后不能跟行偏移 |
+| `main.go:0` | `invalid file:line locspec "main.go:0"` | 行号必须 `>0` |
+| `/ma(in/` | `invalid regexp locspec "/ma(in/"` | 正则编译失败 |
+
+#### 5. 多匹配如何落到断点
+
+`FindLocation` 只负责"字符串 → 地址列表"，把它变成断点的是 `CreateBreakpointByLoc`（`pkg/proc/location.go:99-130`，与 `cmd/debug/break.go` 同属 ch9.2.22 的交付物）：
+
+```go
+func (t *Target) CreateBreakpointByLoc(loc, cond, name string) ([]*Breakpoint, error) {
+	if err := t.validateBreakpointName(name); err != nil {
+		return nil, err
+	}
+	addrs, err := t.FindLocation(loc)
+	if err != nil {
+		return nil, err
+	}
+	// 命名断点只能对应一个位置：多个位置共用一名会使"按名引用"产生歧义
+	if name != "" && len(addrs) > 1 {
+		return nil, fmt.Errorf("breakpoint name %q cannot be used for %d locations", name, len(addrs))
+	}
+	bps := []*Breakpoint{}
+	for _, addr := range addrs {
+		bp, err := t.createBreakpoint(addr, loc, UserBreakpoint)
+		if err != nil {
+			for _, created := range bps {
+				_, _ = t.ClearBreakpoint(created.ID)
+			}
+			return nil, err
+		}
+		bp.Name = name
+		bp.Cond = cond
+		bps = append(bps, bp)
+	}
+	return bps, nil
+}
+```
+
+三个要点：
+
+1. **顺序是"先校验名字、再解析位置"。** 所以 `break -n 123 main.main` 报的是名字错误（`cannot be all digits`，见 `validateBreakpointName`），而不是位置错误；名字重复同理。
+2. **N 个地址 = N 条逻辑断点。** godbgv2 的 `Breakpoint.Addr` 是单地址，没有"一条逻辑断点挂多个物理断点"的模型，所以正则多命中就是"多建几条"。中途失败会逐条回滚已建的断点，不会留下半套。
+3. **同址复用。** `createBreakpoint` 发现该地址已有用户断点时，直接返回既有逻辑断点（`breakpoints.go:84-86`），所以重复 `break` 同一位置不会产生新编号：`break main.go:16` 之后（或之前）再 `break *0x4b3971`，打印的始终是同一个编号，`breakpoints` 里也仍只有一条。
+
+同址复用有一个副作用值得记下来：`CreateBreakpointByLoc` 在拿到复用的 `bp` 之后仍会执行 `bp.Name = name`、`bp.Cond = cond`。于是 `break -n alpha main.main` 之后再 `break -n beta main.main`，不会报重名，而是把**同一条**断点改名成 `beta`——实跑 `breakpoints` 只显示 `name:beta`。若期望"命名断点必须唯一"，这里与直觉不符。
 
 ### 执行测试
 
-略
+下面的输出都是实跑结果。调试对象是 `_fixtures/loop`（源文件 `examples/debuggee/loop/main.go`，用固定工具链 `-gcflags "all=-N -l"` 构建，因此 `main.main` 入口固定为 `0x4b3940`、循环体在 `0x4b3971`）。驱动方式是批量回放：
+
+```bash
+$ ./godbg exec _fixtures/loop --init init.txt
+```
+
+先验证两种最常用的写法。`init.txt` 内容为 `break main.main`、`break main.go:16`：
+
+```text
+godbg> break main.main
+breakpoint 1 added at 0x4b3940 (/home/zhangjie/debugger101/godbgv2/examples/debuggee/loop/main.go:13)
+godbg> break main.go:16
+breakpoint 2 added at 0x4b3971 (/home/zhangjie/debugger101/godbgv2/examples/debuggee/loop/main.go:16)
+```
+
+再验证相对偏移：先停在 `main.main`，再 `break +2`、`list +2`：
+
+```text
+godbg> break main.main
+breakpoint 1 added at 0x4b3940 (.../loop/main.go:13)
+godbg> continue
+thread 1939700 status: stopped: trace/breakpoint trap
+> .../loop/main.go:13 (pc: 0x4b3941)
+stop all threads now
+continue ok
+godbg> break +2
+breakpoint 2 added at 0x4b3964 (.../loop/main.go:15)
+godbg> list +2
+Showing .../loop/main.go:15 (PC: 0x4b3964)
+```
+
+`break +2` 与 `list +2` 得到同一个地址，说明两条命令确实共用 `FindLocation`；`(pc: 0x4b3941)` 是断点命中后回退到 `int3` 之前的位置，第 9.2.22 节解释过。
+
+正则多命中的会话前面已贴（4.5 节），此处不重复。错误用例必须**一条命令一个脚本**：`--init` 回放遇到第一条报错即中止，后续命令不会执行。实跑得到的错误消息汇总如下（`pid` 与长路径做了省略）：
+
+```text
+godbg> break main.main:16      Error: no address for main.main:16
+godbg> break +0                Error: function "" not found
+godbg> break main              Error: function "main" not found
+godbg> break main.go           Error: function "main.go" not found
+godbg> break -2                Error: unknown shorthand flag: '2' in -2
+godbg> break -- -2             Error: no address for .../loop/main.go:11
+godbg> break /nomatch/         Error: no function matches "nomatch"
+godbg> break -n multi /main\./ Error: breakpoint name "multi" cannot be used for 3 locations
+godbg> break -n 123 main.main  Error: breakpoint name "123" cannot be all digits
+godbg> break main.go:0         Error: invalid file:line locspec "main.go:0"
+```
+
+最后是纯字符串解析的单元测试——这层不需要启动调试会话，所以能穷举边界：
+
+```bash
+$ go test ./pkg/locspec/ -v -run TestParse
+=== RUN   TestParse
+--- PASS: TestParse (0.00s)
+=== RUN   TestParseInvalid
+--- PASS: TestParseInvalid (0.00s)
+PASS
+ok  	github.com/hitzhangjie/godbgv2/pkg/locspec	0.001s
+```
+
+`TestParse` 覆盖六种写法的字段映射，`TestParseInvalid` 覆盖 `""`、`main.go:`、`main.go:0`、`*xyz`、`/unclosed` 五种非法输入（`pkg/locspec/locspec_test.go:6-36`）。godbgv2 没有 `ch9.2.19` 的冒烟脚本：本节的交付物是一个纯函数，用单元测试断言比回放会话更直接；端到端的行为由 `ch9.2.22` 的脚本覆盖。
 
 ### 本节小结
 
-本文详细介绍了符号级调试器中locspec（位置描述符）的解析与地址转换机制。locspec允许开发者使用直观的字符串表示位置信息，如"文件名:行号"、"函数名"、"正则表达式"等，而不需要直接操作内存地址。文章首先定义了locspec的文法规范，支持多种位置描述方式，然后通过具体的Go代码实现展示了如何将位置描述字符串解析为不同的LocationSpec类型（如NormalLocationSpec、LineLocationSpec、OffsetLocationSpec等），并详细说明了每种类型如何通过Find方法将位置描述转换为实际的内存地址。整个实现涉及DWARF调试信息的解析、行号表查找、函数符号匹配等核心调试技术，为调试器提供了用户友好的位置描述方式和位置定位功能。
+locspec 把"位置"从地址提升成字符串，代价是必须有一条可靠的转换链。godbgv2 把它拆成两段：`pkg/locspec.Parse` 只做字符串切分，产出一个扁平 `LocSpec`（`FuncName`/`File`/`Line`/`Addr`/`Offset`/`Pattern`）；`proc.Target.FindLocation` 用一个 switch 把每种字段落到符号层与行号表上，其中函数名查 DWARF 的 `DW_TAG_subprogram`、`file:line` 查 `.debug_line` 反查首个匹配行、`+N` 走"读寄存器 → `PCToLine` → `LineToPC`"的往返、`/regexp/` 是唯一会返回多个地址的分支。多地址向上传递后，断点层为每个地址建一条逻辑断点（同址则复用），`list` 则把它当歧义并列出候选。
+
+能力边界同样重要：`func:line`、裸行号、裸文件名、`*<expr>`、绝对路径的 `file:line` 都不支持；`+0` 因 `Offset != 0` 的判断不可用；`-N` 需要 `--` 才能绕过 cobra；行号表只含语句行，注释行与空行没有地址。这些不是"实现细节"，而是读者在命令行上会直接撞到的行为，写进本节比留到 issue 里更有用。
 
 ### 参考文献
 
-1. how go generics works, https://github.com/golang/proposal/blob/master/design/generics-implementation-dictionaries-go1.18.md
-2. 
+1. DWARF Debugging Information Format v4, §6.2 Line Number Information, https://dwarfstd.org/doc/DWARF4.pdf；godbgv2 能力口径 `docs/FEATURE-MATRIX.md` §3 断点体系
