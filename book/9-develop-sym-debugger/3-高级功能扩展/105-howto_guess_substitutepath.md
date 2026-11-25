@@ -1,6 +1,9 @@
 ## Guess SubstitutePath Automatically
 
-在调试过程中，源代码路径映射是一个重要的问题。本文详细解释 Delve 调试器中的 substitutePath 功能是如何工作的。
+> **状态**：godbgv2 未实现（❌）。本节为扩展阅读，设计思路可迁移，代码不并入本仓。
+> 能力状态以 `godbgv2/docs/FEATURE-MATRIX.md` 为准。
+
+在调试过程中，源代码路径映射是一个重要的问题。本文详细解释 Delve 调试器中的 substitutePath 功能是如何工作的。godbgv2 没有 substitute-path，源码展示直接使用 DWARF 中记录的文件路径（`pkg/proc/source.go`）。
 
 ### 路径映射的挑战
 

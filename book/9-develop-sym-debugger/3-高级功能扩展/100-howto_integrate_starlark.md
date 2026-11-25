@@ -1,5 +1,8 @@
 ## 扩展阅读：starlark让你的程序更强大
 
+> **状态**：godbgv2 有意不做（🚫）。本节为扩展阅读，设计思路可迁移，代码不并入本仓。
+> 能力状态以 `godbgv2/docs/FEATURE-MATRIX.md` 为准。
+
 starlark是一门配置语言，它是从Python语言中衍生出来的，但是比Python更简单、更安全。它最初是由Google开发的，用于Bazel构建系统。starlark保留了Python的基本语法和数据类型，但移除了一些危险的特性，比如循环引用、无限递归等。这使得starlark非常适合作为配置语言或者脚本语言嵌入到其他程序中。
 
 starlark的主要特点包括:
@@ -418,10 +421,10 @@ def main():
 #main() 
 ```
 
-运行调试器 `dlv debug main.go`，调试会话就绪后运行 `source debug.star` 即可。
+运行调试器 `dlv debug main.go`，调试会话就绪后运行 `source debug.star` 即可。下面是 delve 的会话输出（`(dlv)` 是 delve 的提示符）：
 
 ```bash
-$ tinydbg debug main.go
+$ dlv debug main.go
 Type 'help' for list of commands.
 (dlv) source debug.star
 Starting debug session...
@@ -465,7 +468,7 @@ Current scope: api.EvalScope{GoroutineID:-1, Frame:0, DeferredCall:0}
 Debug session completed.
 ```
 
-tinydbg暂时保留了go-delve/delve中的starlark实现，pkg/terminal/starlark.go + pkg/terminal/starlark_test.go 一共300行代码，starbind/ 下有近3000行代码，不过这部分代码是通过脚本自动生成的。由于这部分代码相对来说比较独立，不像ebpf-based tracing那样影响到很多地方，所以我们暂时保留这部分代码。上述测试用的源码、star脚本，您可以在路径 tinydbg/examples/starlark_demo 找到。
+需要说明的是，godbgv2 未集成 starlark（9.2.00 的 ps 段已把 starlark 支持列为范围决策），本节示例基于 delve。delve 中与 starlark 相关的代码在 `pkg/terminal/starlark.go`、`starlark_test.go` 和 `pkg/terminal/starbind/`，其中绑定代码由脚本自动生成、体量比前者大得多；这部分相对独立，不像 eBPF-based tracing 那样牵动很多地方，所以 delve 一直保留着它。上文的 `main.go` 与 `debug.star` 请自行保存后再运行，delve 仓库没有随附这份演示工程。
 
 ### 本节小结
 

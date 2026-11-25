@@ -1,6 +1,9 @@
 ## 扩展阅读：breakpoint-based vs. eBPF-based tracing
 
-在程序调试和性能分析中，跟踪(tracing)是一项非常重要的技术。目前主要有两种实现方案:基于断点(breakpoint-based)和基于eBPF(eBPF-based)。让我们来详细了解这两种方案的特点。
+> **状态**：godbgv2 有意不做（🚫）。本节为扩展阅读，设计思路可迁移，代码不并入本仓。
+> 能力状态以 `godbgv2/docs/FEATURE-MATRIX.md` 为准。
+
+在程序调试和性能分析中，跟踪(tracing)是一项非常重要的技术。目前主要有两种实现方案:基于断点(breakpoint-based)和基于eBPF(eBPF-based)。godbgv2 只做 breakpoint-based tracing（`trace` 命令按正则批量设点），eBPF 版不在本仓。让我们来详细了解这两种方案的特点。
 
 ### 两种跟踪方案对比
 
@@ -91,7 +94,7 @@ eBPF跟踪的基本实现步骤如下:
 - https://github.com/jschwinger233/gofuncgraph
 - github.com/hitzhangjie/go-ftrace
 
-其中go-ftrace是我从gofuncgraph fork过来学习、修改、优化后的，并在此基础上编写了相关的examples，还写了几篇文章进行详细的介绍。由于篇幅原因，tinydbg中并没有保留go-delve/delve中的ebpf-based tracing实现，如果您感兴趣可以参考下面两篇文章，然后再去学习源码。
+其中go-ftrace是我从gofuncgraph fork过来学习、修改、优化后的，并在此基础上编写了相关的examples，还写了几篇文章进行详细的介绍。由于篇幅原因，godbgv2 没有实现 eBPF-based tracing，如果您感兴趣可以参考下面两篇文章，然后再去学习源码。
 
 1. [观测Go函数调用：go-ftrace](https://www.hitzhangjie.pro/blog/2023-09-25-%E8%A7%82%E6%B5%8Bgo%E5%87%BD%E6%95%B0%E8%B0%83%E7%94%A8go-ftrace/)
 2. [观测Go函数调用：go-ftrace 设计实现](https://www.hitzhangjie.pro/blog/2023-12-12-%E8%A7%82%E6%B5%8Bgo%E5%87%BD%E6%95%B0%E8%B0%83%E7%94%A8go-ftrace%E8%AE%BE%E8%AE%A1%E5%AE%9E%E7%8E%B0/)
