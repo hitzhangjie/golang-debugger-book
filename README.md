@@ -4,7 +4,7 @@ Ever wondered how to develop a Go debugger? Curious about how debuggers work und
 Read the book:
 
 - Chinese version: [www.hitzhangjie.pro/debugger101.io](https://www.hitzhangjie.pro/debugger101.io)
-- English version: [www.hitzhangjie.pro/debugger101-en.io](https://www.hitzhangjie.pro/debugger101-en.io/)
+- English version: ~~[www.hitzhangjie.pro/debugger101-en.io](https://www.hitzhangjie.pro/debugger101-en.io/)~~ （偏旧，待更新）
 
 > ps: The English version repo: [https://github.com/hitzhangjie/golang-debugger-book-en](https://github.com/hitzhangjie/golang-debugger-book-en) .
 
